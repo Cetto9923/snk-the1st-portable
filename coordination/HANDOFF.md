@@ -264,5 +264,17 @@
   `compact_hunt.py`/`relax_hunt.py`/`root_hunt.py`（根表判据扫描）、
   `mask_test.py`（掩码统计检验）、`pack_base_test.py`（pack 基址检验）、
   `meta_struct.py`/`names_fm.py`/`names_crc.py`（fm/fh 结构）、`land_test.py`/`fit257.py`/`sweep.py`、
-  `dump_preregion.py`（预区物理字节落盘 `.local/preregion.bin` + `.local/preblocks.pkl`）。
+  `dump_preregion.py`（预区物理字节落盘 `.local/preregion.bin` + `.local/preblocks.pkl`）、
+  `pool_parse.py`/`pool_corr.py`/`pool_records.py`/`pool_records2.py`（fh 名字池条目定长暴力反解）、
+  `fm_lookup.py`（fm/fh 里查 `asset_config.json`：**fm 里没有，fh 名字池里有 ⇒ 它是 pack 成员，不是 fm 小文件**）、
+  `tables_map.py`/`fmt_test.py`/`root_hunt.py`（容器结构与根表判据）。
+
+### 名字池条目格式（本轮新增，供参考）
+
+- 条目 = `[7×u32][u32 nameLen][name]`；`asset_config.json` 的条目基址 = `0x44884`（nameLen 在 `0x448a0`），
+  7 个 u32 = `0x01d88528, 0x27495c62, 0xe8001800, 0x01001304, 0x31d92200, 0x16f30009, 0xffffffff`。
+- 但**相邻条目对不齐**：dev_font.otf 之后（`0x448df`）的 6 个 u32 是 `(0x58, 0x8c, 0x0024ffe0, 0x01f4b43d, …)`，
+  再往后 `bicon.t` / `a0000` **没有长度前缀** ⇒ 条目里夹着变长数据（疑似内嵌字符串），
+  固定长解析（16~40B 全试）**全部失败** ⇒ 需要按「变长记录」继续解。
+- 已知可对齐的只有第 1 条；`0x58` 在 asset_config.json / dev_font.otf 两个条目里都出现 ⇒ 第 1 个字段可能是共享 tag。
 
