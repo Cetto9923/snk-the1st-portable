@@ -12,6 +12,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #if defined(__APPLE__)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
 #include <sys/ucontext.h>
 #else
 #include <ucontext.h>
@@ -509,6 +511,24 @@ void nso_run_init(nso_module *m) {nso_run_init_policy(m,NSO_INIT_ELF);}
 static int sentinel_index(const uint8_t *base,size_t size,uint64_t addr) {
     return addr>=(uintptr_t)base && addr-(uintptr_t)base<size?(int)((addr-(uintptr_t)base)/8):-1;
 }
+/* Reads guest memory without risking a nested fault inside the signal handler. */
+static size_t safe_read_mem(uintptr_t addr, void *dst, size_t n) {
+#if defined(__APPLE__)
+    mach_vm_size_t got = 0;
+    if (mach_vm_read_overwrite(mach_task_self(), (vm_address_t)addr, (vm_size_t)n,
+                               (vm_address_t)dst, &got) != KERN_SUCCESS) return 0;
+    return (size_t)got;
+#elif defined(__linux__)
+    int fd = open("/proc/self/mem", O_RDONLY);
+    if (fd < 0) return 0;
+    ssize_t r = pread(fd, dst, n, (off_t)addr);
+    close(fd);
+    return r > 0 ? (size_t)r : 0;
+#else
+    (void)addr; (void)dst; (void)n;
+    return 0;
+#endif
+}
 static void fault_handler(int sig,siginfo_t *si,void *context) {
     ucontext_t *u=context;
     uint64_t pc=0,lr=0,fp=0,sp=0,fa=si?(uintptr_t)si->si_addr:0,regs[29]={0};
@@ -544,6 +564,30 @@ static void fault_handler(int sig,siginfo_t *si,void *context) {
     }
     for(int i=0;i<29;i++)fprintf(stderr," x%d=0x%" PRIx64 "%c",i,regs[i],i%4==3?'\n':' ');
     fprintf(stderr,"\n fp=0x%" PRIx64 " lr=0x%" PRIx64 " sp=0x%" PRIx64 "\n",fp,lr,sp);
+    /* Dump the json document object: shows which pointer the engine used as its table base. */
+    {
+        uint64_t doc = regs[0];
+        uint8_t head[32];
+        if (doc && safe_read_mem((uintptr_t)doc, head, sizeof(head)) == sizeof(head)) {
+            uint64_t d8=0,d10=0,d18=0;
+            memcpy(&d8, head+8, 8);
+            memcpy(&d10, head+16, 8);
+            memcpy(&d18, head+24, 8);
+            fprintf(stderr,"[fault-doc] doc=0x%" PRIx64 " doc[8]=0x%" PRIx64 " doc[0x10]=0x%" PRIx64 " doc[0x18]=0x%" PRIx64 "\n",
+                    doc, d8, d10, d18);
+            uint8_t win[64];
+            if (d8 && safe_read_mem((uintptr_t)d8, win, sizeof(win)) == sizeof(win)) {
+                fprintf(stderr,"[fault-doc] doc[8]+0..63: ");
+                for(size_t i=0;i<sizeof(win);i++)fprintf(stderr,"%02x",win[i]);
+                fprintf(stderr,"\n");
+            } else fprintf(stderr,"[fault-doc] doc[8] memory unreadable\n");
+            if (d10 && safe_read_mem((uintptr_t)d10, win, sizeof(win)) == sizeof(win)) {
+                fprintf(stderr,"[fault-doc] doc[0x10]+0..63: ");
+                for(size_t i=0;i<sizeof(win);i++)fprintf(stderr,"%02x",win[i]);
+                fprintf(stderr,"\n");
+            } else fprintf(stderr,"[fault-doc] doc[0x10] memory unreadable\n");
+        } else fprintf(stderr,"[fault-doc] doc unreadable (0x%" PRIx64 ")\n", doc);
+    }
     for(int depth=0;depth<16 && stack_hi>=16 && !(fp&15) && fp>=stack_lo && fp<=stack_hi-16;depth++) {
         const uint64_t *frame=(const uint64_t*)(uintptr_t)fp;
         uint64_t next=frame[0],ret=frame[1];

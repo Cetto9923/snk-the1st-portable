@@ -160,3 +160,109 @@
 `probe_hash3.py`（全源哈希段扫描）、`probe_map.py`/`probe_hist.py`/`probe_vread.py`（块映射与分布）、
 `probe_sig.py`（全源容器头指纹）、`probe_fmraw.py`/`probe_meta3.py`（file_meta 结构）、`probe_nca.py`（NCA 段头）。
 
+
+## 2026-11-06 · T07 容器语义校正 + u32@8 语义收紧（MiniMax Code）
+
+本轮没有越过 0x3fb538，但把「根表偏移」这件事从猜测推进到**机器码级闭合**，并推翻上一轮两条结论。
+
+### 校正 1：`csinc` 极性反了（推翻上一轮「0x426 解不通」）
+
+自己反汇编 main.mod.bin 复核（0x3fb548 起）：
+
+```
+003fb548  tst   w11, #0x10
+003fb54c  add   x11, x10, #5
+003fb550  csinc x10, x11, x10, eq      ; EQ -> x10=x11=seg+5 ; 否则 x10=x10+1=seg+1
+003fb554  ldr   w11, [x10], #4         ; count_raw
+003fb558  subs  w11, w11, #1           ; count = count_raw - 1
+003fb55c  b.mi  #0x3fb5dc              ; count<0 失败
+```
+
+- **tag&0x10==0 ⇒ count_raw 在 seg+5、elements 在 seg+9；tag&0x10!=0 ⇒ count_raw 在 seg+1、elements 在 seg+5**。
+- 上一轮用的是反的极性，所以「全文件暴力找根表」必然全空（`roots=[]` 是假阴性）。
+- 按正确规则重算我们这份 6962B 文件：
+  - `0x3b2`：tag=0x04 → count_raw@0x3b7=15 → count=14 → elements@0x3bb（14 个 u32）
+    = 0x4e9,0x2f32,0x2224,0x965,0x88f,0x463,0x492,0x999,0x85c,0x2f07,0x307c,0x316d,0x1197,0x9e5
+    ⇒ 其中 6 个 > 文件长 0x1b32，**文件确实被截断**（此结论不变）。
+  - `0x426`：tag=0x04 → count_raw@0x42b=3 → count=2 → elements@0x42f = 0x4a7,0x4b7（升序）
+    ⇒ 这段**是**合法引擎哈希段，不是「游戏自己的表」（上一轮结论作废）。
+- 记录格式（引擎逐指令）：`[flags u8][crc_slot u32]`，crc_slot 相对 base，
+  实际 CRC = `u32[base+crc_slot]`；元素数组按 CRC 升序（引擎在 0x3fb598-0x3fb5c8 做二分）。
+
+### 校正 2：open_ctor 的真实机制 ⇒ 文件必须 ≥ 16,778,271 字节
+
+`0x3fb0d0`（doc 类 vfunc[5]）逐指令：
+
+```
+0x3fb194  bl 0x3f6fa0        ; 打开文件句柄
+0x3fb1f4  blr x8             ; vfunc[4] -> size
+0x3fb21c  bl 0x4687c0        ; 按 size 分配新缓冲
+0x3fb2a8  ldp x9,x8,[x8,#0x18]; 0x3fb2ac add x1,x9,x8   ; 源地址 = handle[0x18]+handle[0x20]
+0x3fb2b0  bl 0x4f66b0        ; memcpy(dst=新缓冲, src=该指针, size)
+0x3fb2bc  stp x22,x22,[x20,#8]  ; doc[8] == doc[0x10] == 新缓冲
+0x3fb2c8  str w21,[x20,#0x18]   ; doc[0x18] = size
+```
+
+- 源地址是**已挂载镜像里的指针**（handle[0x18]+handle[0x20]），不是逐块读。
+- 引擎把文件**整份拷进一个按文件大小分配的缓冲区**，所以 `base+0x0100041E` 必须落在该分配内
+  ⇒ **真实 asset_config.json 至少 16,778,271 字节**（6962B 副本必然越界，与真机算术 fa-base=0x0100041E 完全吻合）。
+
+### 事实 3：u32@8 不是「文件内偏移」（统计否证掩码解释）
+
+- 全 arena **4940** 个 'JSON' 容器：u32@8 高字节=0x01 的 4820 个、=0x00 的 116 个；
+  我们这份是**唯一** seed(u32@0xC)=0xFF27F200 的。
+- 掩码假设统计检验（120 个随机容器，各读一次目标字节，判 nibble==4）：
+  `u32@8 & 0xFFFF` 命中 7/120、`&0xFFFFFF` 7/120、`&0xFFFF + 8` 5/120
+  ⇒ **与随机 1/16 不可区分 ⇒ 掩码解释被否证**。
+- ⇒ u32@8 只能是「相对某个大容器/分区的偏移」或其它语义，**不可**当文件内偏移使用。
+
+### 事实 4：NCA Fs 分区结构（本轮解出）
+
+- BKTR/reloc 200281 槽：virt 侧 **64KB 页粒度**（0x200, 0x33e0, 0x133e0, 0x233e0 …），src 侧紧凑排布。
+- `fm+0x383B48`：293 个 u64 各 pack 起始 virt，**恰好 = V[(k+1)*682]** ⇒ **293 个 pack，每 pack 682 槽**。
+- 预区（slot 0..681，virt 0..0x2A90FD0 ≈ 44.7MB）：675 个非空洞块，紧凑长度 19,087,289B；
+  第 1 块就是我们的 JSON（v=0x200, size=0x1b32）。
+- `fm+0x387B58`：173 条 24B 块记录 = slot 1..173（file 0），紧凑长度 5,330,518B。
+- 块前缀**不是固定 1 字节**：slot1 前缀 0xb1（数据从 +1），slot2 前缀 f4 a9（数据从 +2 = 'OTTO'），其余不定长。
+- `fh` 名字池条目 = `[u32 len][name][meta…]`，meta 以 0xffffffff 收尾；
+  asset_config.json 的 6 个 u32 = 0x58, 0x60, 0x31002ce0, 0x3519ce00, 0xff0ff200, 0xffffffff。
+  **新发现：第 1 个 u32 恒为 0x58**（asset_config.json / dev_font.otf 都是 0x58），
+  第 2 个 u32 逐条不同（0x60 / 0x8c / 0x74）⇒ 第 2 个字段更像**逐成员索引/偏移**，第 1 个是共享 tag。
+
+### 本轮排除的重组模型（勿重试）
+
+1. 紧凑拼接 675 块（btree 显式 size，pstart=0/1）→ 0x0100041E 处字节 0x98 / 0x00。
+2. 稀疏虚拟映像（file offset = virt − 0x200）→ 0x00。
+3. 页对齐（slot k → (k−1)·64KB）→ 0x10 / 0x00。
+4. 「前 257 页」模型 → 累计长度要 616 块才覆盖 0x0100041E。
+5. 293 个 pack 基址 + 0x0100041E → 21/294 命中 nibble=4，但 count 全是垃圾 ⇒ 随机噪声。
+6. 全部前缀长度扫描（616 种前缀 × ±3 字节）→ 只有 2 个 tag=0x14 的噪声。
+7. 「根表元素全部指向 key 池记录」判据扫 19MB 紧凑体 → 0 命中（两种 pstart 都是）。
+
+### 阻塞点（已收紧成一句话）
+
+> 真实 asset_config.json 是**某个 pack 的成员**，**≥16,778,271 字节**，其**根表在成员内偏移 0x0100041E**；
+> 成员的 (offset,size) 在 `fh` 名字池的逐成员字段里 —— **这是唯一还没解的结构**。
+
+### 下一步（唯一主线）
+
+1. 严格逐条解析 `fh` 名字池（`[u32 len][name][定长 meta]`），把第 2 个 u32 与已知成员
+   （dev_font.otf / bicon.t / font_0.fnt / 924.mdl）在 arena 里的**块起点与长度**对齐，
+   反推出成员表 (offset,size) 布局。
+2. 拿到成员表后按 pack 块序重组 ≥16.78MB 成员，覆盖 push 到
+   `/sdcard/SNK/romfs/asset/asset_config.json`，真机应越过 0x3fb538。
+3. 并行补 PNG / Opus 真解码（`src/runtime/hle/snk_hle_media.c` 仍是桩）。
+
+### 设备与代码状态
+
+- 平板在线，APK 已装（含故障插桩）；设备上 `app0:/asset/asset_config.json` = 真实 6962B，与本地 byte-exact。
+- 真机仍崩在 `0x3fb538`（fa−base = 0x0100041E，与头字段精确相等）。
+- 本轮**未改产品代码**；`src/runtime/nso/nso_loader.c` 的故障插桩保留并随本轮提交。
+- 本轮新增脚本（均在 `.local/`，不入库）：
+  `hdr_survey.py`（4940 容器头统计）、`virt_probe.py`（槽布局）、`file0_recon.py`、
+  `sparse_recon.py`/`sparse2.py`/`page_hunt.py`/`page_check.py`（三种重组模型）、
+  `compact_hunt.py`/`relax_hunt.py`/`root_hunt.py`（根表判据扫描）、
+  `mask_test.py`（掩码统计检验）、`pack_base_test.py`（pack 基址检验）、
+  `meta_struct.py`/`names_fm.py`/`names_crc.py`（fm/fh 结构）、`land_test.py`/`fit257.py`/`sweep.py`、
+  `dump_preregion.py`（预区物理字节落盘 `.local/preregion.bin` + `.local/preblocks.pkl`）。
+
