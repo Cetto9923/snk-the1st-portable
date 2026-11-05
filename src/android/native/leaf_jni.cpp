@@ -41,7 +41,7 @@ std::string Sha256(const std::vector<uint8_t>& bytes, void* context) {
 }
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_ffrs_diagnostic_DiagnosticActivity_runNativeLeafDiagnostic(JNIEnv* env, jobject, jstring library, jstring destination) {
+Java_org_snk_the1st_DiagnosticActivity_runNativeLeafDiagnostic(JNIEnv* env, jobject, jstring library, jstring destination) {
     const char* input = env->GetStringUTFChars(library, nullptr);
     if (!input) return nullptr;
     std::string path(input);

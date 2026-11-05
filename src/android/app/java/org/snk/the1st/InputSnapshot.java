@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 /** Public Android API capabilities captured on the UI thread, not event/actuation results. */
 public final class InputSnapshot {

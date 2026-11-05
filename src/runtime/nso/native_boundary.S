@@ -360,6 +360,83 @@ nb_import_stack13_gateway:
     brk #0x4e42
 .size nb_import_stack13_gateway,.-nb_import_stack13_gateway
 
+/* Eight general registers plus exactly one 8-byte stack argument.
+ *
+ * AAPCS64 puts the ninth integer argument on the caller's stack: the callee
+ * reads it at SP+0 on entry. The guest calls this thunk with its own SP, so
+ * the slot the guest wrote sits at the incoming SP and not at the SP the host
+ * callee will see. The gateway therefore rebuilds that single slot in the
+ * outgoing argument area before the host call.
+ *
+ * Frame: SP+0..SP+7 outgoing stack argument, SP+16..SP+31 saved x29/x30,
+ * SP+32..SP+47 saved x18/x16, SP+48..SP+55 previous active guest x18. */
+.p2align 2
+.global nb_import_stack1_gateway
+.hidden nb_import_stack1_gateway
+.type nb_import_stack1_gateway,%function
+nb_import_stack1_gateway:
+    .inst 0xd50324df /* bti jc: thunk uses an indirect BR */
+    ldr x9, [x16]
+    mov x10, #0x4e42
+    cmp x9, x10
+    b.ne .Ls1_trap
+    ldr x10, [x16, #40]
+    cbz x10, .Ls1_trap
+    ldar x9, [x10]
+    cbz x9, .Ls1_trap
+    mrs x9, tpidr_el0
+    ldr x10, [x16, #8]
+    cmp x9, x10
+    b.eq .Ls1_owner_matched
+    adrp x10, s_slots
+    add  x10, x10, :lo12:s_slots
+    mov  w12, #NB_MAX_GUEST_THREADS
+.Ls1_search_slot:
+    ldr  x13, [x10]       /* slot->tpidr */
+    cmp  x13, x9
+    b.eq .Ls1_slot_found
+    add  x10, x10, #64
+    subs w12, w12, #1
+    b.ne .Ls1_search_slot
+    b    .Ls1_trap
+.Ls1_slot_found:
+    ldr  x13, [x10, #40]  /* slot->scope */
+    cmp  x13, x16
+    b.ne .Ls1_trap
+    mov  x16, x10
+.Ls1_owner_matched:
+    add x11, x16, #24
+    ldar x9, [x11]
+    cmp x9, #1
+    b.ne .Ls1_trap
+    sub sp, sp, #64              /* outgoing 8 + metadata 48 */
+    stp x29, x30, [sp, #16]
+    stp x18, x16, [sp, #32]
+    ldr x9, [x16, #48]
+    str x9, [sp, #48]
+    str x18, [x16, #48] /* actual guest x18 before restoring host SCS */
+    ldr x10, [sp, #64]           /* ORIGINAL incoming guest SP */
+    ldr x9, [x10]                /* the guest's ninth argument slot */
+    str x9, [sp]                 /* outgoing stack argument */
+    add x29, sp, #16
+    mov x9, #2
+    stlr x9, [x11]               /* phase = HOST */
+    ldr x18, [x16, #16]          /* restore host SCS x18 */
+    blr x17                      /* call the host target */
+    ldr x16, [sp, #40]
+    ldr x9, [sp, #48]
+    str x9, [x16, #48]
+    add x11, x16, #24
+    mov x9, #1
+    stlr x9, [x11]               /* phase = GUEST */
+    ldr x18, [sp, #32]
+    ldp x29, x30, [sp, #16]
+    add sp, sp, #64
+    ret
+.Ls1_trap:
+    brk #0x4e42
+.size nb_import_stack1_gateway,.-nb_import_stack1_gateway
+
 .p2align 2
 .global nb_import_snprintf_gateway
 .hidden nb_import_snprintf_gateway

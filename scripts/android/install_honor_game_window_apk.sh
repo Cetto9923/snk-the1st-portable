@@ -9,9 +9,9 @@ HONOR_SERIAL="A42BBB5109000333"
 RG477M_SERIAL="RG477M01445122"
 
 FFRS_DEVICE="${FFRS_DEVICE:-${HONOR_SERIAL}}"
-FFRS_APK="${FFRS_APK:-${FFRS_ROOT}/.local/android-apk/ffrs-game-window-debug.apk}"
-FFRS_PACKAGE="org.ffrs.gamewindow"
-FFRS_ACTIVITY="org.ffrs.diagnostic.GameActivity"
+FFRS_APK="${FFRS_APK:-${FFRS_ROOT}/.local/android-apk/snk-the1st-game-window-debug.apk}"
+FFRS_PACKAGE="org.snk.the1st.gamewindow"
+FFRS_ACTIVITY="org.snk.the1st.GameActivity"
 FFRS_LOGS="${FFRS_ROOT}/.local/logs/android-game-window"
 mkdir -p "${FFRS_LOGS}"
 
@@ -53,9 +53,9 @@ step logcat-clear adb -s "${FFRS_DEVICE}" logcat -c
 # Launch without any Intent extras: pure cold-start autodiscovery
 step cold-launch adb -s "${FFRS_DEVICE}" shell am start -W -n "${FFRS_PACKAGE}/${FFRS_ACTIVITY}"
 sleep 3
-step logcat-autodiscover adb -s "${FFRS_DEVICE}" logcat -d -s FFRS-GameWindow:I '*:S'
+step logcat-autodiscover adb -s "${FFRS_DEVICE}" logcat -d -s SNK-GameWindow:I '*:S'
 
 printf '\nAutodiscover verification log:\n'
-grep -E "game_dir=|resolveGameDir|guest_image_unreadable|guest_paks_missing" "${FFRS_LOGS}/logcat-autodiscover.log" || true
+grep -E "game_dir=|resolveGameDir|guest_image_unreadable|guest_modules_missing" "${FFRS_LOGS}/logcat-autodiscover.log" || true
 
 printf '\nEvidence stored in: %s\n' "${FFRS_LOGS}"

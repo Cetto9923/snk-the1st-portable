@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 import android.app.Activity;
 import android.media.AudioManager;
@@ -56,7 +56,7 @@ import java.io.File;
  * both can be compared against the existing display snapshot parameters.
  */
 public final class GameActivity extends Activity implements SurfaceHolder.Callback, Runnable, DataBundleInstaller.Listener {
-    private static final String TAG = "FFRS-GameWindow";
+    private static final String TAG = "SNK-GameWindow";
     private SurfaceView surface_view;
     private DisplaySnapshot display_snapshot;
     private boolean resumed;
@@ -838,26 +838,23 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
     }
 
-    /** Legacy location, only writable through adb; kept so existing adb installs keep working. */
+    /** adb-only location, kept so adb installs keep working. */
     private static final String DEFAULT_GAME_DIR =
-            "/data/local/tmp/ffrs-60fps";
-    private static final String RG477M_GAME_DIR =
-            "/data/local/tmp/ffrs-rg477m-efd1123620814764ae32529c18081259";
+            "/data/local/tmp/snk-the1st";
 
-    private static final String[] REQUIRED_PAKS = {
-            "FFRS-Switch.pak",
-            "FFRS-Switch.ucas",
-            "FFRS-Switch.utoc",
-            "global.ucas",
-            "global.utoc"
+    /** The four NSO modules this title ships: game, loader, SDK and multimedia. */
+    private static final String[] REQUIRED_MODULES = {
+            "main.nso",
+            "rtld.nso",
+            "sdk.nso",
+            "subsdk0.nso"
     };
 
-    static java.util.List<String> findMissingPaks(File gameDir) {
+    static java.util.List<String> findMissingModules(File gameDir) {
         java.util.ArrayList<String> missing = new java.util.ArrayList<String>();
         if (gameDir == null) return missing;
-        File paksDir = new File(gameDir, "romfs/FFRS/Content/Paks");
-        for (String name : REQUIRED_PAKS) {
-            File f = new File(paksDir, name);
+        for (String name : REQUIRED_MODULES) {
+            File f = new File(gameDir, name);
             if (!f.isFile() || f.length() == 0) {
                 missing.add(name);
             }
@@ -869,12 +866,12 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         if (dir == null) return false;
         File nso = new File(dir, "main.nso");
         File rom = new File(dir, "romfs");
-        if (!nso.canRead() || (!rom.isDirectory() && !rom.canRead())) return false;
-        return findMissingPaks(dir).isEmpty();
+        if (!nso.canRead() || !rom.isDirectory()) return false;
+        return findMissingModules(dir).isEmpty();
     }
 
-    /** Bounded shallow scan searching for directories named "FFRS" (case-insensitive) under roots. */
-    private static void shallowScanForFfrs(File dir, int depth, int maxDepth, java.util.List<File> results, int[] counter, int maxEntries) {
+    /** Bounded shallow scan searching for directories named "SNK" (case-insensitive) under roots. */
+    private static void shallowScanForSnk(File dir, int depth, int maxDepth, java.util.List<File> results, int[] counter, int maxEntries) {
         if (dir == null || depth > maxDepth || counter[0] >= maxEntries) return;
         File[] children = dir.listFiles();
         if (children == null) return;
@@ -892,15 +889,15 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                     || name.equalsIgnoreCase("Huawei") || name.equalsIgnoreCase("Honor")) {
                 continue;
             }
-            if (name.equalsIgnoreCase("FFRS")) {
+            if (name.equalsIgnoreCase("SNK")) {
                 if (!results.contains(child)) results.add(child);
             } else if (depth < maxDepth) {
-                shallowScanForFfrs(child, depth + 1, maxDepth, results, counter, maxEntries);
+                shallowScanForSnk(child, depth + 1, maxDepth, results, counter, maxEntries);
             }
         }
     }
 
-    /** Candidate game folders, best first. The user puts the whole FFRS folder (main.nso + romfs) on the storage. */
+    /** Candidate game folders, best first. The user puts the whole SNK folder (four NSO modules + romfs) on the storage. */
     private File[] candidateGameDirs() {
         java.util.LinkedHashSet<File> list = new java.util.LinkedHashSet<File>();
         // Public roots come from Android, not a device model or a fixed SD UUID.
@@ -959,13 +956,13 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
         // Bounded common paths: standard directory structures on internal/external volumes.
         String[] common = {
-            "FFRS", "ffrs",
-            "Games/FFRS", "games/FFRS", "Games/ffrs", "games/ffrs",
-            "Download/FFRS", "download/FFRS", "Download/ffrs", "download/ffrs",
-            "Documents/FFRS", "documents/FFRS", "Documents/ffrs", "documents/ffrs",
-            "ROMs/FFRS", "roms/FFRS", "ROMs/ffrs", "roms/ffrs",
-            "Switch/FFRS", "switch/FFRS", "Switch/ffrs", "switch/ffrs",
-            "ROMs/Switch/FFRS", "roms/switch/FFRS"
+            "SNK", "snk", "Trails", "trails", "Sora", "sora",
+            "Games/SNK", "games/SNK", "Games/snk", "games/snk",
+            "Download/SNK", "download/SNK", "Download/snk", "download/snk",
+            "Documents/SNK", "documents/SNK", "Documents/snk", "documents/snk",
+            "ROMs/SNK", "roms/SNK", "ROMs/snk", "roms/snk",
+            "Switch/SNK", "switch/SNK", "Switch/snk", "switch/snk",
+            "ROMs/Switch/SNK", "roms/switch/SNK"
         };
         for (File root : roots) {
             for (String child : common) list.add(new File(root, child));
@@ -976,8 +973,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         for (File ext : getExternalFilesDirs(null)) {
             if (ext != null) {
                 list.add(new File(ext, "game"));
-                list.add(new File(ext, "FFRS"));
-                list.add(new File(ext, "ffrs"));
+                list.add(new File(ext, "SNK"));
+                list.add(new File(ext, "snk"));
                 list.add(ext);
             }
         }
@@ -986,19 +983,18 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         java.util.ArrayList<File> shallowFound = new java.util.ArrayList<File>();
         int[] counter = new int[]{0};
         for (File root : roots) {
-            shallowScanForFfrs(root, 1, 2, shallowFound, counter, 64);
+            shallowScanForSnk(root, 1, 2, shallowFound, counter, 64);
         }
         for (File f : shallowFound) list.add(f);
 
-        // Retain development and baseline RG477M candidate directories.
-        list.add(new File(RG477M_GAME_DIR));
+        // Retain the adb-install location.
         list.add(new File(DEFAULT_GAME_DIR));
         File tmp = new File("/data/local/tmp");
         if (tmp.isDirectory()) {
             File[] subs = tmp.listFiles();
             if (subs != null) {
                 for (File s : subs) {
-                    if (s != null && s.isDirectory() && s.getName().startsWith("ffrs-") && !list.contains(s)) {
+                    if (s != null && s.isDirectory() && s.getName().startsWith("snk-") && !list.contains(s)) {
                         list.add(s);
                     }
                 }
@@ -1159,7 +1155,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
         File ext = getExternalFilesDir(null);
         StringBuilder sb = new StringBuilder();
-        sb.append("【最终幻想：共鸣 · 数据安装与自动发现】\n\n");
+        sb.append("【空之轨迹 the 1st · 数据安装与自动发现】\n\n");
 
         File[] candidates = candidateGameDirs();
         java.util.ArrayList<File> partialDirs = new java.util.ArrayList<File>();
@@ -1174,10 +1170,10 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             for (File d : partialDirs) {
                 boolean nso = new File(d, "main.nso").canRead();
                 boolean rom = new File(d, "romfs").isDirectory();
-                java.util.List<String> missing = findMissingPaks(d);
+                java.util.List<String> missing = findMissingModules(d);
                 if (nso && rom && !missing.isEmpty()) {
                     sb.append("⚠️ 【数据包不完整】发现目录：").append(d.getAbsolutePath()).append("\n");
-                    sb.append("缺少以下关键 Pak 文件（位于 romfs/FFRS/Content/Paks/）：\n");
+                    sb.append("缺少以下 NSO 模块（位于该目录根部）：\n");
                     for (String name : missing) {
                         sb.append("   ❌ ").append(name).append("\n");
                     }
@@ -1186,7 +1182,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                     sb.append("⚠️ 【发现部分文件】").append(d.getAbsolutePath())
                             .append("\n  main.nso: ").append(nso ? "✓ 正常" : "❌ 未找到")
                             .append("\n  romfs: ").append(rom ? "✓ 正常" : "❌ 未找到")
-                            .append("\n请确保 FFRS 文件夹内同时包含 main.nso 与完整的 romfs/ 目录。\n\n");
+                            .append("\n请确保 SNK 文件夹内同时包含四个 NSO 模块与完整的 romfs/ 目录。\n\n");
                 }
             }
         } else {
@@ -1202,9 +1198,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         }
 
         sb.append("【支持的数据放置路径】（拷入其一即可自动识别）：\n");
-        sb.append("1. 内部存储根目录：\n   ").append(Environment.getExternalStorageDirectory().getAbsolutePath()).append("/FFRS\n");
-        sb.append("2. 常用游戏目录：\n   ").append(Environment.getExternalStorageDirectory().getAbsolutePath()).append("/Games/FFRS\n");
-        sb.append("3. 外置存储卡 / USB OTG：\n   <外置存储根目录>/FFRS 或 <外置存储根目录>/Games/FFRS\n");
+        sb.append("1. 内部存储根目录：\n   ").append(Environment.getExternalStorageDirectory().getAbsolutePath()).append("/SNK\n");
+        sb.append("2. 常用游戏目录：\n   ").append(Environment.getExternalStorageDirectory().getAbsolutePath()).append("/Games/SNK\n");
+        sb.append("3. 外置存储卡 / USB OTG：\n   <外置存储根目录>/SNK 或 <外置存储根目录>/Games/SNK\n");
         if (ext != null) {
             sb.append("4. 应用专属目录（免权限）：\n   ").append(ext.getAbsolutePath()).append("/game\n");
         }
@@ -1217,8 +1213,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             boolean nso = new File(d, "main.nso").canRead(), rom = new File(d, "romfs").isDirectory();
             sb.append(" • ").append(d.getAbsolutePath()).append(" [nso:").append(nso ? "✓" : "✗").append(" rom:").append(rom ? "✓" : "✗");
             if (nso && rom) {
-                java.util.List<String> missing = findMissingPaks(d);
-                if (!missing.isEmpty()) sb.append(" 缺Pak:").append(missing.size()).append("个");
+                java.util.List<String> missing = findMissingModules(d);
+                if (!missing.isEmpty()) sb.append(" 缺模块:").append(missing.size()).append("个");
                 else sb.append(" 完整✓");
             }
             sb.append("]\n");
@@ -1265,9 +1261,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             refreshSetup();
             return;
         }
-        java.util.List<String> missingPaks = findMissingPaks(new File(game_dir));
-        if (!missingPaks.isEmpty()) {
-            Log.e(TAG, "guest_paks_missing in " + game_dir + ": " + missingPaks);
+        java.util.List<String> missingModules = findMissingModules(new File(game_dir));
+        if (!missingModules.isEmpty()) {
+            Log.e(TAG, "guest_modules_missing in " + game_dir + ": " + missingModules);
             refreshSetup();
             return;
         }

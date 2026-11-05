@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 /** Typed observations for the explicit diagnostic tone, never a game/audio audibility verdict. */
 public final class AudioProbeResult {

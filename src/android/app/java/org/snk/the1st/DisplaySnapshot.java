@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 /** UI-thread measurement handed to native code once, without retaining Activity/JVM references. */
 public final class DisplaySnapshot {

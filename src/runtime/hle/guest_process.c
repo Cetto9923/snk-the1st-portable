@@ -9,6 +9,9 @@
 #include "movie_decoder.h"
 #include "multiwait.h"
 #include "audio_bridge.h"
+#include "snk_hle.h"
+#include "snk_hle_media.h"
+#include "snk_libcxx.h"
 #include "guest_context.h"
 #include "guest_pages.h"
 #include "native_boundary.h"
@@ -1261,6 +1264,12 @@ uint64_t guest_process_resolve(uint32_t index,const char *name) {
      * No nvn/dlsym/unowned backing/thread/heap service is admitted. */
     uint64_t hid = ffrs_hid_lookup(name, NULL, NULL);
     if (hid) return hid;
+    uint64_t snk = snk_hle_lookup(name, NULL, NULL);
+    if (snk) return snk;
+    uint64_t libcxx = snk_libcxx_lookup(name, NULL, NULL);
+    if (libcxx) return libcxx;
+    uint64_t media = snk_hle_media_lookup(name, NULL, NULL, NULL, NULL, NULL);
+    if (media) return media;
     uint64_t component = ffrs_sdk_component_lookup(name, NULL, NULL);
     if (component) return component;
     uint64_t movie = ffrs_movie_buffer_lookup(name, NULL, NULL);
@@ -1333,6 +1342,7 @@ uint64_t guest_process_resolve(uint32_t index,const char *name) {
         "_ZN2nn2os21WaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeE",
         "_ZN2nn2os26TimedWaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeENS_8TimeSpanE",
         "_ZN2nn2os23SignalConditionVariableEPNS0_21ConditionVariableTypeE",
+        "_ZN2nn2os26BroadcastConditionVariableEPNS0_21ConditionVariableTypeE",
         "_ZN2nn2os18TryWaitSystemEventEPNS0_15SystemEventTypeE",
         "_ZN2nn2oe10InitializeEv","nnoeInitialize",
         "_ZN2nn2oe18GetDesiredLanguageEv","nnoeGetDesiredLanguage",
@@ -1504,6 +1514,36 @@ static int import_signature(const char *name,nb_signature *out) {
             .gp_arguments=hid_arguments,.gp_returns=hid_returns};
         return 1;
     }
+    unsigned snk_arguments, snk_returns;
+    if (snk_hle_lookup(name, &snk_arguments, &snk_returns)) {
+        *out = (nb_signature){.version=1,.flags=NB_SIG_REGISTER_ONLY,
+            .gp_arguments=snk_arguments,.gp_returns=snk_returns};
+        return 1;
+    }
+    unsigned libcxx_arguments, libcxx_returns;
+    if (snk_libcxx_lookup(name, &libcxx_arguments, &libcxx_returns)) {
+        *out = (nb_signature){.version=1,.flags=NB_SIG_REGISTER_ONLY,
+            .gp_arguments=libcxx_arguments,.gp_returns=libcxx_returns};
+        return 1;
+    }
+    unsigned media_gp, media_fp, media_gp_returns, media_fp_returns, media_stack;
+    if (snk_hle_media_lookup(name, &media_gp, &media_fp, &media_gp_returns,
+                              &media_fp_returns, &media_stack)) {
+        if (media_stack) {
+            /* AAPCS64 puts every argument after the eighth general register
+             * on the guest stack, so the binding needs the gateway that
+             * rebuilds that slot in front of the host callee. */
+            *out = (nb_signature){.version=5,.flags=NB_SIG_GP8_STACK1,
+                .stack_argument_bytes=(uint32_t)media_stack,
+                .gp_arguments=(uint8_t)media_gp,.fp_arguments=(uint8_t)media_fp,
+                .gp_returns=(uint8_t)media_gp_returns,.fp_returns=(uint8_t)media_fp_returns};
+        } else {
+            *out = (nb_signature){.version=1,.flags=NB_SIG_REGISTER_ONLY,
+                .gp_arguments=(uint8_t)media_gp,.fp_arguments=(uint8_t)media_fp,
+                .gp_returns=(uint8_t)media_gp_returns,.fp_returns=(uint8_t)media_fp_returns};
+        }
+        return 1;
+    }
     if(!strcmp(name,"logf") || !strcmp(name,"log") || !strcmp(name,"log2") || !strcmp(name,"log2f") ||
        !strcmp(name,"log10") || !strcmp(name,"log10f") || !strcmp(name,"exp") || !strcmp(name,"expf") ||
        !strcmp(name,"sqrt") || !strcmp(name,"sqrtf") || !strcmp(name,"sin") || !strcmp(name,"sinf") ||
@@ -1662,7 +1702,8 @@ static int import_signature(const char *name,nb_signature *out) {
     else if(!strcmp(name,"_ZN2nn2fs16GetFreeSpaceSizeEPlPKc")) {arguments=2;returns=1;}
     else if(!strcmp(name,"_ZN2nn2os27InitializeConditionVariableEPNS0_21ConditionVariableTypeE") ||
             !strcmp(name,"_ZN2nn2os25FinalizeConditionVariableEPNS0_21ConditionVariableTypeE") ||
-            !strcmp(name,"_ZN2nn2os23SignalConditionVariableEPNS0_21ConditionVariableTypeE")) {arguments=1;returns=0;}
+            !strcmp(name,"_ZN2nn2os23SignalConditionVariableEPNS0_21ConditionVariableTypeE") ||
+            !strcmp(name,"_ZN2nn2os26BroadcastConditionVariableEPNS0_21ConditionVariableTypeE")) {arguments=1;returns=0;}
     else if(!strcmp(name,"_ZN2nn2os21WaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeE")) {arguments=2;returns=0;}
     else if(!strcmp(name,"_ZN2nn2os26TimedWaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeENS_8TimeSpanE")) {arguments=3;returns=1;}
     else if(!strcmp(name,"_ZN2nn2fs18IsSaveDataExistingENS_13ApplicationIdERKNS_7account3UidE")){arguments=2;returns=1;}

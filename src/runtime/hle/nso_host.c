@@ -246,6 +246,24 @@ static nso_host_thread *find_thread_locked(const void *thread) {
     return NULL;
 }
 
+/* The ThreadType the host owns for the primary guest thread. A title may
+ * ask for the current thread before any thread was created, so the host keeps
+ * one object for that case and hands out its address. */
+static char s_main_thread_storage[NN_THREAD_TYPE_SIZE];
+
+/* A ThreadType pointer that the host does not own must never be dereferenced:
+ * the guest can carry a value that was never a thread object. Only the host
+ * owned objects may be read. */
+static bool thread_object_owned(const void *thread) {
+    if (!thread) return false;
+    if (thread == (const void *)s_main_thread_storage) return true;
+    pthread_mutex_lock(&s_threads_mutex);
+    bool owned = find_thread_locked(thread) != NULL;
+    pthread_mutex_unlock(&s_threads_mutex);
+    return owned;
+}
+
+
 static void *thread_worker(void *arg) {
     nso_host_thread *th = (nso_host_thread *)arg;
     s_current_host_thread=th;
@@ -561,6 +579,11 @@ const char *nso_host_get_thread_name_pointer(const void *thread) {
 
 int32_t nso_host_get_thread_priority(const void *thread) {
     if (!thread) return 16;
+    if (!thread_object_owned(thread)) {
+        fprintf(stderr, "[hle] nn::os::GetThreadPriority: ThreadType=%p is not a host owned thread object; default priority returned\n",
+                thread);
+        return 16;
+    }
     return *(const int16_t *)((const char *)thread + NN_THREAD_PRIORITY_OFFSET);
 }
 
@@ -579,6 +602,11 @@ void nso_host_change_thread_priority(void *thread, int32_t priority) {
 
 uint64_t nso_host_get_thread_id(const void *thread) {
     if (!thread) {
+        return current_native_tid();
+    }
+    if (!thread_object_owned(thread)) {
+        fprintf(stderr, "[hle] nn::os::GetThreadId: ThreadType=%p is not a host owned thread object; current native id returned\n",
+                thread);
         return current_native_tid();
     }
     uint64_t tid = *(const uint64_t *)((const char *)thread + NN_THREAD_ID_OFFSET);
@@ -624,12 +652,14 @@ void *nso_host_get_current_thread(void) {
         if (s_host_threads[i].active && pthread_equal(s_host_threads[i].host_thread, self)) {
             void *t = s_host_threads[i].guest_thread_type;
             pthread_mutex_unlock(&s_threads_mutex);
+            fprintf(stderr, "[hle] nn::os::GetCurrentThread: registered ThreadType=%p\n", t);
             return t;
         }
     }
     pthread_mutex_unlock(&s_threads_mutex);
-    static char s_main_thread_storage[NN_THREAD_TYPE_SIZE] = {0};
     static bool s_main_inited = false;
+    fprintf(stderr, "[hle] nn::os::GetCurrentThread: no registered host thread; primary ThreadType=%p\n",
+            (void *)s_main_thread_storage);
     if (!s_main_inited) {
         s_main_inited = true;
         *(uint8_t *)(s_main_thread_storage + NN_THREAD_STATE_OFFSET) = 2; /* Started */
@@ -3963,6 +3993,7 @@ uint64_t nso_host_resolve(uint32_t index,const char *name) {
     if(!strcmp(name,"_ZN2nn2os21WaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeE")) return (uintptr_t)&nso_host_wait_condition_variable;
     if(!strcmp(name,"_ZN2nn2os26TimedWaitConditionVariableEPNS0_21ConditionVariableTypeEPNS0_9MutexTypeENS_8TimeSpanE")) return (uintptr_t)&nso_host_timed_wait_condition_variable;
     if(!strcmp(name,"_ZN2nn2os23SignalConditionVariableEPNS0_21ConditionVariableTypeE")) return (uintptr_t)&nso_host_signal_condition_variable;
+    if(!strcmp(name,"_ZN2nn2os26BroadcastConditionVariableEPNS0_21ConditionVariableTypeE")) return (uintptr_t)&nso_host_broadcast_condition_variable;
     if(!name)return 0;
 #if defined(__ANDROID__) || (defined(NSO_WITH_CXX_GUARDS) && NSO_WITH_CXX_GUARDS)
     if(!strcmp(name,"__cxa_guard_acquire"))return (uint64_t)(uintptr_t)&__cxa_guard_acquire;

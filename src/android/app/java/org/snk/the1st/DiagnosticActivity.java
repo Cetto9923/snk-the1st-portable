@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 import android.app.Activity;
 import android.os.Bundle;

@@ -307,6 +307,11 @@ void nso_host_signal_condition_variable(void *object) {
     int error = pthread_cond_signal(&cv->native); condition_drop(cv);
     if (error) fatal("condition signal", error);
 }
+void nso_host_broadcast_condition_variable(void *object) {
+    struct condition_entry *cv = condition_borrow(object, 0);
+    int error = pthread_cond_broadcast(&cv->native); condition_drop(cv);
+    if (error) fatal("condition broadcast", error);
+}
 
 struct rwlock_entry {
     void *object;

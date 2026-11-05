@@ -50,6 +50,7 @@ static nb_lifetime *lifetime_get(void) {
 }
 extern void nb_import_gateway(void);
 extern void nb_import_stack13_gateway(void);
+extern void nb_import_stack1_gateway(void);
 extern void nb_import_snprintf_gateway(void);
 extern void nb_import_variadic1_gateway(void);
 extern void nb_import_variadic2_gateway(void);
@@ -128,7 +129,15 @@ nb_status nb_import_bind(nb_import *binding, nb_scope *scope,
     int fixed_gp21=signature->version==2 && signature->flags==NB_SIG_FIXED_GP21 &&
         signature->stack_argument_bytes==104 && signature->gp_arguments==8 &&
         !signature->fp_arguments && signature->gp_returns==1 && !signature->fp_returns;
-    if(excluded || (!register_only && !fixed_gp21 && !variadic_snprintf && !variadic_stdio))return NB_UNSUPPORTED;
+    /* v5: eight general registers plus exactly one 8-byte stack argument.
+     * AAPCS64 puts the ninth integer argument on the caller's stack, so the
+     * binding needs the gateway that rebuilds that slot for the host callee.
+     * The slot count stays fixed: one word is all the imports need today. */
+    int gp8_stack1=signature->version==5 && signature->flags==NB_SIG_GP8_STACK1 &&
+        signature->stack_argument_bytes==8 && signature->gp_arguments==8 &&
+        !signature->fp_arguments && signature->gp_returns<=2 && !signature->fp_returns &&
+        !(signature->gp_returns && signature->fp_returns);
+    if(excluded || (!register_only && !fixed_gp21 && !gp8_stack1 && !variadic_snprintf && !variadic_stdio))return NB_UNSUPPORTED;
     long page = sysconf(_SC_PAGESIZE);
     if (page < 64 || scope->binding_count == UINT64_MAX) return NB_INVALID;
     void *memory = mmap(NULL, (size_t)page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -141,7 +150,8 @@ nb_status nb_import_bind(nb_import *binding, nb_scope *scope,
     void *gateway = variadic_snprintf ? (void *)nb_import_snprintf_gateway :
                     variadic_stdio ? (void *)(signature->gp_arguments==1?(uintptr_t)nb_import_variadic1_gateway:
                                                               (uintptr_t)nb_import_variadic2_gateway) :
-                    (fixed_gp21 ? (void *)nb_import_stack13_gateway : (void *)nb_import_gateway);
+                    (fixed_gp21 ? (void *)nb_import_stack13_gateway :
+                     gp8_stack1 ? (void *)nb_import_stack1_gateway : (void *)nb_import_gateway);
     uint64_t literals[4] = {(uintptr_t)scope, (uintptr_t)target, (uintptr_t)gateway, 0};
     memcpy(memory, instructions, sizeof(instructions));
     memcpy((unsigned char *)memory + 32, literals, sizeof(literals));

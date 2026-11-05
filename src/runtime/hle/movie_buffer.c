@@ -40,13 +40,31 @@ static void release_owned(movie_buffer *b) {
     if(!fn || !scope || nb_call_from_host(scope,(void(*)(void))fn,&p)!=NB_OK)abort();
     b->base=NULL;
 }
-static void destroy(movie_buffer *b) {release_owned(b);}
+static void destroy(movie_buffer *b) {
+    if(b->udata32==1){free(b->base);b->base=NULL;b->udata32=0;b->owned=0;b->capacity=0;return;}
+    release_owned(b);
+}
 static void set_range(movie_buffer *b,int32_t offset,int32_t size) {b->offset=offset;b->size=size;}
 static void set_data(movie_buffer *b,void *data,uint64_t capacity) {
     if(b->owned){release_owned(b);b->owned=0;}
     b->base=data;b->capacity=capacity;
 }
 static void *base(const movie_buffer *b) {return b->base;}
+/* The sized constructor takes the byte count the caller wants and hands out
+ * a host allocation for it. The guest allocator is not used here: the movie
+ * path is not the console path, and the guest allocator needs a live
+ * boundary scope that a constructor cannot promise. */
+static void construct_sized(movie_buffer *b,uint64_t size) {
+    construct(b);
+    if(!size)return;
+    void *memory=malloc((size_t)size);
+    if(!memory)return;
+    b->base=memory;
+    b->capacity=size;
+    b->size=(int32_t)size;
+    b->udata32=1; /* host allocation, released by destroy */
+}
+static void *data(const movie_buffer *b) {return b->base;}
 static uint64_t capacity(const movie_buffer *b) {return b->capacity;}
 static int32_t size(const movie_buffer *b) {return b->size;}
 static int32_t offset(const movie_buffer *b) {return b->offset;}
@@ -60,6 +78,8 @@ uint64_t ffrs_movie_buffer_lookup(const char *name,unsigned *args,unsigned *retu
         {"_ZN5movie17SetThreadPriorityEi",(void(*)(void))set_thread_priority,1,0},
         {"_ZN5movie17GetThreadPriorityEv",(void(*)(void))get_thread_priority,0,1},
         {"_ZN5movie6BufferC1Ev",(void(*)(void))construct,1,0},
+        {"_ZN5movie6BufferC1Em",(void(*)(void))construct_sized,2,0},
+        {"_ZNK5movie6Buffer4DataEv",(void(*)(void))data,1,1},
         {"_ZN5movie6BufferD1Ev",(void(*)(void))destroy,1,0},
         {"_ZN5movie6Buffer8SetRangeEii",(void(*)(void))set_range,3,0},
         {"_ZN5movie6Buffer18SetDataAndCapacityEPvm",(void(*)(void))set_data,3,0},

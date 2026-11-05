@@ -70,28 +70,28 @@ void ReleasePublishedWindow() {
 }  // namespace
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_setFocusState(JNIEnv*, jclass, jint state) {
+Java_org_snk_the1st_GameWindowNative_setFocusState(JNIEnv*, jclass, jint state) {
     nso_host_oe_set_host_focus(static_cast<uint32_t>(state));
 }
 
 extern "C" JNIEXPORT jboolean JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_hostExitReady(JNIEnv*, jclass, jboolean request) {
+Java_org_snk_the1st_GameWindowNative_hostExitReady(JNIEnv*, jclass, jboolean request) {
     return nso_host_oe_host_exit_ready(request)?JNI_TRUE:JNI_FALSE;
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_audioDevicesChanged(JNIEnv*, jclass) {
+Java_org_snk_the1st_GameWindowNative_audioDevicesChanged(JNIEnv*, jclass) {
     ffrs_audio_devices_changed();
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_setPadState(JNIEnv*, jclass, jboolean connected,
+Java_org_snk_the1st_GameWindowNative_setPadState(JNIEnv*, jclass, jboolean connected,
         jlong buttons, jint lx, jint ly, jint rx, jint ry) {
     ffrs_hid_publish(connected, static_cast<uint64_t>(buttons), lx, ly, rx, ry);
 }
 
 extern "C" JNIEXPORT jlongArray JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_setSurface(JNIEnv* env, jclass, jobject surface) {
+Java_org_snk_the1st_GameWindowNative_setSurface(JNIEnv* env, jclass, jobject surface) {
     if (surface == nullptr) {
         // A missing Surface is not a window. Clear rather than publish a
         // placeholder the runtime could mistake for a real surface.
@@ -127,7 +127,7 @@ Java_org_ffrs_diagnostic_GameWindowNative_setSurface(JNIEnv* env, jclass, jobjec
 }
 
 extern "C" JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_clearSurface(JNIEnv*, jclass) {
+Java_org_snk_the1st_GameWindowNative_clearSurface(JNIEnv*, jclass) {
     uint64_t released = 0;
     pthread_mutex_lock(&g_window_lock);
     void* window = nso_host_native_window_get();
@@ -140,7 +140,7 @@ Java_org_ffrs_diagnostic_GameWindowNative_clearSurface(JNIEnv*, jclass) {
 }
 
 extern "C" JNIEXPORT jlongArray JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_describeWindow(JNIEnv* env, jclass) {
+Java_org_snk_the1st_GameWindowNative_describeWindow(JNIEnv* env, jclass) {
     pthread_mutex_lock(&g_window_lock);
     ffrs_game_window_state state = Measure(nso_host_native_window_get());
     pthread_mutex_unlock(&g_window_lock);

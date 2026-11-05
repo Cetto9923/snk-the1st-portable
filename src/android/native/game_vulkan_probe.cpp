@@ -418,7 +418,7 @@ extern "C" int ffrs_vulkan_present_probe(void* window, int32_t* out_width, int32
 // SurfaceHolder callback published, which is the Activity's own window in
 // this very process.
 extern "C" JNIEXPORT jint JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_nativeRunVulkanProbe(JNIEnv*, jclass) {
+Java_org_snk_the1st_GameWindowNative_nativeRunVulkanProbe(JNIEnv*, jclass) {
     void* window = nso_host_native_window_get();
     if (!window) {
         Log("nativeRunVulkanProbe: no window has been published yet");

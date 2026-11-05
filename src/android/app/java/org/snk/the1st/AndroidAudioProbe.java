@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 import android.content.Context;
 import android.media.AudioAttributes;

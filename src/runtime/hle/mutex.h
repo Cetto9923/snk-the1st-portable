@@ -17,6 +17,7 @@ void nso_host_finalize_condition_variable(void *condition);
 void nso_host_wait_condition_variable(void *condition, void *mutex);
 bool nso_host_timed_wait_condition_variable(void *condition, void *mutex, int64_t nanoseconds);
 void nso_host_signal_condition_variable(void *condition);
+void nso_host_broadcast_condition_variable(void *condition);
 
 void nso_host_initialize_rwlock(void *object);
 void nso_host_finalize_rwlock(void *object);

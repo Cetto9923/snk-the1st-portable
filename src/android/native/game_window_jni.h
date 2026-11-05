@@ -26,15 +26,15 @@ typedef struct ffrs_game_window_state {
  * layer releases again. A null Surface clears the published window instead of
  * inventing a placeholder. */
 JNIEXPORT jlongArray JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_setSurface(JNIEnv* env, jclass type, jobject surface);
+Java_org_snk_the1st_GameWindowNative_setSurface(JNIEnv* env, jclass type, jobject surface);
 
 /* Releases the published platform window reference and clears the holder. */
 JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_clearSurface(JNIEnv* env, jclass type);
+Java_org_snk_the1st_GameWindowNative_clearSurface(JNIEnv* env, jclass type);
 
 /* Reads the published window without touching a Java object. */
 JNIEXPORT jlongArray JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_describeWindow(JNIEnv* env, jclass type);
+Java_org_snk_the1st_GameWindowNative_describeWindow(JNIEnv* env, jclass type);
 #ifdef __cplusplus
 }
 #endif

@@ -41,10 +41,41 @@ static struct nso_result release(void *context, void *ticket) {
 }
 static const struct nso_owner_ops owner_ops = {reserve, commit, cancel, release};
 
+/* Verified SDK images.
+ *
+ * Each entry pins the SHA-256 of the SDK NSO that was extracted and audited
+ * for one title, plus the address and value of the data symbol that proves
+ * the loaded image is exactly that audited input. A digest that is not in
+ * this table is refused: an unaudited SDK never runs host code. */
+struct sdk_verified_image {
+    const char *title;
+    unsigned char digest[32];
+    uint64_t chunk_duration_address;
+    int64_t chunk_duration_value;
+};
+
+static const struct sdk_verified_image verified_images[] = {
+    { "final-fantasy-resonance",
+      { 0x9d,0xfd,0x1c,0xc6,0xd3,0x20,0x9d,0x85,0x7d,0xca,0xfb,0x19,0x17,0x36,0x26,0x5a,
+        0xc8,0x12,0x40,0x1d,0xdc,0xc7,0xb4,0x9d,0xab,0xf3,0xbc,0x0b,0x11,0x46,0x55,0xa9 },
+      0x9a05a8, 5000000 },
+    { "sora-no-kiseki-the-1st",
+      { 0x32,0xa9,0x6a,0xdc,0x6f,0xf4,0x74,0xf9,0x9f,0x9f,0xa7,0x99,0x58,0x03,0x26,0x7c,
+        0xf6,0xad,0x54,0x40,0xc2,0x95,0xf5,0x00,0x9f,0xb4,0x77,0xf8,0xb9,0xfe,0x82,0x7f },
+      0x9b0be0, 5000000 },
+};
+
+/* Address of the verified data symbol inside the loaded image. */
+static uint64_t active_chunk_duration_address;
+
+static const struct sdk_verified_image *match_verified_image(const unsigned char *digest) {
+    for (size_t i = 0; i < sizeof(verified_images) / sizeof(verified_images[0]); i++)
+        if (!memcmp(digest, verified_images[i].digest, sizeof(verified_images[i].digest)))
+            return &verified_images[i];
+    return NULL;
+}
+
 int ffrs_sdk_component_load(const char *path) {
-    static const unsigned char expected[32] = {
-        0x9d,0xfd,0x1c,0xc6,0xd3,0x20,0x9d,0x85,0x7d,0xca,0xfb,0x19,0x17,0x36,0x26,0x5a,
-        0xc8,0x12,0x40,0x1d,0xdc,0xc7,0xb4,0x9d,0xab,0xf3,0xbc,0x0b,0x11,0x46,0x55,0xa9};
     pthread_mutex_lock(&load_lock);
     if (sdk) { pthread_mutex_unlock(&load_lock); return ready ? 0 : -1; }
     FILE *file = path ? fopen(path, "rb") : NULL;
@@ -53,10 +84,12 @@ int ffrs_sdk_component_load(const char *path) {
     nvn_sha256_context hash; nvn_sha256_init(&hash);
     while ((bytes = fread(buffer, 1, sizeof(buffer), file))) nvn_sha256_update(&hash, buffer, bytes);
     int failed = ferror(file); fclose(file); nvn_sha256_final(&hash, digest);
-    if (failed || memcmp(digest, expected, sizeof(digest))) {
-        fprintf(stderr, "[sdk-component] refused: SDK SHA256 differs from the verified input\n");
+    const struct sdk_verified_image *image = failed ? NULL : match_verified_image(digest);
+    if (!image) {
+        fprintf(stderr, "[sdk-component] refused: SDK SHA256 differs from every verified input\n");
         pthread_mutex_unlock(&load_lock); return -1;
     }
+    active_chunk_duration_address = image->chunk_duration_address;
     char error[256] = {0};
     /* No external import is resolved. Unexpected allocation, startup or
      * foreign module calls stay fatal sentinels, never host fallthrough. */
@@ -67,13 +100,13 @@ int ffrs_sdk_component_load(const char *path) {
         pthread_mutex_unlock(&load_lock); return -1;
     }
     uint32_t symbol = nso_find_symbol(sdk, "_ZN2nn3hid18VibrationConverter13ChunkDurationE");
-    if (!symbol || nso_symbol_value(sdk, symbol) != 0x9a05a8 ||
-        *(const int64_t *)(uintptr_t)nso_addr(sdk, 0x9a05a8) != 5000000) {
+    if (!symbol || nso_symbol_value(sdk, symbol) != image->chunk_duration_address ||
+        *(const int64_t *)(uintptr_t)nso_addr(sdk, image->chunk_duration_address) != image->chunk_duration_value) {
         fprintf(stderr, "[sdk-component] verified data symbol does not match loaded SDK\n");
         pthread_mutex_unlock(&load_lock); return -1;
     }
-    fprintf(stderr, "[sdk-component] verified native DSP image base=%p image_bytes=%zu unresolved=%u; no SDK init\n",
-            (void *)(uintptr_t)nso_base(sdk), owner.charged, nso_unresolved_count(sdk));
+    fprintf(stderr, "[sdk-component] verified native DSP image title=%s base=%p image_bytes=%zu unresolved=%u; no SDK init\n",
+            image->title, (void *)(uintptr_t)nso_base(sdk), owner.charged, nso_unresolved_count(sdk));
     __atomic_store_n(&ready, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&load_lock); return 0;
 }
@@ -122,7 +155,7 @@ static uint32_t resampler_process(void *state,int *count,int16_t *output,uint64_
 uint64_t ffrs_sdk_component_lookup(const char *name, unsigned *arguments, unsigned *returns) {
     if (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE) || !name) return 0;
     uint64_t address = 0; unsigned args = 0,rets=0;
-    if (!strcmp(name, "_ZN2nn3hid18VibrationConverter13ChunkDurationE")) address = nso_addr(sdk, 0x9a05a8);
+    if (!strcmp(name, "_ZN2nn3hid18VibrationConverter13ChunkDurationE")) address = nso_addr(sdk, active_chunk_duration_address);
     else if (!strcmp(name, "_ZN2nn3hid18VibrationConverterC1Ei")) { address=(uintptr_t)converter_ctor; args=2; }
     else if (!strcmp(name, "_ZN2nn3hid18VibrationConverterD1Ev")) { address=(uintptr_t)converter_dtor; args=1; }
     else if (!strcmp(name, "_ZN2nn3hid18VibrationConverter12ProcessChunkEPNS0_14VibrationValueEPKsi")) {

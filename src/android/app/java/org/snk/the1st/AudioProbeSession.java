@@ -1,4 +1,4 @@
-package org.ffrs.diagnostic;
+package org.snk.the1st;
 
 /** Nonblocking write/playback loop shared with fake-clock tests. All real tracks are released. */
 public final class AudioProbeSession {

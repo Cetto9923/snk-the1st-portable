@@ -9,7 +9,7 @@
 #include <string>
 
 extern "C" JNIEXPORT jstring JNICALL
-Java_org_ffrs_diagnostic_DiagnosticActivity_runNativeDiagnostic(JNIEnv* env, jobject,
+Java_org_snk_the1st_DiagnosticActivity_runNativeDiagnostic(JNIEnv* env, jobject,
                                                                jstring module, jstring destination, jobject display, jobject input) {
     const char* module_chars = env->GetStringUTFChars(module, nullptr);
     if (!module_chars) return nullptr;

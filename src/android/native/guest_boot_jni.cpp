@@ -158,8 +158,10 @@ void* GuestThreadMain(void* opaque) {
         }
         fprintf(stderr, "[sdk-component] using %s\n", sdk.c_str());
         if (ffrs_sdk_component_load(sdk.c_str())) {
-            fprintf(stderr, "[sdk-component] startup refused; verified SDK component missing or invalid\n");
-            return nullptr;
+            /* The DSP component only backs the host-side decoder path. A
+             * missing or unverified SDK must not stop the guest from
+             * starting, so the failure is recorded and the boot continues. */
+            fprintf(stderr, "[sdk-component] unavailable; continuing without the host DSP component\n");
         }
     }
 
@@ -325,7 +327,7 @@ static jlong StartGuest(JNIEnv* env,
 // Preserve the existing ABI for all frozen APKs. Managed installs supply a
 // stable app-owned save path independently of the replaceable data version.
 extern "C" JNIEXPORT void JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean docked) {
+Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean docked) {
     // Preserve an external override; otherwise refresh the profile default on
     // every activity start, including a switch back to the handheld preset.
     static bool observed_target = false;
@@ -343,14 +345,14 @@ Java_org_ffrs_diagnostic_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, j
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_nativeStartGuest(JNIEnv* env, jclass,
+Java_org_snk_the1st_GameWindowNative_nativeStartGuest(JNIEnv* env, jclass,
         jstring image, jstring romfs, jstring log_path, jlong quota,
         jlong stack, jlong resources, jobjectArray guest_args) {
     return StartGuest(env, image, romfs, log_path, quota, stack, resources, guest_args, nullptr);
 }
 
 extern "C" JNIEXPORT jlong JNICALL
-Java_org_ffrs_diagnostic_GameWindowNative_nativeStartInstalledGuest(JNIEnv* env, jclass,
+Java_org_snk_the1st_GameWindowNative_nativeStartInstalledGuest(JNIEnv* env, jclass,
         jstring image, jstring romfs, jstring log_path, jlong quota,
         jlong stack, jlong resources, jobjectArray guest_args, jstring save_root) {
     if (save_root == nullptr || ToStdString(env, save_root).empty()) return -1;
