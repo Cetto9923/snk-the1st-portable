@@ -94,6 +94,9 @@ void* GuestThreadMain(void* opaque) {
     setenv("DM_GFX_NOLOAD", "1", 1);
     setenv("DM_GFX_PIPE_MEMO", "1", 1);
     setenv("DM_GFX_CLEAR_OVERWRITE", "1", 1);
+    setenv("DM_GFX_WARP32", "1", 1);
+    setenv("DM_GFX_QUAD_DERIVATIVES", "1", 1);
+    setenv("DM_GFX_NATIVE_BC", "1", 1);
     RedirectOutput(request->log_path);
     {
         std::string path = request->log_path;
@@ -105,8 +108,9 @@ void* GuestThreadMain(void* opaque) {
         // RG477M's fixed handheld profile is the 720p baseline; this is not
         // the Android CPU/GPU game-mode switch and does not change game time.
         const std::string operation_marker = path + "/oe-operation-mode";
-        int operation_mode = 0;
-        const char *operation_source = "default-handheld";
+        const char *profile_mode = getenv("FFRS_PROFILE_OPERATION_MODE");
+        int operation_mode = profile_mode && profile_mode[0] == '1' ? 1 : 0;
+        const char *operation_source = operation_mode ? "profile-docked" : "default-handheld";
         FILE *operation_file = fopen(operation_marker.c_str(), "rb");
         if (operation_file) {
             int value = fgetc(operation_file);
@@ -320,6 +324,24 @@ static jlong StartGuest(JNIEnv* env,
 
 // Preserve the existing ABI for all frozen APKs. Managed installs supply a
 // stable app-owned save path independently of the replaceable data version.
+extern "C" JNIEXPORT void JNICALL
+Java_org_ffrs_diagnostic_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean docked) {
+    // Preserve an external override; otherwise refresh the profile default on
+    // every activity start, including a switch back to the handheld preset.
+    static bool observed_target = false;
+    static bool external_target = false;
+    if (!observed_target) {
+        external_target = getenv("FFRS_TARGET_FPS") != nullptr;
+        observed_target = true;
+    }
+    if (!external_target) {
+        if (docked && fps == 60) setenv("FFRS_TARGET_FPS", "60", 1);
+        else unsetenv("FFRS_TARGET_FPS");
+    }
+    setenv("FFRS_PROFILE_OPERATION_MODE", docked ? "1" : "0", 1);
+    setenv("FFRS_PROFILE_TABLET", docked ? "1" : "0", 1);
+}
+
 extern "C" JNIEXPORT jlong JNICALL
 Java_org_ffrs_diagnostic_GameWindowNative_nativeStartGuest(JNIEnv* env, jclass,
         jstring image, jstring romfs, jstring log_path, jlong quota,
