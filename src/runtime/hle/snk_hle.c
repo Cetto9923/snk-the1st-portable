@@ -3,6 +3,8 @@
 
 #include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
+#include <inttypes.h>
 #include <pthread.h>
 #include <sched.h>
 #include <stdbool.h>
@@ -15,6 +17,14 @@
 #include <time.h>
 #include <unistd.h>
 #include <wchar.h>
+
+struct snk_allocator;
+
+/* Defined with the StandardAllocator below; the memory-block path above it
+ * also reports into the trace. */
+static bool heap_trace_enabled(void);
+static void heap_trace_alloc(void *object, void *block, size_t size, bool region,
+                             const void *caller, const struct snk_allocator *entry);
 
 /* ====================================================================== */
 /* nn::os process heap                                                     */
@@ -63,6 +73,9 @@ static int64_t snk_allocate_memory_block(void **out, uint64_t size) {
     *out = block;
     fprintf(stderr, "[snk-hle] nn::os::AllocateMemoryBlock: size=%llu block=%p\n",
             (unsigned long long)size, block);
+    if (heap_trace_enabled())
+        fprintf(stderr, "[hle-heap-trace] memory-block size=%llu block=%p caller=%p\n",
+                (unsigned long long)size, block, __builtin_return_address(0));
     return 0;
 }
 
@@ -70,17 +83,154 @@ static int64_t snk_allocate_memory_block(void **out, uint64_t size) {
 /* nn::mem::StandardAllocator                                               */
 /* ====================================================================== */
 
+struct snk_allocator_free_block {
+    uint64_t offset;
+    uint64_t size;
+    struct snk_allocator_free_block *next;
+};
+
 struct snk_allocator {
     void *object;
     void *base;
     uint64_t capacity;
     uint64_t used;
+    uint64_t bump;
+    struct snk_allocator_free_block *free_list;
     bool initialized;
     struct snk_allocator *next;
 };
 
 static pthread_mutex_t s_alloc_lock = PTHREAD_MUTEX_INITIALIZER;
 static struct snk_allocator *s_allocators;
+
+/* Heap accounting trace (marker hle-heap-trace, default off). The Android
+ * boot thread reads the marker once and exports SNK_HLE_HEAP_TRACE; the flag
+ * below caches it, so the off path is a load and a branch per allocator call.
+ * Only blocks inside the guest arena the title reserves are printed. */
+static int s_heap_trace = -1;
+static uint64_t s_trace_alloc_total;
+static uint64_t s_trace_alloc_arena;
+static uint64_t s_trace_alloc_min;
+static uint64_t s_trace_alloc_max;
+static uint64_t s_trace_free_hit;
+static uint64_t s_trace_free_hit_arena;
+static uint64_t s_trace_free_miss;
+static uint64_t s_trace_free_miss_arena;
+
+static bool heap_trace_enabled(void) {
+    int flag = s_heap_trace;
+    if (flag < 0) {
+        const char *value = getenv("SNK_HLE_HEAP_TRACE");
+        flag = (value && value[0] == '1') ? 1 : 0;
+        s_heap_trace = flag;
+    }
+    return flag != 0;
+}
+
+static struct snk_allocator *allocator_entry(void *object, bool create);
+
+/* The title reserves this range through nn::os::AllocateAddressRegion
+ * ([address-region] reserved ...), not through this allocator. The base is
+ * randomized per boot, so guest_process reports it once the reservation is
+ * granted. */
+static uintptr_t s_trace_arena_base;
+static size_t s_trace_arena_bytes;
+
+void snk_hle_heap_trace_arena(uintptr_t base, size_t bytes) {
+    if (!heap_trace_enabled()) return;
+    s_trace_arena_base = base;
+    s_trace_arena_bytes = bytes;
+    fprintf(stderr, "[hle-heap-trace] arena observed base=0x%" PRIxPTR " bytes=%zu\n", base, bytes);
+}
+
+static bool heap_trace_arena(const void *block) {
+    uintptr_t value = (uintptr_t)block;
+    if (!s_trace_arena_base || !s_trace_arena_bytes) return false;
+    return value >= s_trace_arena_base && value - s_trace_arena_base < s_trace_arena_bytes;
+}
+
+static void heap_trace_alloc(void *object, void *block, size_t size, bool region,
+                             const void *caller, const struct snk_allocator *entry) {
+    if (!heap_trace_enabled()) return;
+    uint64_t address = (uint64_t)(uintptr_t)block;
+    s_trace_alloc_total++;
+    if (!s_trace_alloc_min || address < s_trace_alloc_min) s_trace_alloc_min = address;
+    if (address > s_trace_alloc_max) s_trace_alloc_max = address;
+    if (!heap_trace_arena(block)) return;
+    s_trace_alloc_arena++;
+    fprintf(stderr, "[hle-heap-trace] allocate block=%p size=%zu object=%p region=%d base=%p bump=%llu caller=%p\n",
+            block, size, object, region ? 1 : 0, entry ? entry->base : NULL,
+            (unsigned long long)(entry ? entry->bump : 0), caller);
+}
+
+static void heap_trace_free(void *object, void *block, size_t size, bool hit, bool guest) {
+    if (!heap_trace_enabled()) return;
+    bool arena = heap_trace_arena(block);
+    if (hit) {
+        s_trace_free_hit++;
+        if (arena) s_trace_free_hit_arena++;
+    } else {
+        s_trace_free_miss++;
+        if (arena) s_trace_free_miss_arena++;
+    }
+    if (!arena) return;
+    struct snk_allocator *entry = allocator_entry(object, false);
+    fprintf(stderr, "[hle-heap-trace] free %s block=%p size=%zu object=%p known=%d base=%p guest=%d\n",
+            hit ? "hit" : "miss", block, size, object, entry ? 1 : 0,
+            entry ? entry->base : NULL, guest ? 1 : 0);
+    uint64_t total = s_trace_free_hit + s_trace_free_miss;
+    if (total % 512 == 0) {
+        double rate = total ? (double)s_trace_free_miss * 100.0 / (double)total : 0.0;
+        fprintf(stderr, "[hle-heap-trace] summary allocate=%llu arena_alloc=%llu alloc_min=0x%llx alloc_max=0x%llx free_hit=%llu free_hit_arena=%llu free_miss=%llu free_miss_arena=%llu miss_rate=%.2f%%\n",
+                (unsigned long long)s_trace_alloc_total, (unsigned long long)s_trace_alloc_arena,
+                (unsigned long long)s_trace_alloc_min, (unsigned long long)s_trace_alloc_max,
+                (unsigned long long)s_trace_free_hit, (unsigned long long)s_trace_free_hit_arena,
+                (unsigned long long)s_trace_free_miss, (unsigned long long)s_trace_free_miss_arena, rate);
+    }
+}
+
+/* Fault-time read of guest memory. Runs inside the signal handler, so it never
+ * touches the heap and never assumes the mapping is readable. */
+static size_t dump_read(uintptr_t addr, void *dst, size_t n) {
+    int fd = open("/proc/self/mem", O_RDONLY);
+    if (fd < 0) return 0;
+    ssize_t r = pread(fd, dst, n, (off_t)addr);
+    close(fd);
+    return r > 0 ? (size_t)r : 0;
+}
+
+/* Read-only snapshot used by the fault handler: the allocator entries the HLE
+ * keeps, the bytes the guest wrote into the allocator object it passed us, and
+ * the first bytes of the reserved address region. Taken without s_alloc_lock
+ * because the faulting thread may be inside a call that holds it. */
+void snk_hle_dump_allocators(void) {
+    if (!heap_trace_enabled()) return;
+    for (struct snk_allocator *entry = s_allocators; entry; entry = entry->next) {
+        fprintf(stderr, "[hle-heap-trace] allocator-state object=%p base=%p capacity=%llu used=%llu bump=%llu initialized=%d\n",
+                entry->object, entry->base, (unsigned long long)entry->capacity,
+                (unsigned long long)entry->used, (unsigned long long)entry->bump,
+                entry->initialized ? 1 : 0);
+        unsigned char bytes[0x40];
+        if (entry->object && dump_read((uintptr_t)entry->object, bytes, sizeof(bytes)) == sizeof(bytes)) {
+            fprintf(stderr, "[hle-heap-trace] allocator-bytes object=%p:", entry->object);
+            for (size_t i = 0; i < sizeof(bytes); i++) fprintf(stderr, "%02x", bytes[i]);
+            fprintf(stderr, "\n");
+        }
+    }
+    if (s_trace_arena_base) {
+        unsigned char head[0x40];
+        uintptr_t base = s_trace_arena_base;
+        if (dump_read(base, head, sizeof(head)) == sizeof(head)) {
+            fprintf(stderr, "[hle-heap-trace] arena-bytes base=0x%" PRIxPTR ":", base);
+            for (size_t i = 0; i < sizeof(head); i++) fprintf(stderr, "%02x", head[i]);
+            fprintf(stderr, "\n");
+        }
+    }
+    uint8_t flag = 0;
+    if (s_allocators && s_allocators->object &&
+        dump_read((uintptr_t)s_allocators->object, &flag, 1) == 1)
+        fprintf(stderr, "[hle-heap-trace] allocator-object-flag=%u\n", flag);
+}
 
 static struct snk_allocator *allocator_entry(void *object, bool create) {
     pthread_mutex_lock(&s_alloc_lock);
@@ -155,10 +305,19 @@ static uint64_t snk_allocator_initialize(void *object, void *base, uint64_t size
     entry->base = base;
     entry->capacity = usable;
     entry->used = 0;
+    entry->bump = 0;
+    while (entry->free_list) {
+        struct snk_allocator_free_block *next = entry->free_list->next;
+        free(entry->free_list);
+        entry->free_list = next;
+    }
     entry->initialized = true;
     if (object) *(uint8_t *)object = 1;
     fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Initialize: object=%p base=%p size=%llu flag=%d\n",
             object, base, (unsigned long long)usable, flag ? 1 : 0);
+    if (heap_trace_enabled())
+        fprintf(stderr, "[hle-heap-trace] allocator init object=%p base=%p capacity=%llu bump_start=0\n",
+                object, base, (unsigned long long)usable);
     return 0;
 }
 
@@ -167,22 +326,105 @@ static uint64_t snk_allocator_finalize(void *object) {
     if (entry) {
         entry->initialized = false;
         entry->used = 0;
+        entry->bump = 0;
+        while (entry->free_list) {
+            struct snk_allocator_free_block *next = entry->free_list->next;
+            free(entry->free_list);
+            entry->free_list = next;
+        }
     }
     if (object) *(uint8_t *)object = 0;
     fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Finalize: object=%p\n", object);
     return 0;
 }
 
+#define ALLOC_TRACK_CAP 131072
+#define ALLOC_TOMBSTONE ((uintptr_t)1)
+
+struct alloc_tracker {
+    uintptr_t ptr;
+    size_t size;
+    uint8_t guest;
+};
+
+static struct alloc_tracker s_alloc_track[ALLOC_TRACK_CAP];
+static pthread_mutex_t s_track_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void track_alloc(void *p, size_t sz, bool guest) {
+    if (!p) return;
+    uintptr_t key = (uintptr_t)p & 0x0000ffffffffffffULL;
+    pthread_mutex_lock(&s_track_lock);
+    uint32_t mask = ALLOC_TRACK_CAP - 1;
+    uint32_t idx = (uint32_t)((key >> 4) * 0x9e3779b9u) & mask;
+    while (s_alloc_track[idx].ptr != 0 && s_alloc_track[idx].ptr != ALLOC_TOMBSTONE && s_alloc_track[idx].ptr != key) {
+        idx = (idx + 1) & mask;
+    }
+    s_alloc_track[idx].ptr = key;
+    s_alloc_track[idx].size = sz;
+    s_alloc_track[idx].guest = guest ? 1u : 0u;
+    pthread_mutex_unlock(&s_track_lock);
+}
+
+static bool track_free(void *p, size_t *out_sz, bool *out_guest) {
+    if (!p) return false;
+    uintptr_t key = (uintptr_t)p & 0x0000ffffffffffffULL;
+    pthread_mutex_lock(&s_track_lock);
+    uint32_t mask = ALLOC_TRACK_CAP - 1;
+    uint32_t idx = (uint32_t)((key >> 4) * 0x9e3779b9u) & mask;
+    uint32_t start = idx;
+    while (s_alloc_track[idx].ptr != 0) {
+        if (s_alloc_track[idx].ptr == key) {
+            if (out_sz) *out_sz = s_alloc_track[idx].size;
+            if (out_guest) *out_guest = s_alloc_track[idx].guest != 0;
+            s_alloc_track[idx].ptr = ALLOC_TOMBSTONE;
+            s_alloc_track[idx].size = 0;
+            s_alloc_track[idx].guest = 0;
+            pthread_mutex_unlock(&s_track_lock);
+            return true;
+        }
+        idx = (idx + 1) & mask;
+        if (idx == start) break;
+    }
+    pthread_mutex_unlock(&s_track_lock);
+    return false;
+}
+
 static size_t snk_usable_size(void *block) {
-#if defined(__ANDROID__) || defined(__linux__)
-    return malloc_usable_size(block);
-#else
     (void)block;
     return 0;
-#endif
+}
+
+/* A region-initialized StandardAllocator must return addresses inside the
+ * guest-provided [base, base+capacity) range: the game keeps 32-bit offsets
+ * and intrusive links into that heap, so host pointers corrupt it.  These
+ * helpers are called with s_alloc_lock held. */
+static bool allocator_owns_locked(const struct snk_allocator *entry, const void *block) {
+    if (!entry || !entry->base || !entry->capacity) return false;
+    uintptr_t base = (uintptr_t)entry->base;
+    uintptr_t value = (uintptr_t)block;
+    return value >= base && value - base < entry->capacity;
+}
+
+static struct snk_allocator *allocator_owner_locked(const void *block) {
+    for (struct snk_allocator *entry = s_allocators; entry; entry = entry->next) {
+        if (allocator_owns_locked(entry, block)) return entry;
+    }
+    return NULL;
+}
+
+static void allocator_free_guest_locked(struct snk_allocator *entry, const void *block, size_t size) {
+    if (!entry || !allocator_owns_locked(entry, block)) return;
+    struct snk_allocator_free_block *node = malloc(sizeof(*node));
+    if (!node) return;
+    node->offset = (uint64_t)((uintptr_t)block - (uintptr_t)entry->base);
+    node->size = size;
+    node->next = entry->free_list;
+    entry->free_list = node;
+    if (entry->used >= size) entry->used -= size; else entry->used = 0;
 }
 
 static void *snk_allocator_allocate(void *object, uint64_t size, uint64_t alignment) {
+    const void *caller = __builtin_return_address(0);
     struct snk_allocator *entry = allocator_entry(object, false);
     if (!entry) {
         fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Allocate: unknown allocator object=%p\n", object);
@@ -194,7 +436,54 @@ static void *snk_allocator_allocate(void *object, uint64_t size, uint64_t alignm
     if (request == 0) request = 1;
     size_t rounded = (request + (size_t)alignment - 1) / (size_t)alignment * (size_t)alignment;
     pthread_mutex_lock(&s_alloc_lock);
-    uint64_t capacity = entry->capacity ? entry->capacity : snk_heap_budget();
+    if (entry->base && entry->capacity) {
+        /* First fit over blocks returned by Free, then bump the unused tail. */
+        uintptr_t base = (uintptr_t)entry->base;
+        struct snk_allocator_free_block **slot = &entry->free_list;
+        while (*slot) {
+            struct snk_allocator_free_block *candidate = *slot;
+            uintptr_t absolute = base + candidate->offset;
+            uintptr_t aligned_absolute = (absolute + alignment - 1) & ~(uintptr_t)(alignment - 1);
+            uint64_t aligned = (uint64_t)(aligned_absolute - base);
+            uint64_t padding = aligned - candidate->offset;
+            if (aligned_absolute >= absolute && candidate->size >= padding + rounded) {
+                void *block = (uint8_t *)entry->base + aligned;
+                uint64_t taken = padding + rounded;
+                if (candidate->size == taken) {
+                    *slot = candidate->next;
+                    free(candidate);
+                } else {
+                    candidate->offset = aligned + rounded;
+                    candidate->size -= taken;
+                }
+                entry->used += rounded;
+                pthread_mutex_unlock(&s_alloc_lock);
+                track_alloc(block, rounded, true);
+                heap_trace_alloc(object, block, rounded, true, caller, entry);
+                return block;
+            }
+            slot = &candidate->next;
+        }
+        uintptr_t absolute = (uintptr_t)entry->base + entry->bump;
+        uintptr_t aligned_absolute = (absolute + alignment - 1) & ~(uintptr_t)(alignment - 1);
+        uint64_t aligned = (uint64_t)(aligned_absolute - (uintptr_t)entry->base);
+        if (aligned_absolute >= absolute && aligned <= entry->capacity && rounded <= entry->capacity - aligned) {
+            void *block = (uint8_t *)entry->base + aligned;
+            entry->bump = aligned + rounded;
+            entry->used += rounded;
+            pthread_mutex_unlock(&s_alloc_lock);
+            track_alloc(block, rounded, true);
+            heap_trace_alloc(object, block, rounded, true, caller, entry);
+            return block;
+        }
+        fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Allocate: guest heap exhausted used=%llu request=%llu capacity=%llu\n",
+                (unsigned long long)entry->used, (unsigned long long)rounded,
+                (unsigned long long)entry->capacity);
+        pthread_mutex_unlock(&s_alloc_lock);
+        return NULL;
+    }
+    /* Allocator objects created without a region keep the host fallback. */
+    uint64_t capacity = snk_heap_budget();
     if (capacity && entry->used + rounded > capacity) {
         fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Allocate: budget exceeded used=%llu request=%llu capacity=%llu\n",
                 (unsigned long long)entry->used, (unsigned long long)rounded,
@@ -211,6 +500,8 @@ static void *snk_allocator_allocate(void *object, uint64_t size, uint64_t alignm
     }
     entry->used += rounded;
     pthread_mutex_unlock(&s_alloc_lock);
+    track_alloc(block, rounded, false);
+    heap_trace_alloc(object, block, rounded, false, caller, entry);
     return block;
 }
 
@@ -220,27 +511,80 @@ static void *snk_allocator_allocate_plain(void *object, uint64_t size) {
 
 static uint64_t snk_allocator_free(void *object, void *block) {
     if (!block) return 0;
-    size_t size = snk_usable_size(block);
-    free(block);
-    struct snk_allocator *entry = allocator_entry(object, false);
-    if (entry) {
-        pthread_mutex_lock(&s_alloc_lock);
-        if (entry->used >= size) entry->used -= size; else entry->used = 0;
-        pthread_mutex_unlock(&s_alloc_lock);
+    size_t sz = 0;
+    bool guest = false;
+    if (track_free(block, &sz, &guest)) {
+        heap_trace_free(object, block, sz, true, guest);
+        struct snk_allocator *entry = allocator_entry(object, false);
+        if (guest) {
+            pthread_mutex_lock(&s_alloc_lock);
+            if (!allocator_owns_locked(entry, block)) entry = allocator_owner_locked(block);
+            allocator_free_guest_locked(entry, block, sz);
+            pthread_mutex_unlock(&s_alloc_lock);
+        } else {
+            free(block);
+            if (entry) {
+                pthread_mutex_lock(&s_alloc_lock);
+                if (entry->used >= sz) entry->used -= sz; else entry->used = 0;
+                pthread_mutex_unlock(&s_alloc_lock);
+            }
+        }
+    } else {
+        heap_trace_free(object, block, 0, false, false);
+        /* Guest-heap pointers allocated through another path are not host
+         * allocations; never pass them to free. The title frees ~1 100 such
+         * blocks per frame, so the per-call line is printed a few times and
+         * the running count is reported every 20 000 instead: the rate is the
+         * information, the identity of each block is not. */
+        static unsigned long long seen, reported;
+        unsigned long long n = __atomic_add_fetch(&seen, 1, __ATOMIC_RELAXED);
+        if (n <= 8)
+            fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Free: skipping untracked block=%p\n", block);
+        else if (n - reported >= 20000ull) {
+            reported = n;
+            fprintf(stderr, "[snk-hle] nn::mem::StandardAllocator::Free: %llu untracked blocks skipped so far (no host free performed)\n", n);
+        }
     }
     return 0;
 }
 
 static void *snk_allocator_reallocate(void *object, void *block, uint64_t size) {
-    size_t before = block ? snk_usable_size(block) : 0;
-    void *next = realloc(block, (size_t)size);
-    if (!next) return NULL;
-    size_t after = snk_usable_size(next);
-    struct snk_allocator *entry = allocator_entry(object, false);
-    if (entry) {
-        pthread_mutex_lock(&s_alloc_lock);
-        if (entry->used >= before) entry->used = entry->used - before + after;
-        pthread_mutex_unlock(&s_alloc_lock);
+    if (!block) return snk_allocator_allocate(object, size, 16);
+    size_t old_sz = 0;
+    bool guest = false;
+    if (track_free(block, &old_sz, &guest)) {
+        if (guest) {
+            void *next = snk_allocator_allocate(object, size, 16);
+            if (!next) {
+                track_alloc(block, old_sz, true);
+                return NULL;
+            }
+            size_t copy = size < old_sz ? (size_t)size : old_sz;
+            if (copy) memcpy(next, block, copy);
+            struct snk_allocator *entry = allocator_entry(object, false);
+            pthread_mutex_lock(&s_alloc_lock);
+            if (!allocator_owns_locked(entry, block)) entry = allocator_owner_locked(block);
+            allocator_free_guest_locked(entry, block, old_sz);
+            pthread_mutex_unlock(&s_alloc_lock);
+            return next;
+        }
+        void *next = realloc(block, (size_t)size);
+        if (!next) {
+            track_alloc(block, old_sz, false);
+            return NULL;
+        }
+        track_alloc(next, (size_t)size, false);
+        struct snk_allocator *entry = allocator_entry(object, false);
+        if (entry) {
+            pthread_mutex_lock(&s_alloc_lock);
+            if (entry->used >= old_sz) entry->used = entry->used - old_sz + size;
+            pthread_mutex_unlock(&s_alloc_lock);
+        }
+        return next;
+    }
+    void *next = snk_allocator_allocate(object, size, 16);
+    if (next && block && old_sz) {
+        memcpy(next, block, size < old_sz ? size : old_sz);
     }
     return next;
 }
@@ -725,6 +1069,7 @@ static const struct snk_entry s_entries[] = {
  * no NVN module, so it hands over the block with the flag cleared, which is
  * the state a retail title sees outside of a capture session. */
 static uint32_t s_nvn_private_object[64];
+static const uint32_t s_snk_npad_id_handheld = 0x20;
 
 uint64_t snk_hle_lookup(const char *name, unsigned *arguments, unsigned *returns) {
     if (!name) return 0;
@@ -732,6 +1077,11 @@ uint64_t snk_hle_lookup(const char *name, unsigned *arguments, unsigned *returns
         if (arguments) *arguments = 0;
         if (returns) *returns = 0;
         return (uint64_t)(uintptr_t)s_nvn_private_object;
+    }
+    if (!strcmp(name, "_ZN2nn3hid6NpadId8HandheldE")) {
+        if (arguments) *arguments = 0;
+        if (returns) *returns = 0;
+        return (uint64_t)(uintptr_t)&s_snk_npad_id_handheld;
     }
     for (size_t i = 0; i < sizeof(s_entries) / sizeof(*s_entries); i++) {
         if (strcmp(name, s_entries[i].name)) continue;

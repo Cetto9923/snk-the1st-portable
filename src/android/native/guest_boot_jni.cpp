@@ -19,6 +19,18 @@
 #include <sys/syscall.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#include <malloc.h>
+#include <sys/prctl.h>
+
+#ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
+#define M_BIONIC_SET_HEAP_TAGGING_LEVEL -204
+#endif
+#ifndef M_HEAP_TAGGING_LEVEL_NONE
+#define M_HEAP_TAGGING_LEVEL_NONE 0
+#endif
+#ifndef PR_SET_TAGGED_ADDR_CTRL
+#define PR_SET_TAGGED_ADDR_CTRL 55
+#endif
 
 #include <string>
 #include <vector>
@@ -74,6 +86,10 @@ void RedirectOutput(const std::string& path) {
 }
 
 void* GuestThreadMain(void* opaque) {
+    mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
+#if defined(__aarch64__)
+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
+#endif
     GuestBootRequest* request = static_cast<GuestBootRequest*>(opaque);
     int app_pid = getpid();
     int guest_tid = CurrentThreadId();
@@ -89,6 +105,7 @@ void* GuestThreadMain(void* opaque) {
     if (!request->romfs.empty()) {
         setenv("NN_FS_ROM_PATH", request->romfs.c_str(), 1);
     }
+    setenv("SNK_DUMP_SHADERS", "1", 1);
     setenv("DM_GFX_COMPLETION_WAIT", "1", 1);
     setenv("DM_GFX_WB_SKIP", "1", 1);
     setenv("DM_GFX_NOLOAD", "1", 1);
@@ -123,6 +140,15 @@ void* GuestThreadMain(void* opaque) {
         setenv("FFRS_OPERATION_MODE", operation_mode ? "1" : "0", 1);
         fprintf(stderr, "[port] operation_mode=%d source=%s marker=%s\n",
                 operation_mode, operation_source, operation_marker.c_str());
+        /* Heap accounting trace: same marker style, off unless the file holds
+         * '1'. The runtime reads SNK_HLE_HEAP_TRACE once and then stays silent. */
+        const std::string heap_trace_marker = path + "/hle-heap-trace";
+        FILE *heap_trace_file = fopen(heap_trace_marker.c_str(), "rb");
+        const bool heap_trace = heap_trace_file && fgetc(heap_trace_file) == '1';
+        if (heap_trace_file) fclose(heap_trace_file);
+        if (heap_trace) setenv("SNK_HLE_HEAP_TRACE", "1", 1);
+        fprintf(stderr, "[port] heap_trace=%d marker=%s\n",
+                heap_trace ? 1 : 0, heap_trace_marker.c_str());
         const std::string marker = path + "/gfx-codex-movie-dump";
         FILE *enabled = fopen(marker.c_str(), "rb");
         const bool dump_movie = enabled && fgetc(enabled) == '1';
@@ -162,6 +188,12 @@ void* GuestThreadMain(void* opaque) {
              * missing or unverified SDK must not stop the guest from
              * starting, so the failure is recorded and the boot continues. */
             fprintf(stderr, "[sdk-component] unavailable; continuing without the host DSP component\n");
+            setenv("SNK_NATIVE_AUDIO", "0", 1);
+        } else {
+            /* Native nn::audio only with a verified SDK image: otherwise the
+             * media table would leave those imports unresolved and the guest
+             * would trap on the first audio call. */
+            setenv("SNK_NATIVE_AUDIO", "1", 1);
         }
     }
 
@@ -201,6 +233,10 @@ static jlong StartGuest(JNIEnv* env,
                                                             jstring log_path, jlong quota,
                                                             jlong stack, jlong resources,
                                                             jobjectArray guest_args, jstring save_root) {
+    mallopt(M_BIONIC_SET_HEAP_TAGGING_LEVEL, M_HEAP_TAGGING_LEVEL_NONE);
+#if defined(__aarch64__)
+    prctl(PR_SET_TAGGED_ADDR_CTRL, 0, 0, 0, 0);
+#endif
     pthread_mutex_lock(&g_boot_lock);
     if (g_boot_started) {
         pthread_mutex_unlock(&g_boot_lock);

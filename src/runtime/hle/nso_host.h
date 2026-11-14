@@ -162,6 +162,7 @@ int32_t nso_host_fs_query_mount_rom_cache_size(size_t *out_size);
 int32_t nso_host_fs_mount_rom(const char *name, void *buffer, size_t size);
 int nso_host_fs_is_rom_mounted(const char *name);
 const char *nso_host_fs_get_rom_mount_path(const char *name);
+int nso_host_fs_resolve_path(const char *nn_path, char *out_host_path, size_t out_size);
 int32_t nso_host_fs_unmount(const char *name);
 struct nso_local_uid;
 int32_t nso_host_fs_set_save_root(const char *path);
@@ -442,6 +443,7 @@ void nso_host_os_wait_event(void *event);
 bool nso_host_os_try_wait_event(void *event);
 bool nso_host_os_timed_wait_event(void *event, int64_t timeout_ns);
 bool nso_host_os_is_event_signaled(void *event);
+bool nso_host_os_consume_if_auto(void *event);
 
 int nso_host_posix_memalign(void **memptr, size_t alignment, size_t size);
 void *nso_host_memalign(size_t alignment, size_t size);

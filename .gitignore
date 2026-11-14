@@ -24,5 +24,8 @@ __pycache__/
 *.pak
 *.bfttf
 *.sav
+*.zip
+*.zip.sha256
+*.idsig
 .env
 .env.*

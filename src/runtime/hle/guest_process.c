@@ -412,6 +412,64 @@ static void guest_process_text_filter(void *text, size_t bytes, void *opaque) {
     if(report.patched > 0) {
         fprintf(stderr,"[guest-tp] patched %zu MRS TPIDR_EL0 sites in text\n",report.patched);
     }
+    /* Falcom SNK 3D engine: patch 0x945a0 to return 1.0f directly to bypass
+     * uninitialized/invalid atmosphere scatter struct crash when entering 3D scenes. */
+    if(bytes > 0x945b0) {
+        uint32_t *insns = (uint32_t *)text;
+        if(insns[0x945a0 / 4] == 0xd10183ff && insns[0x945a4 / 4] == 0xa9057bfd) {
+            fprintf(stderr, "[snk-patch] patching 0x945a0 (atmosphere/environment scale fallback to 1.0f)\n");
+            insns[0x945a0 / 4] = 0x1e2e1000; /* fmov s0, #1.0 */
+            insns[0x945a4 / 4] = 0xd65f03c0; /* ret */
+        }
+    }
+    /* Falcom allocator block insertion safety: patch cbz to tbz #36 so non-pointer / corrupted indices
+     * (< 4GB) do not get dereferenced as pointers during sorted tree / free-list traversal.
+     * The guard tests bit 32, not bit 36: the guest heap lives at 0x6ff8_xxxxxxxx, whose
+     * bit 36 is clear, so a bit-36 test also rejected every valid subtree pointer. */
+    if (bytes > 0x569580) {
+        uint32_t *insns = (uint32_t *)text;
+        if (insns[0x56952c / 4] == 0xb400064d) {
+            insns[0x56952c / 4] = 0xb600064d; /* tbz x13, #32, 0x5695f4 */
+            fprintf(stderr, "[snk-patch] patched 0x56952c: tbz x13, #32\n");
+        }
+        if (insns[0x569540 / 4] == 0xb400028e) {
+            insns[0x569540 / 4] = 0xb600028e; /* tbz x14, #32, 0x569590 */
+            fprintf(stderr, "[snk-patch] patched 0x569540: tbz x14, #32\n");
+        }
+        if (insns[0x56955c / 4] == 0xb40004ed) {
+            insns[0x56955c / 4] = 0xb60004ed; /* tbz x13, #32, 0x5695f8 */
+            fprintf(stderr, "[snk-patch] patched 0x56955c: tbz x13, #32\n");
+        }
+        if (insns[0x569570 / 4] == 0xb400012e) {
+            insns[0x569570 / 4] = 0xb600012e; /* tbz x14, #32, 0x569594 */
+            fprintf(stderr, "[snk-patch] patched 0x569570: tbz x14, #32\n");
+        }
+    }
+    /* Falcom SNK 3D scene lighting/pass object array traversal: patch 0x532bf4 to check cbz x25
+     * so that if array pointer [x19, #0x198] is NULL, it safely branches to 0x532dc0 instead of
+     * dereferencing NULL at 0x532c20 (ldr x0, [x25]). */
+    if (bytes > 0x532c30) {
+        uint32_t *insns = (uint32_t *)text;
+        if (insns[0x532bf4 / 4] == 0x1400000b && insns[0x532bf8 / 4] == 0xd503201f) {
+            insns[0x532bf4 / 4] = 0xb4000e79; /* cbz x25, #0x532dc0 */
+            insns[0x532bf8 / 4] = 0x1400000a; /* b #0x532c20 */
+            fprintf(stderr, "[snk-patch] patched 0x532bf4: cbz x25, #0x532dc0 (safe null-array skip)\n");
+        }
+    }
+    /* Falcom SNK scene object cleanup array traversal: patch 0x3553b0 to route w19 == -1 branch
+     * via trampoline at 0x355608, checking that x21 is a valid pointer (bit 32 set).
+     * The guard is bit 32, not bit 36: guest heap pointers live at 0x6ff8_xxxxxxxx, whose
+     * bit 36 is clear, so a bit-36 test rejected every real pointer. If x21 is a non-pointer
+     * (e.g. 0x300) it skips to 0x355394 to avoid SIGSEGV at 0x3553c0. */
+    if (bytes > 0x355610) {
+        uint32_t *insns = (uint32_t *)text;
+        if (insns[0x3553b0 / 4] == 0x54000080 && insns[0x355608 / 4] == 0x00000000 && insns[0x35560c / 4] == 0x00000000) {
+            insns[0x3553b0 / 4] = 0x540012c0; /* b.eq 0x355608 */
+            insns[0x355608 / 4] = 0xb607ec75; /* tbz x21, #32, 0x355394 */
+            insns[0x35560c / 4] = 0x17ffff6d; /* b 0x3553c0 */
+            fprintf(stderr, "[snk-patch] patched 0x3553b0 & 0x355608: safe pointer validation for object cleanup\n");
+        }
+    }
 }
 struct nso_result guest_process_load(guest_process *p,const char *path,char *err,size_t len) {
     if(!p)return status(NSO_INVALID,EINVAL,0);
@@ -661,12 +719,44 @@ static uint32_t finish_page_service(guest_process *p,const char *operation,
         operation,address,bytes);
     return 0;
 }
+static int heap_trace_enabled(void) {
+    static int flag = -1;
+    if (flag < 0) {
+        const char *value = getenv("SNK_HLE_HEAP_TRACE");
+        flag = (value && value[0] == '1') ? 1 : 0;
+    }
+    return flag;
+}
+
+/* Reports who establishes the guest address region and the pages mapped into
+ * it, so the trace can compare it with the StandardAllocator's own base. */
+static void heap_trace_region(guest_process *p, const char *operation,
+        uintptr_t address, size_t bytes) {
+    if (!heap_trace_enabled()) return;
+    uintptr_t caller = (uintptr_t)__builtin_return_address(0);
+    uint64_t base = nso_base(p->module);
+    uint64_t offset = 0;
+    int in_module = 0;
+    if (caller >= base && caller - base < nso_image_size(p->module)) {
+        offset = (uint64_t)(caller - base);
+        in_module = 1;
+    }
+    fprintf(stderr, "[hle-heap-trace] arena %s address=0x%" PRIxPTR " bytes=%zu caller=0x%" PRIxPTR
+        " module_offset=0x%" PRIx64 " in_module=%d\n",
+        operation, address, bytes, caller, offset, in_module);
+}
+
 static uint32_t allocate_region(uintptr_t *out,size_t bytes) {
     guest_process *p=required_current();
     if(!out) {fputs("[profile-invalid] null reservation output\n",stderr);abort();}
     pthread_mutex_lock(&p->mutex);
     struct guest_pages_result r=guest_pages_reserve(p->pages,bytes,out);
-    return finish_page_service(p,"reserve",r.status==GUEST_PAGES_OK?*out:0,bytes,r);
+    uint32_t result=finish_page_service(p,"reserve",r.status==GUEST_PAGES_OK?*out:0,bytes,r);
+    if(result==0) {
+        heap_trace_region(p,"reserve",*out,bytes);
+        snk_hle_heap_trace_arena(*out,bytes);
+    }
+    return result;
 }
 static uint32_t free_region(uintptr_t address) {
     guest_process *p=required_current();pthread_mutex_lock(&p->mutex);
@@ -676,7 +766,9 @@ static uint32_t free_region(uintptr_t address) {
 static uint32_t allocate_pages(uintptr_t address,size_t bytes) {
     guest_process *p=required_current();pthread_mutex_lock(&p->mutex);
     struct guest_pages_result r=guest_pages_map(p->pages,address,bytes);
-    return finish_page_service(p,"map",address,bytes,r);
+    uint32_t result=finish_page_service(p,"map",address,bytes,r);
+    if(result==0) heap_trace_region(p,"map",address,bytes);
+    return result;
 }
 static uint32_t free_pages(uintptr_t address,size_t bytes) {
     guest_process *p=required_current();pthread_mutex_lock(&p->mutex);

@@ -21,6 +21,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 #include "nvn_object_table.h"
 
 /* How many stages a program can have and how large the control section of a
@@ -170,9 +171,30 @@ static int capture_stage(nvn_program_state *p, int stage, uint64_t data, const v
     nvn_sha256_hex(digest, p->stages[stage].key);
     p->stages[stage].keyed = 1;
     s_stats.keyed++;
-    fprintf(stderr, "[nvn] nvnProgramSetShaders: program=%p stage=%d data=0x%" PRIx64 " control=%p"
-                    " code_length=%u control_length=%zu key=%s\n",
-            p->program, stage, data, control, code_length, control_length, p->stages[stage].key);
+
+extern int xbg_shader_control_key(const void *control_0x880, char out_hex17[17]);
+
+    const char *dump_shaders = getenv("SNK_DUMP_SHADERS");
+    if (!dump_shaders || strcmp(dump_shaders, "1") != 0) return 1;
+
+    char ckey[17] = {0};
+    if (xbg_shader_control_key(p->stages[stage].control, ckey) != 0) {
+        fprintf(stderr, "[nvn] shader dump failed: invalid control for key computation\n");
+        return 1;
+    }
+
+    fprintf(stderr, "[nvn] nvnProgramSetShaders: program=%p stage=%d ckey=%s content_key=%s code_len=%u ctrl_len=%zu\n",
+            p->program, stage, ckey, p->stages[stage].key, code_length, control_length);
+
+    mkdir("/sdcard/SNK/shaders_dump", 0777);
+    char ctrl_path[128], code_path[128];
+    snprintf(ctrl_path, sizeof(ctrl_path), "/sdcard/SNK/shaders_dump/%s.control.bin", ckey);
+    snprintf(code_path, sizeof(code_path), "/sdcard/SNK/shaders_dump/%s.code.bin", ckey);
+    FILE *fc = fopen(ctrl_path, "wb");
+    if (fc) { fwrite(p->stages[stage].control, 1, NVN_PROGRAM_CONTROL_SIZE, fc); fclose(fc); }
+    FILE *fd = fopen(code_path, "wb");
+    if (fd) { fwrite(code, 1, code_length, fd); fclose(fd); }
+    fprintf(stderr, "[nvn] dumped shader %s stage=%d code_len=%u\n", ckey, stage, code_length);
     return 1;
 }
 

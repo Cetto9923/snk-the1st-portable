@@ -114,6 +114,10 @@ uint32_t deferred_live_profile=0;
 // guest memory is read at execution; the game only reuses it after the fence (waits drain).
 // files/gfx-sync-submit containing '1' restores synchronous translation.
 bool gfx_async=false;std::atomic<uint64_t> gfx_enqueued{0},gfx_executed{0};std::atomic<int> gfx_presents_queued{0};
+// gfx-lut-canary：把所有 3D 光照 LUT（32³ 等）首次上传后整张填 1.0，用来判定"环境全黑"是否由这些 LUT 内容决定。
+// gfx-lut-canary: after the first upload fill every 3D light LUT with 1.0, to tell whether the black environment is
+// decided by these LUT contents.
+bool lut_canary=false;
 std::mutex gfx_job_mutex;std::condition_variable gfx_job_cv,gfx_idle_cv;std::deque<std::function<void()>> gfx_jobs;bool gfx_busy=false,gfx_stop=false;std::thread gfx_worker;std::thread::id gfx_worker_id;
 void gfx_worker_loop(){
     gfx_worker_id=std::this_thread::get_id();
@@ -1656,7 +1660,7 @@ void capability_report(){
 }
 struct Image {
     tex_t source{}; uint64_t provenance_epoch=0,provenance_writer=0;unsigned provenance_write_site=0; VkImage image{};VkDeviceMemory memory{};VkFormat fmt{};VkImageLayout layout=VK_IMAGE_LAYOUT_UNDEFINED;
-    VkImageAspectFlags aspects{};VkImageUsageFlags usage{};uint32_t width{},height{},depth=1,levels{},layers{},bpp{};VkSampleCountFlagBits samples=VK_SAMPLE_COUNT_1_BIT;bool uploaded=false,gpu_written=false,decoded=false,bc5_float32=false,rg16_proxy=false,mutable_format=false;VkImageCreateInfo create{}; // create: as created (no pNext), for upgrade_mutable
+    VkImageAspectFlags aspects{};VkImageUsageFlags usage{};uint32_t width{},height{},depth=1,levels{},layers{},bpp{};VkSampleCountFlagBits samples=VK_SAMPLE_COUNT_1_BIT;bool uploaded=false,gpu_written=false,decoded=false,bc5_float32=false,rg16_proxy=false,mutable_format=false,canary=false;VkImageCreateInfo create{}; // create: as created (no pNext), for upgrade_mutable
     std::unique_ptr<Image> filtered;uint64_t content_version=1,filtered_version=0;
     uint64_t cpu_hash=0,checked_submission=UINT64_MAX,last_write=0;uint32_t stable_checks=0;int64_t mem_bytes=0,bc_bytes=0,bc_data=0;
     // 最近一次经 get_image 取用时的 slot_serial：等于当前值，说明这次提交里已有命令用过它（gfx-upload-prologue 据此判断能否提前上传）。
@@ -1767,6 +1771,12 @@ template<class F> void for_images_overlapping(uint64_t address,uint64_t bytes,F 
 // needs a layout change.
 void prepare_rg16_proxy(Image &im,VkCommandBuffer cmd);
 std::vector<Image*> sampled_rg16_images,storage_rg16_images;
+// gfx-cs-map: the storage images a compute dispatch writes, in binding order.
+// Needed because "which pass fills texture X" was the open question for the
+// lighting LUTs: the guest copy is all zero and the sampled result is all zero,
+// so the producer has to be identified by its dispatch, not by guessing.
+bool cs_map_enabled=false;
+std::vector<Image*> cs_map_images;
 bool graphics_attachment_only();
 // An earlier real shader sample in this same pass established depth visibility.
 // Only stencil has changed since: never bypass the first sample after geometry,
@@ -2063,7 +2073,7 @@ Image &get_image_read(const tex_t *t,bool upload);
 // frame and timing scope. Provenance logging takes the slow path.
 inline Image &get_image(const tex_t *t,bool upload){
     if(read_preflight)return get_image_read(t,upload);
-    if(img_fast && t && t->serial && t->magic==MAGIC('T','E','X',0) && !provenance_file){
+    if(img_fast && !lut_canary && t && t->serial && t->magic==MAGIC('T','E','X',0) && !provenance_file){
         const ImgFront &front=img_front[(t->serial*0x9E3779B97F4A7C15ull)>>54];
         if(front.epoch==images_epoch && front.serial==t->serial){Image &im=*front.im;
             if(!upload || (im.checked_submission==stats.submissions && (im.uploaded || im.gpu_written))){im.slot_use=slot_serial;return im;}}}
@@ -2200,6 +2210,17 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
         im.uploaded=true;provenance_write(im,__LINE__);im.cpu_hash=hash_memory(t->mem,t->L.size);im.checked_submission=stats.submissions;
         if(reupload)++hud::reuploads;else ++hud::uploads;hud::upload_bytes+=linear.size();hud::upload_ns+=timing_clock()-up_t0;
     }
+    // Canary: a 3D light LUT nobody visibly fills, forced to 1.0 once, to decide whether the black environment is decided
+    // by these LUT contents (gfx-lut-canary).
+    if(lut_canary && im.create.imageType==VK_IMAGE_TYPE_3D && im.depth>1 && im.aspects==VK_IMAGE_ASPECT_COLOR_BIT && im.samples==VK_SAMPLE_COUNT_1_BIT){
+        Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+        VkClearColorValue v{};v.float32[0]=v.float32[1]=v.float32[2]=v.float32[3]=1.0f;
+        VkImageSubresourceRange r{VK_IMAGE_ASPECT_COLOR_BIT,0,im.levels,0,im.layers};
+        vkCmdClearColorImage(c.command,im.image,im.layout,&v,1,&r);
+        im.transition(c.command,VK_IMAGE_LAYOUT_GENERAL);c.finish();
+        if(!im.canary){im.canary=true;
+            xbg_logf("LUT_CANARY serial=%llu %ux%ux%u layers=%u fmt=%u",(unsigned long long)t->serial,im.width,im.height,im.depth,im.layers,unsigned(im.fmt));}
+    }
     provenance_image(upload?"GET_UPLOAD":"GET",t,im);im.slot_use=slot_serial;return im;
 }
 // read_preflight: main's order (cc91eb1). Copy the descriptor, resolve CPU reads of its storage, then look the image up.
@@ -2230,10 +2251,11 @@ const RegisteredTexture &null_texture(const xbg_shader_binding &b){
 
 /* SHA-256 over the original NVN 0x880-byte control segment. */
 std::string control_key(const void *data){char key[17];need(xbg_shader_control_key(data,key)==0,"Missing shader control segment");return key;}
-struct Shader {std::string key;uint32_t stage;VkShaderModule module{};std::vector<xbg_shader_binding> bindings;std::vector<uint32_t> inputs,input_classes;std::vector<uint8_t> c1;
+struct Shader {std::string key;uint32_t stage;VkShaderModule module{};uint32_t local[3]{}; /* declared workgroup size (LocalSize) */std::vector<xbg_shader_binding> bindings;std::vector<uint32_t> inputs,input_classes;std::vector<uint8_t> c1;
     std::set<uint32_t> storage_writes; // Vulkan bindings of storage buffers the SPIR-V may write
     bool discards=true; // fragment shader may kill/demote (conservative default)
     XbgRasterFacts raster; // position input (vertex), declared outputs and SampleMask (fragment): first_draw_covers
+    std::vector<uint32_t> spv; // fragment shaders with several outputs: source of the integer-target variants
     Buffer c1_buffer{};bool c1_ready=false;
     ~Shader(){if(module)vkDestroyShaderModule(cfg.device,module,nullptr);}};
 // Storage buffers written by a shader. Pointers rooted at a storage-buffer
@@ -2475,6 +2497,92 @@ bool spv_override(const std::string &key,std::vector<uint32_t> &words){
     std::vector<uint32_t> w(size_t(n)/4);bool ok=fread(w.data(),1,size_t(n),f)==size_t(n);fclose(f);if(!ok || w[0]!=0x07230203u)return false;
     words.swap(w);xbg_logf("NVN spv override %s words=%zu",key.c_str(),words.size());return true;
 }
+// NVN 的片元着色器用浮点寄存器写整数渲染目标：翻译结果里那个输出是 OpBitcast(float, int)。Vulkan 把浮点输出写进
+// UINT/SINT 附件时按数值转换，这些位模式会被压成 0，目标于是永远是空的。这里把整数附件对应的输出变量与它的存储
+// 改成真正的整数，位模式原样保留。kinds 每 2 位对应一个 Location：0 浮点、1 UINT、2 SINT。
+// NVN fragment shaders reach an integer render target through a float register: the translation stores
+// OpBitcast(float, int). Vulkan converts a float output to a UINT/SINT attachment numerically, which flattens those
+// bit patterns to zero and leaves the target blank. This rewrite makes the variable and its stores integer, so the
+// bits survive. kinds holds 2 bits per output Location: 0 float, 1 UINT, 2 SINT.
+bool spv_integer_outputs(std::vector<uint32_t> &w,uint32_t kinds){
+    if(w.size()<6)return false;
+    std::vector<size_t> ins;for(size_t i=5;i<w.size();){uint32_t n=w[i]>>16;if(!n||i+n>w.size())return false;ins.push_back(i);i+=n;}
+    std::unordered_map<uint32_t,size_t> defid,loc,ptype;
+    std::unordered_map<uint32_t,std::pair<uint32_t,uint32_t>> vinv;   // vector type -> (component type, count)
+    std::unordered_map<uint64_t,uint32_t> vec,ptr;
+    uint32_t tf=0,tu=0,ti=0;
+    for(size_t i:ins){uint32_t op=w[i]&0xffff;
+        if(op==22){if(w[i+2]==32)tf=w[i+1];}
+        else if(op==21){if(w[i+2]==32){if(w[i+3])ti=w[i+1];else tu=w[i+1];}}
+        else if(op==23){vec[(uint64_t(w[i+2])<<32)|w[i+3]]=w[i+1];vinv[w[i+1]]={w[i+2],w[i+3]};}
+        else if(op==32){ptr[(uint64_t(w[i+2])<<32)|w[i+3]]=w[i+1];ptype[w[i+1]]=w[i+3];}
+    }
+    if(!tf||!tu)return false;
+    for(size_t i:ins)if((w[i]&0xffff)==71&&(w[i]>>16)>=4&&w[i+2]==30)loc[w[i+1]]=w[i+3];
+    // 每个带结果的指令：result id -> 指令下标，result id -> 结果类型。改写存储时要看**值**的类型，
+    // 而不是 OpBitcast 自己的结果类型（那是 float，正是这些输出恒为 0 的原因）。
+    // Every instruction with a result: result id -> index, result id -> result type. The store rewrite needs the
+    // type of the *value*, not the result type of the OpBitcast (float, which is why these outputs stayed 0).
+    std::unordered_map<uint32_t,uint32_t> idtype;
+    for(size_t i:ins){uint32_t op=w[i]&0xffff;
+        if(op==0||op==8||op==56||op==62||op==99||op==218||op==219||op==224||op==225||op==228||op==246||op==247||op==249||op==250||op==251||op==252||op==253||op==254||op==255||op==317)continue;
+        defid[w[i+2]]=i;idtype[w[i+2]]=w[i+1];}
+    uint32_t bound=w[3];std::vector<uint32_t> extra;std::unordered_map<uint32_t,uint32_t> outv,vscalar,chain;
+    for(size_t i:ins){
+        if((w[i]&0xffff)!=59||w[i+3]!=3)continue;
+        uint32_t v=w[i+2];auto li=loc.find(v);if(li==loc.end())continue;
+        if(!((kinds>>(2*li->second))&3))continue;
+        auto pi=ptype.find(w[i+1]);if(pi==ptype.end())continue;
+        auto vi=vinv.find(pi->second);if(vi==vinv.end()||vi->second.first!=tf)continue;
+        uint32_t cnt=vi->second.second;
+        uint64_t vk=(uint64_t(tu)<<32)|cnt;if(!vec.count(vk)){uint32_t id=bound++;extra.insert(extra.end(),{(4u<<16)|23,id,tu,cnt});vec[vk]=id;}
+        uint32_t vid=vec[vk];
+        uint64_t pk=(uint64_t(3)<<32)|vid;if(!ptr.count(pk)){uint32_t id=bound++;extra.insert(extra.end(),{(4u<<16)|32,id,3,vid});ptr[pk]=id;}
+        uint64_t sk=(uint64_t(3)<<32)|tu;if(!ptr.count(sk)){uint32_t id=bound++;extra.insert(extra.end(),{(4u<<16)|32,id,3,tu});ptr[sk]=id;}
+        outv[v]=ptr[pk];vscalar[v]=ptr[sk];
+    }
+    if(outv.empty())return false;
+    for(size_t i:ins)if((w[i]&0xffff)==65&&outv.count(w[i+3]))chain[w[i+2]]=1;
+    std::unordered_map<uint32_t,uint32_t> consts;
+    for(size_t i:ins){
+        if((w[i]&0xffff)!=62||!chain.count(w[i+1]))continue;
+        auto di=defid.find(w[i+2]);if(di==defid.end())continue;size_t d=di->second;
+        if((w[d]&0xffff)!=43||w[d+1]!=tf||consts.count(w[d+3]))continue;
+        float f;memcpy(&f,&w[d+3],4);uint32_t iv=(f>0&&f==f)?(f>=4294967295.0f?0xffffffffu:uint32_t(f+0.5f)):0;
+        uint32_t id=bound++;extra.insert(extra.end(),{(4u<<16)|43,tu,id,iv});consts[w[d+3]]=id;
+    }
+    std::vector<uint32_t> out(w.begin(),w.begin()+5);bool inserted=false,infunc=false;
+    for(size_t i:ins){uint32_t op=w[i]&0xffff,n=w[i]>>16;
+        if(!inserted&&(op==54||(op==59&&!infunc))){out.insert(out.end(),extra.begin(),extra.end());inserted=true;}
+        if(op==54)infunc=true;
+        if(op==59&&outv.count(w[i+2]))out.push_back((n<<16)|op),out.push_back(outv[w[i+2]]),out.insert(out.end(),w.begin()+i+2,w.begin()+i+n);
+        else if(op==65&&outv.count(w[i+3])){out.push_back((n<<16)|op);out.push_back(vscalar[w[i+3]]);out.insert(out.end(),w.begin()+i+2,w.begin()+i+n);}
+        else if(op==62&&chain.count(w[i+1])){
+            uint32_t val=w[i+2],nv=0;auto di=defid.find(val);
+            uint32_t vt=di==defid.end()?0:idtype[val];
+            if(vt==tu)nv=val;   // already an unsigned value: keep it
+            else if(vt==ti){nv=bound++;out.insert(out.end(),{(4u<<16)|124,tu,nv,val});}   // signed -> bitcast to unsigned
+            else if(di!=defid.end()&&(w[di->second]&0xffff)==124){   // OpBitcast(float, uint/int): the NVN bit pattern
+                uint32_t src=w[di->second+3];auto si=idtype.find(src);uint32_t st=si==idtype.end()?0:si->second;
+                if(st==tu)nv=src;else if(st==ti){nv=bound++;out.insert(out.end(),{(4u<<16)|124,tu,nv,src});}}
+            if(!nv&&di!=defid.end()&&(w[di->second]&0xffff)==43&&w[di->second+1]==tf)nv=consts[w[di->second+3]];
+            if(!nv){nv=bound++;out.insert(out.end(),{(4u<<16)|109,tu,nv,val});}   // OpConvertFToU
+            out.push_back((3u<<16)|62);out.push_back(w[i+1]);out.push_back(nv);
+        }else out.insert(out.end(),w.begin()+i,w.begin()+i+n);
+    }
+    if(!inserted)out.insert(out.end(),extra.begin(),extra.end());
+    out[3]=bound;w.swap(out);return true;
+}
+// One module per (fragment shader, integer target mask); graphics thread only.
+std::map<std::pair<const Shader*,uint32_t>,VkShaderModule> integer_output_modules;
+VkShaderModule integer_output_module(const Shader *sh,uint32_t kinds){
+    auto key=std::make_pair(sh,kinds);auto it=integer_output_modules.find(key);if(it!=integer_output_modules.end())return it->second;
+    VkShaderModule m=nullptr;
+    if(!sh->spv.empty()){std::vector<uint32_t> w=sh->spv;
+        if(spv_integer_outputs(w,kinds)){VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=w.size()*4;ci.pCode=w.data();
+            if(vkCreateShaderModule(cfg.device,&ci,nullptr,&m)==VK_SUCCESS)xbg_logf("NVN integer outputs %s kinds=%#x words=%zu",sh->key.c_str(),kinds,w.size());else m=nullptr;}}
+    integer_output_modules[key]=m;return m;
+}
 Shader *load_shader(const void *control){
     std::string key=control_key(control);auto found=shaders.find(key);if(found!=shaders.end())return found->second.get();
     const uint64_t load_t0=timing_clock();
@@ -2486,6 +2594,10 @@ Shader *load_shader(const void *control){
     const uint64_t load_t1=timing_clock();uint64_t load_t2=0,load_t3=0;
     auto p=std::make_unique<Shader>();p->key=key;p->stage=h.stage;p->bindings.resize(h.binding_count);memcpy(p->bindings.data(),bytes.data()+offset,h.binding_count*sizeof(xbg_shader_binding));offset+=h.binding_count*sizeof(xbg_shader_binding);p->inputs.resize(h.input_count);memcpy(p->inputs.data(),bytes.data()+offset,h.input_count*4);offset+=h.input_count*4;p->c1.assign(bytes.begin()+offset,bytes.begin()+offset+h.c1_bytes);offset+=h.c1_bytes;
     std::vector<uint32_t> words(h.spirv_bytes/4);memcpy(words.data(),bytes.data()+offset,h.spirv_bytes);spv_override(key,words);boss_interface_rewrite(words,h.stage,key.c_str(),"runtime");histogram_sync_rewrite(words,h.stage,key.c_str(),"runtime");if(stencil_rewrite(words,h.stage,key.c_str(),"runtime")){for(auto &binding:p->bindings){uint32_t scalar=xbg_ffrs_integer_fact(h.stage,key.c_str(),binding.binding);if(binding.binding==xbg_ffrs_uint_binding(h.stage,key.c_str()) || binding.binding==xbg_ffrs_uint_store_binding(h.stage,key.c_str()))scalar=1;if(scalar)binding.flags=(binding.flags&~(3u<<16))|(scalar<<16);}}validate_capabilities(words,h.stage);
+    // The declared workgroup size, read from OpExecutionMode LocalSize (17). It
+    // is the shader's own statement of gl_WorkGroupSize, so a dispatch's group
+    // counts can be checked against the element count it is expected to cover.
+    if(h.stage==5)for(size_t i=5;i+5<words.size();){uint32_t wc=words[i]>>16,op=words[i]&0xffffu;if(!wc)break;if(op==16 && wc>=6 && words[i+2]==17u){p->local[0]=words[i+3];p->local[1]=words[i+4];p->local[2]=words[i+5];}i+=wc;}
     // gfx-shader-reuse：预热线程已改写过这个着色器时直接取用；2 时照样改写，与取来的逐字比对。
     // gfx-shader-reuse: take the warm-up threads' rewrite of this shader when there is one; with 2, rewrite as well and compare word by word.
     std::vector<uint32_t> reused;const bool have_reused=shader_reuse && !ab_off("shreuse") && warm::take_rewritten(key,reused);
@@ -2501,6 +2613,7 @@ Shader *load_shader(const void *control){
     {auto extent=spirv_uniform_extent(words);uint32_t trimmed=0;for(auto &b:p->bindings)if(b.type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER && b.source==XBG_SOURCE_UNIFORM){auto e=extent.find(b.binding);uint32_t declared=b.bytes?b.bytes:65536;if(e!=extent.end() && e->second<declared){b.bytes=e->second;++trimmed;}}uniform_trimmed+=trimmed;}
     {bool kill=false;for(size_t i=5;i<words.size();){uint32_t n=words[i]>>16,op=words[i]&0xffff;if(op==252||op==4416||op==5380){kill=true;break;}if(!n)break;i+=n;}p->discards=kill;}
     p->raster=xbg_spirv_raster_facts(words.data(),words.size(),h.stage);
+    if(h.stage==4 && p->raster.outputs && (p->raster.outputs&(p->raster.outputs-1)))p->spv=words;
     {bool unknown=false;p->storage_writes=spirv_storage_writes(words,unknown);if(unknown){for(auto &b:p->bindings)if(b.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)p->storage_writes.insert(b.binding);}}
     if(h.stage==0){p->input_classes.resize(p->inputs.size());need(xbg_vertex_input_classes(words.data(),words.size(),p->inputs.data(),p->inputs.size(),p->input_classes.data())==0,"Unsupported vertex input scalar interface");}
     load_t3=timing_clock();
@@ -2519,7 +2632,15 @@ const std::array<Shader*,6> &program_shaders(const prog_t *prog){
 }
 } // namespace
 
-extern "C" void xbg_logf(const char *fmt,...){CPU_SCOPE(Log);char text[1024];va_list a;va_start(a,fmt);vsnprintf(text,sizeof(text),fmt,a);va_end(a);if(cfg.log)cfg.log(cfg.userdata,text);else fprintf(stderr,"[xbg] %s\n",text);}
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
+extern "C" void xbg_logf(const char *fmt,...){CPU_SCOPE(Log);char text[1024];va_list a;va_start(a,fmt);vsnprintf(text,sizeof(text),fmt,a);va_end(a);
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "SNK-GFX", "%s", text);
+#endif
+    if(cfg.log)cfg.log(cfg.userdata,text);else fprintf(stderr,"[xbg] %s\n",text);}
 extern "C" __attribute__((noreturn)) void xbg_fatalf(const char *fmt,...){va_list a;va_start(a,fmt);vsnprintf(error_text,sizeof(error_text),fmt,a);va_end(a);failed=true;xbg_logf("FATAL: %s",error_text);if(cfg.fatal)cfg.fatal(cfg.userdata,error_text);abort();}
 extern "C" int xbg_backend_failed(){return failed;}
 extern "C" const char *xbg_game_last_error(){return error_text;}
@@ -3122,7 +3243,7 @@ void texel_evict(unsigned si,bool all){
 }
 void descriptors(Descriptors &out,Commands &commands,bool compute){
     out.indirect_input.reset();if(indirect_proof_enabled && compute && state.shader[5] && state.shader[5]->key=="9bee7f09d6c655c3")out.indirect_input=std::make_shared<IndirectTemplateInput>();
-    sampled_rg16_images.clear();storage_rg16_images.clear();
+    sampled_rg16_images.clear();storage_rg16_images.clear();cs_map_images.clear();
     draw_depth_reads.clear();
     need(!read_preflight || (pending_writebacks.empty() && (defer_query_preflight || pending_reports.empty())),"Unresolved CPU reads at descriptor entry");
     uint64_t tm0=perf_clock();struct MemoClock{uint64_t t0;~MemoClock(){}} mc{tm0};
@@ -3526,7 +3647,7 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                     if(capture.active){char label[100];snprintf(label,sizeof(label),"st%u-bind%u-el%u-input",st,b.binding,element);out.capture_inputs.push_back({&im,registered.view,registered.has_view,label});capture_log("TEXTURE label=%s shader=%s nvnStage=%u slot=%u handle=%#llx id=%d serial=%llu cachedSerial=%llu image=%p view=%p viewFormat=%u sourceKind=%u",label,shader.key.c_str(),ns,slot,(unsigned long long)handle,id,(unsigned long long)texture.serial,(unsigned long long)im.source.serial,(void*)im.image,(void*)ii.imageView,unsigned(im.view_format(registered.has_view?&registered.view:nullptr)),b.source);}
                     if(b.type==VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER || b.type==VK_DESCRIPTOR_TYPE_SAMPLER){DESC_SCOPE(SamplerBind);uint64_t sh=handle;if(b.sampler_slot!=UINT32_MAX){need(b.sampler_slot<128,"Sampler slot out of range");sh=state.samp[ns][b.sampler_slot];}int sid=int(sh>>20);samp_par parameters{};if(sid==0){parameters.ws=parameters.wt=parameters.wr=7;parameters.aniso=1;parameters.cmp_func=1;}
                         else{auto sp=samplers.find(pool_key(&state.sampler_pool));auto &table=sp==samplers.end()?legacy_samplers:sp->second;auto sa=table.find(sid);if(sa==table.end())xbg_fatalf("Unregistered sampler id=%d",sid);parameters=sa->second;}ii.sampler=sampler(parameters,im,im.view_format(registered.has_view?&registered.view:nullptr,true),((b.flags>>16)&3)!=0);if(capture.active || probe_is_active())capture_log("SAMPLER st=%u binding=%u sid=%d samplerSlot=%u min=%u mag=%u wrap=%u/%u/%u lod=%g/%g bias=%g",st,b.binding,sid,b.sampler_slot,parameters.minf,parameters.magf,parameters.ws,parameters.wt,parameters.wr,parameters.lod_min,parameters.lod_max,parameters.lod_bias);}
-                    if(b.type==VK_DESCRIPTOR_TYPE_STORAGE_IMAGE){if(im.rg16_proxy)storage_rg16_images.push_back(&im);VkFormat viewed=im.view_format(registered.has_view?&registered.view:nullptr);if(!(im.usage&VK_IMAGE_USAGE_STORAGE_BIT))xbg_fatalf("NVN storage image without IMAGE flag serial=%llu format=%#x flags=%#x",(unsigned long long)texture.serial,texture.d.format,texture.d.flags);const VkFormatProperties &fp=format_properties(viewed);need(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT,"Format not usable as storage image");
+                    if(b.type==VK_DESCRIPTOR_TYPE_STORAGE_IMAGE){if(im.rg16_proxy)storage_rg16_images.push_back(&im);if(cs_map_enabled)cs_map_images.push_back(&im);VkFormat viewed=im.view_format(registered.has_view?&registered.view:nullptr);if(!(im.usage&VK_IMAGE_USAGE_STORAGE_BIT))xbg_fatalf("NVN storage image without IMAGE flag serial=%llu format=%#x flags=%#x",(unsigned long long)texture.serial,texture.d.format,texture.d.flags);const VkFormatProperties &fp=format_properties(viewed);need(fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT,"Format not usable as storage image");
                         if((b.flags&3) && format_feature_flags2){VkFormatProperties3 extra{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_3};VkFormatProperties2 all{VK_STRUCTURE_TYPE_FORMAT_PROPERTIES_2};all.pNext=&extra;vkGetPhysicalDeviceFormatProperties2(cfg.physical,viewed,&all);if(b.flags&1)need(extra.optimalTilingFeatures&VK_FORMAT_FEATURE_2_STORAGE_WRITE_WITHOUT_FORMAT_BIT,"Image format lacks formatless-write support");if(b.flags&2)need(extra.optimalTilingFeatures&VK_FORMAT_FEATURE_2_STORAGE_READ_WITHOUT_FORMAT_BIT,"Image format lacks formatless-read support");}
                         else if(b.flags&3){VkFormatProperties fp{};vkGetPhysicalDeviceFormatProperties(cfg.physical,viewed,&fp);bool listed=storage_without_format_listed(viewed) && (fp.optimalTilingFeatures&VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT);
                             if((b.flags&1) && !(listed && cfg.enabled_core.shaderStorageImageWriteWithoutFormat))xbg_fatalf("Image format %d lacks formatless-write support without VK_KHR_format_feature_flags2 (shader=%s listedWithStorageImage=%d shaderStorageImageWriteWithoutFormat=%u)",int(viewed),shader.key.c_str(),int(listed),unsigned(cfg.enabled_core.shaderStorageImageWriteWithoutFormat));
@@ -3816,7 +3937,490 @@ bool ui_cover_all(double hf){
         x0=std::min(x0,nx);x1=std::max(x1,nx);y0=std::min(y0,ny);y1=std::max(y1,ny);}
     return x0<0.002f && x1>0.998f && y0<0.002f && std::fabs(y1-float(hf))<0.002f;
 }
+// gfx-scene-rt: the 3D scene render target (1600x900 NVN fmt 0x3f = R11G11B10F). Its content at present time tells
+// whether the 3D layer was drawn at all ("3D missing, subtitles correct").
+bool scene_rt_dump_enabled=false;
+// gfx-skip-fs: marker content = fragment shader key prefix; every draw using it is skipped (A/B for one suspected pass).
+std::string gfx_skip_fs;
+// Comma-separated prefixes: "12b92f34,25899322" skips both passes.
+static bool gfx_skip_fs_matches(const char *key){
+    size_t p=0;while(p<gfx_skip_fs.size()){
+        size_t q=gfx_skip_fs.find(',',p);if(q==std::string::npos)q=gfx_skip_fs.size();
+        if(q>p && strncmp(key,gfx_skip_fs.c_str()+p,q-p)==0)return true;
+        p=q+1;
+    }
+    return false;
+}
+uint32_t scene_rt_min_frame=0; // marker content = first present index to dump (skip loading/fade frames)
+const tex_t *scene_rt_tex=nullptr,*scene_rt_sample_tex=nullptr,*scene_rt_ds=nullptr;
+// The other 1600x900 fmt 0x3f target of the frame (the post-process ping-pong partner) and the tiny (<=16 px) textures
+// the tone-map pass reads: exposure, LUTs. Dumped together so "exposure read as 0" is visible as a number.
+const tex_t *scene_rt_bt=nullptr,*scene_rt_small[4]={};
+// Every 1600x900 input the tone-map pass samples (0x27 = R8G8B8A8_SRGB, 0x14 = VK 81, 0x53, 0x09 ...): dumped with the
+// output so a never-written input (all zero) is distinguishable from a bad exposure value.
+const tex_t *scene_rt_in[6]={};
+// The 800x450 bloom input the tone-map pass samples, and the tone-map's second colour attachment (MRT, n=2).
+const tex_t *scene_rt_bloom=nullptr,*scene_rt_rt1=nullptr;
+// Up to 8 further textures the tone-map pass samples at 512x512 or below (LUTs, lens-flare/ghost atlases, 40x24 ...):
+// dumped so a wrong sampler can be identified by its content instead of guessed from its shape.
+const tex_t *scene_rt_extra[8]={};
+// 诊断（marker gfx-scene-rt）：本帧阴影 pass / 无颜色 pass 的提交计数，以及每个 UBO/SSBO 槽的绑定次数与最后来源。
+// Diagnostics (marker gfx-scene-rt): per-frame submission counters of the shadow and colourless passes, plus each
+// UBO/SSBO slot's bind count and last source, so "who never bound this slot" is a number instead of a guess.
+static uint32_t dbg_shadow_draws,dbg_shadow_clears,dbg_nocolor_draws,dbg_shadow_nocolor,dbg_shadow_dw,dbg_shadow_dt,dbg_shadow_blend;
+static float dbg_shadow_clear=-1;static const char *dbg_shadow_vs="",*dbg_shadow_fs="";
+static uint32_t dbg_ub_bind_n[6][16],dbg_sb_bind_n[6][16];static uint64_t dbg_ub_bind_seq[6][16],dbg_ub_mem[6][16];
+// 合成的三个关键输入：R8 阴影掩码(137)、RG16F 光照/SSAO(138)、1024x1024 D16 阴影图(144)。
+// The composite's three decisive inputs: the R8 shadow mask (137), the RG16F light/SSAO buffer (138) and the
+// 1024x1024 D16 shadow map (144).
+static const tex_t *scene_rt_mask,*scene_rt_light,*scene_rt_shadow;
+// 游戏内前向材质读的两张 32x32 光照查找图（slot 128/129）与合成读的 40x24 光照网格：光照到底算没算，看它们的像素。
+// The two 32x32 lighting lookup maps the in-game material samples (slot 128/129) and the 40x24 light grid the composite
+// samples: whether lighting is computed at all shows up in their pixels.
+static const tex_t *scene_rt_mattex[2],*scene_rt_grid;
+// 本帧每个深度目标（尺寸/格式/mem）被多少次 draw 使用：回答"某个尺寸的阴影 pass 到底有没有提交"，不用猜。
+// Every depth target this frame (shape/format/mem) and how many draws used it: answers "was a shadow pass of this
+// size submitted at all" with a number.
+struct DbgDepthRt{uint32_t w,h,fmt,n;uint64_t mem;};
+static DbgDepthRt dbg_depth_rt[8];static unsigned dbg_depth_rt_n=0;
+// 四类拷贝（B2B/B2T/T2B/T2T）在本帧的条数与每类前 40 条的目标地址：guest 若用 buffer<->texture 拷贝填光照图，
+// 这里就会直接看到它的目标 mem。
+// The four copy kinds (B2B/B2T/T2B/T2T) this frame: counts plus the destination of the first 40 of each, so a
+// buffer<->texture copy that fills a lighting map shows its destination memory here.
+static uint32_t dbg_copy_n[4],dbg_copy_log[4];
+uint32_t scene_rt_draws=0,scene_rt_sampled=0,scene_rt_dumped=0;uint64_t scene_rt_frame=~0ull;
+static int s_diag_draw_cnt = 0;
+static bool s_do_dump = false;
+static bool s_dump_done = false;
+static FILE *s_dump_file = nullptr;
+static int s_dump_draw_idx = 0;
+static void scene_rt_note_draw(){
+    const uint64_t fr=stats.presents.load();
+    if(fr!=scene_rt_frame){scene_rt_frame=fr;scene_rt_draws=0;scene_rt_sampled=0;scene_rt_sample_tex=nullptr;scene_rt_bt=nullptr;scene_rt_bloom=nullptr;scene_rt_rt1=nullptr;
+        dbg_shadow_draws=dbg_shadow_clears=dbg_nocolor_draws=dbg_shadow_nocolor=dbg_shadow_dw=dbg_shadow_dt=dbg_shadow_blend=0;dbg_shadow_clear=-1;dbg_shadow_vs=dbg_shadow_fs="";
+        dbg_depth_rt_n=0;
+        dbg_copy_n[0]=dbg_copy_n[1]=dbg_copy_n[2]=dbg_copy_n[3]=0;
+        dbg_copy_log[0]=dbg_copy_log[1]=dbg_copy_log[2]=dbg_copy_log[3]=0;
+        scene_rt_mask=scene_rt_light=scene_rt_shadow=nullptr;
+        for(unsigned k=0;k<4;k++)scene_rt_small[k]=nullptr;
+        for(unsigned k=0;k<5;k++)scene_rt_in[k]=nullptr;
+        for(unsigned k=0;k<8;k++)scene_rt_extra[k]=nullptr;}
+    // 无颜色附件的 draw（阴影/深度预通道）单独计数；512x512 D16 深度即被 tonemap 采样的阴影图。
+    // Colour-attachment-less draws (shadow / depth prepass) are counted separately; a 512x512 D16 depth is the shadow map
+    // the tone-map samples.
+    if(!(state.rt.n>0 && state.rt.color[0]))++dbg_nocolor_draws;
+    if(state.rt.depth && state.rt.depth->d.width==512 && state.rt.depth->d.height==512 && state.rt.depth->d.format==0x32){
+        ++dbg_shadow_draws;if(!(state.rt.n>0 && state.rt.color[0]))++dbg_shadow_nocolor;
+        if(state.ds.dw)dbg_shadow_dw=1;if(state.ds.dt)dbg_shadow_dt=1;if(state.color.blend_en)dbg_shadow_blend=1;
+        dbg_shadow_vs=state.shader[0]?state.shader[0]->key.c_str():"none";dbg_shadow_fs=state.shader[4]?state.shader[4]->key.c_str():"none";}
+    if(state.rt.depth){
+        const tex_t *dt=state.rt.depth;const uint64_t m=uint64_t(uintptr_t(dt->mem));
+        unsigned i=0;for(;i<dbg_depth_rt_n;i++){auto &d=dbg_depth_rt[i];
+            if(d.w==dt->d.width && d.h==dt->d.height && d.fmt==dt->d.format && d.mem==m){++d.n;break;}}
+        if(i==dbg_depth_rt_n && dbg_depth_rt_n<8){dbg_depth_rt[dbg_depth_rt_n++]={uint32_t(dt->d.width),uint32_t(dt->d.height),uint32_t(dt->d.format),1u,m};}
+    }
+    const tex_t *c0=state.rt.color[0];
+    const bool targets_scene=c0 && c0->d.width==1600 && c0->d.height==900 && c0->d.format==0x3f;
+    // Both 1600x900 0x3f attachments (the scene A and the post-process ping-pong B) match shape, so the identity check is
+    // the serial: A is whichever one the first frame established, B is the other.
+    if(targets_scene){
+        if(!scene_rt_tex || c0->serial==scene_rt_tex->serial)scene_rt_tex=c0;else scene_rt_bt=c0;
+        if(state.rt.n>1 && state.rt.color[1])scene_rt_rt1=state.rt.color[1];
+        if(state.rt.depth)scene_rt_ds=state.rt.depth;++scene_rt_draws;}
+    if(!scene_rt_tex || !state.shader[4] || !state.texture_pool.pool)return;
+    const unsigned ns=nvn_stage[4];const PoolKey pk=pool_key(&state.texture_pool);
+    auto pool=textures.find(pk);auto &table=pool==textures.end()?legacy_textures:pool->second;
+    bool samples_scene=false;
+    const bool tonemap=state.shader[4]->key.compare(0,8,"18333446")==0;
+    for(auto &b:state.shader[4]->bindings){
+        if(b.source!=XBG_SOURCE_TEXTURE)continue;
+        for(unsigned e=0;e<b.count;e++){
+            const unsigned sl=b.slot+e;if(sl>=256)continue;
+            const int id=int(state.tex[ns][sl]&0xfffff);auto tex=table.find(id);
+            if(tex==table.end())continue;
+            if(tonemap){
+                if(sl==137 && !scene_rt_mask)scene_rt_mask=&tex->second.texture;
+                if(sl==138 && !scene_rt_light)scene_rt_light=&tex->second.texture;
+                if(sl==144 && !scene_rt_shadow)scene_rt_shadow=&tex->second.texture;}
+            if(tex->second.texture.d.width<=16 && tex->second.texture.d.height<=16){
+                bool known=false;for(unsigned k=0;k<4;k++)if(scene_rt_small[k]==&tex->second.texture)known=true;
+                if(!known)for(unsigned k=0;k<4;k++)if(!scene_rt_small[k]){scene_rt_small[k]=&tex->second.texture;break;}
+            }
+            if(tex->second.texture.serial==scene_rt_tex->serial){samples_scene=true;continue;}
+            if(tonemap && tex->second.texture.d.width==1600 && tex->second.texture.d.height==900 && tex->second.texture.d.format!=0x3f){
+                bool known=false;for(unsigned k=0;k<6;k++)if(scene_rt_in[k]==&tex->second.texture)known=true;
+                if(!known)for(unsigned k=0;k<6;k++)if(!scene_rt_in[k]){scene_rt_in[k]=&tex->second.texture;break;}
+            }
+            if(tonemap && tex->second.texture.d.width==800 && tex->second.texture.d.height==450 && !scene_rt_bloom)
+                scene_rt_bloom=&tex->second.texture;
+            if(tonemap && tex->second.texture.d.width>16 && tex->second.texture.d.height>16 &&
+               tex->second.texture.d.width<=512 && tex->second.texture.d.height<=512){
+                bool known=false;for(unsigned k=0;k<8;k++)if(scene_rt_extra[k]==&tex->second.texture)known=true;
+                for(unsigned k=0;!known && k<8;k++)if(!scene_rt_extra[k]){scene_rt_extra[k]=&tex->second.texture;known=true;
+                    xbg_logf("SCENE_RT extra fr=%llu b=%u s=%u %ux%u fmt=%d mem=%p serial=%llx",
+                        (unsigned long long)fr,b.binding,sl,tex->second.texture.d.width,tex->second.texture.d.height,
+                        tex->second.texture.d.format,tex->second.texture.mem,(unsigned long long)tex->second.texture.serial);}
+            }
+            // Same extent + same Vulkan format as the scene target, but a different object: a copy or a re-wrap of it.
+            if(!scene_rt_sample_tex && tex->second.texture.d.width==scene_rt_tex->d.width && tex->second.texture.d.height==scene_rt_tex->d.height){
+                auto im=images.find(tex->second.texture.serial);
+                if(im!=images.end() && im->second->width==scene_rt_tex->d.width && im->second->height==scene_rt_tex->d.height &&
+                   im->second->fmt==get_image(scene_rt_tex,false).fmt)
+                    scene_rt_sample_tex=&tex->second.texture;
+            }
+        }
+    }
+    if(samples_scene){
+        if(!scene_rt_sampled){
+            const tex_t *d0=state.rt.color[0];
+            xbg_logf("SCENE_RT sample fr=%llu draw#%d vs=%s fs=%s dst=%ux%u fmt=%d blend=%u",
+                (unsigned long long)fr,s_diag_draw_cnt,state.shader[0]?state.shader[0]->key.c_str():"none",
+                state.shader[4]->key.c_str(),d0?d0->d.width:0,d0?d0->d.height:0,d0?d0->d.format:0,state.color.blend_en);
+        }
+        ++scene_rt_sampled;
+    }
+    // 诊断（marker gfx-scene-rt）：真正上屏的那条链。合成 pass 的键随配置/场景变化（标题画面 18333446，游戏内
+    // 12b92f34），只看前者会把标题画面的空缓冲当成游戏内证据。这里按"采样场景且绘制到 1600x900 0x3f"再抓一次，
+    // 并把本帧所有深度目标的尺寸/格式/gpu 写入状态列出来，直接回答"阴影 pass 有没有提交"。
+    // Diagnostics: the chain that actually reaches the screen in game. The composite's key changes with the
+    // permutation (18333446 on the title screen, 12b92f34 in game), so looking only at the former mistakes the
+    // title's empty buffers for in-game evidence. Capture it again per key here, and list every depth target this
+    // frame with its shape and gpu-written flag, which answers "was the shadow pass submitted" directly.
+    {
+        static std::set<std::string> seen;
+        if(samples_scene && seen.size()<6 && !seen.count(state.shader[4]->key)){
+            seen.insert(state.shader[4]->key);
+            const tex_t *d0=state.rt.color[0];
+            xbg_logf("SCENE_BIND fr=%llu draw#%d fs=%s dst=%p %ux%u fmt=%#x n=%u blended=%u nocolor=%u",
+                (unsigned long long)fr,s_diag_draw_cnt,state.shader[4]->key.c_str(),(void*)d0,d0?d0->d.width:0,
+                d0?d0->d.height:0,d0?d0->d.format:0,state.rt.n,state.color.blend_en,dbg_nocolor_draws);
+            for(auto &b:state.shader[4]->bindings){
+                if(b.source==XBG_SOURCE_TEXTURE||b.source==XBG_SOURCE_IMAGE){
+                    for(unsigned e=0;e<b.count;e++){
+                        const unsigned sl=b.slot+e;if(sl>=256)continue;
+                        const uint32_t raw=state.tex[ns][sl];const int id=int(raw&0xfffff);auto tex=table.find(id);
+                        if(tex==table.end()){xbg_logf("SCENE_BIND_TEX b=%u s=%u raw=%08x id=%d absent",b.binding,sl,raw,id);continue;}
+                        auto im=images.find(tex->second.texture.serial);
+                        const bool gw=im!=images.end()&&im->second->gpu_written;
+                        if(tex->second.texture.d.width==40 && tex->second.texture.d.height==24 && !scene_rt_grid)
+                            scene_rt_grid=&tex->second.texture;
+                        xbg_logf("SCENE_BIND_TEX b=%u s=%u raw=%08x %ux%u fmt=%#x serial=%llx mem=%p gw=%d",
+                            b.binding,sl,raw,tex->second.texture.d.width,tex->second.texture.d.height,tex->second.texture.d.format,
+                            (unsigned long long)tex->second.texture.serial,tex->second.texture.mem,int(gw));
+                    }
+                }else if(b.source==XBG_SOURCE_UNIFORM||b.source==XBG_SOURCE_STORAGE){
+                    auto &r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][b.slot]:state.sb[ns][b.slot];
+                    xbg_logf("SCENE_BIND_BUF b=%u %s s=%u addr=%p size=%zu",b.binding,
+                        b.source==XBG_SOURCE_UNIFORM?"ubo":"sb",b.slot,(void*)uintptr_t(r.address),r.size);
+                }
+            }
+            for(unsigned i=0;i<dbg_depth_rt_n;i++){auto &d=dbg_depth_rt[i];
+                xbg_logf("SCENE_DEPTH_RT %ux%u fmt=%#x mem=%llx draws=%u",d.w,d.h,d.fmt,(unsigned long long)d.mem,d.n);}
+            xbg_logf("SCENE_SHADOW_FR fr=%llu depth_entries=%u shadow512_draws=%u clears=%u",
+                (unsigned long long)fr,dbg_depth_rt_n,dbg_shadow_draws,dbg_shadow_clears);
+        }
+    }
+    // 一次性：阴影掩码 pass（fs=dd9af42a）的真实输入与常量。输出全 0 只有两种可能：级联深度图本身是空的，或
+    // c3 里的级联矩阵/比较参数不对；把两者同时照下来，下一次判断就不用猜。
+    // Once: the shadow-mask pass's real inputs and constants. An all-zero output can only be an empty cascade depth
+    // map or wrong cascade matrices in c3, so record both and the next step needs no guessing.
+    {
+        static bool mask_logged=false;
+        if(!mask_logged && fr>=scene_rt_min_frame && state.shader[4] && state.shader[4]->key.compare(0,8,"dd9af42a")==0){
+            mask_logged=true;
+            const tex_t *d0=state.rt.color[0];
+            xbg_logf("MASK_DRAW fr=%llu dst=%p %ux%u fmt=%#x",(unsigned long long)fr,(void*)d0,
+                d0?d0->d.width:0,d0?d0->d.height:0,d0?d0->d.format:0);
+            for(auto &b:state.shader[4]->bindings){
+                if(b.source==XBG_SOURCE_TEXTURE){
+                    for(unsigned e=0;e<b.count;e++){const unsigned sl=b.slot+e;if(sl>=256)continue;
+                        auto tex=table.find(int(state.tex[ns][sl]&0xfffff));
+                        if(tex==table.end()){xbg_logf("MASK_TEX b=%u s=%u absent",b.binding,sl);continue;}
+                        if(sl==144)scene_rt_shadow=&tex->second.texture;
+                        xbg_logf("MASK_TEX b=%u s=%u %ux%u fmt=%#x serial=%llx mem=%p",
+                            b.binding,sl,tex->second.texture.d.width,tex->second.texture.d.height,tex->second.texture.d.format,
+                            (unsigned long long)tex->second.texture.serial,tex->second.texture.mem);}
+                }else if(b.source==XBG_SOURCE_UNIFORM||b.source==XBG_SOURCE_STORAGE){
+                    auto &r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][b.slot]:state.sb[ns][b.slot];
+                    xbg_logf("MASK_BUF b=%u s=%u addr=%p size=%zu",b.binding,b.slot,(void*)uintptr_t(r.address),r.size);
+                    if(b.source==XBG_SOURCE_UNIFORM && r.address && r.size>=8*4){
+                        const float *ff=reinterpret_cast<const float*>(uintptr_t(r.address));
+                        static const int pick[28]={0,1,2,3,4,5,6,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,57,66,69,70};
+                        char line[1200];size_t o=0;line[0]=0;
+                        for(int k=0;k<28;k++){const int idx=pick[k];if(size_t(idx*4+4)>r.size)continue;
+                            int w=snprintf(line+o,sizeof line-o,"%s%d:%g/%08x",o?",":"",idx,ff[idx],reinterpret_cast<const uint32_t*>(ff)[idx]);if(w>0)o+=size_t(w);}
+                        xbg_logf("MASK_C b=%u s=%u %s",b.binding,b.slot,line);}
+                }
+            }
+        }
+    }
+    // 一次性：游戏内 G-buffer（前向材质）draw 的完整绑定。场景色只有 7% 非零，问题在材质着色这一环，
+    // 所以要确认它需要的常量/存储缓冲是否真的绑上了（含 slot 8..15），而不是靠"grep 不到"下结论。
+    // Once: the full binding set of an in-game G-buffer (forward material) draw. The scene colour is only 7% non-zero,
+    // so the material shading is where the light is lost; confirm whether its uniform/storage buffers (slot 8..15
+    // included) are actually bound instead of concluding from "grep found nothing".
+    {
+        static bool mat_logged=false;
+        if(!mat_logged && fr>=scene_rt_min_frame && state.rt.n>=4 && state.shader[4]){
+            mat_logged=true;
+            xbg_logf("MAT_DRAW fr=%llu fs=%s n=%u dst=%ux%u",(unsigned long long)fr,state.shader[4]->key.c_str(),
+                state.rt.n,state.rt.color[0]?state.rt.color[0]->d.width:0,state.rt.color[0]?state.rt.color[0]->d.height:0);
+            for(auto &b:state.shader[4]->bindings){
+                if(b.source==XBG_SOURCE_TEXTURE||b.source==XBG_SOURCE_IMAGE){
+                    for(unsigned e=0;e<b.count;e++){const unsigned sl=b.slot+e;if(sl>=256)continue;
+                        auto tex=table.find(int(state.tex[ns][sl]&0xfffff));
+                        if(tex==table.end()){xbg_logf("MAT_TEX b=%u s=%u absent",b.binding,sl);continue;}
+                        if(tex->second.texture.d.width==32 && tex->second.texture.d.height==32){
+                            if(sl==128 && !scene_rt_mattex[0])scene_rt_mattex[0]=&tex->second.texture;
+                            if(sl==129 && !scene_rt_mattex[1])scene_rt_mattex[1]=&tex->second.texture;}
+                        xbg_logf("MAT_TEX b=%u s=%u %ux%u fmt=%#x serial=%llx mem=%p size=%zu off=%d lv=%u",b.binding,sl,tex->second.texture.d.width,
+                            tex->second.texture.d.height,tex->second.texture.d.format,(unsigned long long)tex->second.texture.serial,
+                            (void*)tex->second.texture.mem,tex->second.texture.L.size,tex->second.texture.off,
+                            tex->second.texture.d.levels);}
+                }else if(b.source==XBG_SOURCE_UNIFORM||b.source==XBG_SOURCE_STORAGE){
+                    if(b.slot>=16){xbg_logf("MAT_BUF b=%u s=%u out-of-range",b.binding,b.slot);continue;}
+                    auto &r=b.source==XBG_SOURCE_UNIFORM?state.ub[ns][b.slot]:state.sb[ns][b.slot];
+                    xbg_logf("MAT_BUF b=%u %s s=%u addr=%p size=%zu",b.binding,
+                        b.source==XBG_SOURCE_UNIFORM?"ubo":"sb",b.slot,(void*)uintptr_t(r.address),r.size);
+                }
+            }
+            for(int st=0;st<6;st++)for(int bi=0;bi<16;bi++)if(dbg_ub_bind_n[st][bi]||dbg_sb_bind_n[st][bi])
+                xbg_logf("MAT_UBIND st=%d b=%d n=%u/%u ub=%p/%zu sb=%p/%zu",st,bi,dbg_ub_bind_n[st][bi],dbg_sb_bind_n[st][bi],
+                    (void*)uintptr_t(dbg_ub_mem[st][bi]),(size_t)0,(void*)0,(size_t)0);
+        }
+    }
+    // 一次性：把 tone-map 这次 draw 的每个纹理绑定照实记下来（binding、slot、尺寸、格式、serial）。
+    // 三列平铺的由来只能靠这个对上：哪张 3x9/小贴图被绑到了哪个 slot。
+    // Once: record every texture binding of the tone-map draw as it really is, so the 3-wide tiling can be traced to
+    // the exact texture object and slot.
+    // 诊断（临时）：只有标题画面的合成 key 会命中 `tonemap`，所以游戏内的这批探针从来没打过；
+    // 源码注释里的 12b92f34 实测是顶点 shader（stage=0），不是片元。改成结构条件：只要本 draw
+    // 写的是 1600x900 0x3f 场景目标，就按 shader key 各打一次，最多 6 个 key。
+    // DIAG(TEMP): `tonemap` only matches the title-screen composite key, so none of these probes ever ran in game;
+    // the 12b92f34 key cited in the comment is a vertex shader (stage 0), not the fragment one. Fire on the
+    // structural condition instead: any draw that writes the 1600x900 0x3f scene target, once per shader key.
+    {
+        static std::set<std::string> tone_seen;
+        const bool tone_fire=tonemap || (targets_scene && state.shader[4] && tone_seen.size()<6);
+        if(tone_fire && state.shader[4] && tone_seen.insert(state.shader[4]->key).second){
+            xbg_logf("TONE_BIND fr=%llu draw#%d vs=%s fs=%s dst=%ux%u",
+                (unsigned long long)fr,s_diag_draw_cnt,state.shader[0]?state.shader[0]->key.c_str():"none",
+                state.shader[4]->key.c_str(),state.rt.color[0]?state.rt.color[0]->d.width:0,state.rt.color[0]?state.rt.color[0]->d.height:0);
+            // 顶点程序的 c3[49] 与 quad 顶点属性：VS 用 c3[49].xy 去除 pixel 坐标得到 uv，这两处的比值决定画面平铺几份。
+            // The vertex program's c3[49] and the quad's vertex attributes: the VS divides pixel coordinates by c3[49].xy to
+            // get the uv, so their ratio decides how many times the picture tiles.
+            for(int s=0;s<6;s++)for(int b=0;b<10;b++){auto &u=state.ub[s][b];if(!u.address)continue;const float *f=reinterpret_cast<const float*>(uintptr_t(u.address));
+                xbg_logf("TONE_UB st=%d b=%d size=%llu [0]=%g,%g,%g,%g [29]=%g,%g,%g,%g [48]=%g,%g",
+                    s,b,(unsigned long long)u.size,f[0],f[1],f[2],f[3],f[29*4+0],f[29*4+1],f[29*4+2],f[29*4+3],f[48*4+0],f[48*4+1]);}
+            for(auto &b:state.shader[4]->bindings){
+                const char *src=b.source==XBG_SOURCE_UNIFORM?"ubo":b.source==XBG_SOURCE_STORAGE?"ssbo":b.source==XBG_SOURCE_TEXTURE?"tex":b.source==XBG_SOURCE_IMAGE?"img":b.source==XBG_SOURCE_SUPPORT?"support":b.source==XBG_SOURCE_DRIVER0?"driver0":b.source==XBG_SOURCE_DRIVER2?"driver2":"other";
+                if(b.source==XBG_SOURCE_UNIFORM||b.source==XBG_SOURCE_STORAGE){auto &r=b.source==XBG_SOURCE_UNIFORM?state.ub[1][b.slot]:state.sb[1][b.slot];
+                    xbg_logf("TONE_DESC b=%u %s slot=%u addr=%p size=%zu",b.binding,src,b.slot,reinterpret_cast<void*>(uintptr_t(r.address)),size_t(r.size));}
+                else xbg_logf("TONE_DESC b=%u %s slot=%u",b.binding,src,b.slot);
+            }
+            // 阴影视图是否真的被画过：D16 512x512 的 draw 计数、清值、深度写/测试状态。
+            xbg_logf("SHADOW_FR fr=%llu draws=%u nocolor=%u shadow512=%u clears=%u clearv=%g dw=%u dt=%u blend=%u vs=%s fs=%s",
+                (unsigned long long)fr,dbg_shadow_draws,dbg_nocolor_draws,dbg_shadow_nocolor,dbg_shadow_clears,dbg_shadow_clear,
+                dbg_shadow_dw,dbg_shadow_dt,dbg_shadow_blend,dbg_shadow_vs,dbg_shadow_fs);
+            // 每个槽绑过几次、最后来源命令号与 guest mem：0 次 = guest 从未提交，>0 而当前为空 = 我们丢的。
+            for(int st=0;st<6;st++)for(int b=0;b<16;b++)if(dbg_ub_bind_n[st][b]||dbg_sb_bind_n[st][b]){auto &r=state.ub[st][b],&q=state.sb[st][b];
+                xbg_logf("UB_BIND st=%d b=%d n=%u/%u ub=%p/%zu sb=%p/%zu seq=%llu mem=%llx",st,b,dbg_ub_bind_n[st][b],dbg_sb_bind_n[st][b],
+                    reinterpret_cast<void*>(uintptr_t(r.address)),size_t(r.size),reinterpret_cast<void*>(uintptr_t(q.address)),size_t(q.size),
+                    (unsigned long long)dbg_ub_bind_seq[st][b],(unsigned long long)dbg_ub_mem[st][b]);}
+            // SSBO 全景：2.88 MB 的 1600x900x2 就是逐像素光源索引；全 0 等于“没有光源”。
+            for(int b=0;b<16;b++){auto &r=state.sb[1][b];if(!r.address||!r.size)continue;const uint8_t *p=reinterpret_cast<const uint8_t*>(uintptr_t(r.address));
+                size_t nz=0,first=r.size;
+                for(size_t i=0;i<r.size;i++)if(p[i]){if(first==r.size)first=i;++nz;}
+                xbg_logf("SB_SCAN st=1 b=%d size=%zu nonzero=%zu first=%zu",b,size_t(r.size),nz,first);
+                if(first<r.size){const uint16_t *h=reinterpret_cast<const uint16_t*>(p);xbg_logf("SB_U16 st=1 b=%d first_off=%zu v=%u,%u,%u,%u,%u,%u,%u,%u",b,first,
+                    h[first/2],h[first/2+1],h[first/2+2],h[first/2+3],h[first/2+4],h[first/2+5],h[first/2+6],h[first/2+7]);
+                    unsigned shown=0;for(size_t g=first&~size_t(15);g+16<=r.size && shown<16;g+=16){const uint32_t *q=reinterpret_cast<const uint32_t*>(p+g);if(!(q[0]|q[1]|q[2]|q[3]))continue;
+                        xbg_logf("SB_GROUP st=1 b=%d off=%zu u=%u,%u,%u,%u",b,g,q[0],q[1],q[2],q[3]);++shown;}}}
+            // 非零的 16 字节组：SSBO 先打（光源/阴影数据最可能在这里），再打 UBO；光源只能靠内容找结构。
+            {unsigned lines=0;const unsigned cap=260;
+             auto dump=[&](const char *tag,int st,int b,uint64_t addr,size_t size,unsigned lim){
+                if(!addr||!size||lines>=cap)return;const uint32_t *w32=reinterpret_cast<const uint32_t*>(uintptr_t(addr));
+                const unsigned groups=unsigned(std::min<size_t>(size,4096)/16);unsigned shown=0;
+                for(unsigned g=0;g<groups && lines<cap;g++){const uint32_t *q=w32+g*4;if(!(q[0]|q[1]|q[2]|q[3]))continue;
+                    const float *f=reinterpret_cast<const float*>(q);
+                    xbg_logf("UB_GROUP %s st=%d b=%d sz=%zu g=%u u=%u,%u,%u,%u f=%g,%g,%g,%g",tag,st,b,size,g,q[0],q[1],q[2],q[3],f[0],f[1],f[2],f[3]);++lines;if(++shown>=lim)break;}};
+             for(int b=0;b<16;b++){auto &r=state.sb[1][b];dump("ssbo",1,b,r.address,r.size,48);}
+             for(int b=0;b<16;b++){auto &r=state.ub[1][b];dump("ubo",1,b,r.address,r.size,24);}
+             for(int b=0;b<16;b++){auto &r=state.ub[0][b];dump("ubo",0,b,r.address,r.size,12);}}
+            // 1024 字节的片元槽 1：按 u16 再看一遍，判断它是整数/半浮表还是被写坏的 float 块。
+            {auto &u=state.ub[1][1];if(u.address){const uint16_t *h=reinterpret_cast<const uint16_t*>(uintptr_t(u.address));
+                xbg_logf("UB_SLOT1 addr=%llx size=%zu u16=%u,%u,%u,%u,%u,%u,%u,%u | %u,%u,%u,%u,%u,%u,%u,%u",
+                    (unsigned long long)u.address,size_t(u.size),h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],h[8],h[9],h[10],h[11],h[12],h[13],h[14],h[15]);}}
+            if(state.shader[0])for(auto loc:state.shader[0]->inputs){if(loc>=16)continue;va_st a;memcpy(&a,&state.attrib[loc],4);if(!a.fmt)continue;
+                auto r=state.vb[a.stream];if(!r.address)continue;const uint32_t stride=state.stream[a.stream].stride;
+                for(unsigned k=0;k<3;k++){if(uint64_t(a.offset)+uint64_t(k)*stride+16>r.size)break;
+                    const uint32_t *p=reinterpret_cast<const uint32_t*>(uintptr_t(r.address)+a.offset+uint64_t(k)*stride);
+                    const float *q=reinterpret_cast<const float*>(p);
+                    xbg_logf("TONE_VTX loc=%u fmt=%#x off=%u stride=%u k=%u f=%g,%g,%g,%g x=%08x %08x %08x %08x",loc,a.fmt,a.offset,stride,k,
+                        q[0],q[1],q[2],q[3],p[0],p[1],p[2],p[3]);}}
+            for(auto &b:state.shader[4]->bindings){
+                if(b.source!=XBG_SOURCE_TEXTURE)continue;
+                for(unsigned e=0;e<b.count;e++){
+                    const unsigned sl=b.slot+e;if(sl>=256)continue;
+                    const uint32_t raw=state.tex[ns][sl];const int id=int(raw&0xfffff);auto tex=table.find(id);
+                    if(tex==table.end()){xbg_logf("TONE_BIND b=%u s=%u raw=%08x id=%d absent",b.binding,sl,raw,id);continue;}
+                    xbg_logf("TONE_BIND b=%u s=%u raw=%08x id=%d %ux%u fmt=%#x serial=%llx mem=%p",
+                        b.binding,sl,raw,id,tex->second.texture.d.width,tex->second.texture.d.height,
+                        tex->second.texture.d.format,(unsigned long long)tex->second.texture.serial,tex->second.texture.mem);
+                }
+            }
+        }
+    }
+}
+
 void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instances=1,uint32_t first_instance=0,const GpuIndexedArgs *gpu_args=nullptr){preflight_cpu_reads();CPU_SCOPE(Draw);DrawRoot draw_timing_root(&cpu_scope);provenance_draw();
+    // Dynamic draw skip from /sdcard/skip.txt
+    {
+        static int s_skip_start = -1, s_skip_end = -1;
+        static uint64_t s_last_skip_fr = ~0ull;
+        uint64_t fr = stats.presents.load();
+        if ((fr % 15) == 0 && fr != s_last_skip_fr) {
+            s_last_skip_fr = fr;
+            FILE *sf = fopen("/sdcard/skip.txt", "r");
+            if (!sf) sf = fopen("/sdcard/Android/data/org.snk.the1st.gamewindow/files/skip.txt", "r");
+            if (sf) {
+                int st = -1, ed = -1;
+                if (fscanf(sf, "%d %d", &st, &ed) == 2) {
+                    if (st != s_skip_start || ed != s_skip_end) {
+                        s_skip_start = st;
+                        s_skip_end = ed;
+                        xbg_logf("[snk-skip] Active skip range: %d to %d", s_skip_start, s_skip_end);
+                    }
+                }
+                fclose(sf);
+            } else {
+                s_skip_start = s_skip_end = -1;
+            }
+        }
+        if (s_skip_start >= 0 && (s_diag_draw_cnt + 1) >= s_skip_start && (s_diag_draw_cnt + 1) <= s_skip_end) {
+            // Keep the draw counter advancing across the skipped window: it used to stall on the first skipped draw, so
+            // every later draw of that frame was treated as inside the window and skipped too.
+            static uint64_t s_last_skip_cnt_fr = ~0ull;
+            const uint64_t sf = stats.presents.load();
+            if (sf != s_last_skip_cnt_fr) { s_last_skip_cnt_fr = sf; s_diag_draw_cnt = 0; }
+            s_diag_draw_cnt++;
+            return;
+        }
+    }
+    {
+        static uint64_t s_last_diag_fr = 0;
+        static int s_diag_color_cnt = 0;
+        uint64_t fr = stats.presents.load();
+        if (fr != s_last_diag_fr) {
+            s_last_diag_fr = fr;
+            s_diag_draw_cnt = 0;
+            s_diag_color_cnt = 0;
+        }
+        s_diag_draw_cnt++;
+        if (s_do_dump && s_dump_file) {
+            s_dump_draw_idx++;
+            std::string vs = state.shader[0] ? state.shader[0]->key : "none";
+            std::string fs = state.shader[4] ? state.shader[4]->key : "none";
+            const tex_t *c0 = state.rt.color[0];
+            fprintf(s_dump_file, "draw#%d prim=%d cnt=%d inst=%u vs=%s fs=%s vp=(%.1f,%.1f,%.1f,%.1f) sc=(%d,%d,%u,%u) rt0=%p(%ux%u fmt=%d) bl=%u src_rgb=%u dst_rgb=%u dt=%u dw=%u df=%u ds=%p\n",
+                s_dump_draw_idx, prim, count, instances, vs.c_str(), fs.c_str(),
+                state.viewport.x, state.viewport.y, state.viewport.width, state.viewport.height,
+                state.scissor.offset.x, state.scissor.offset.y, state.scissor.extent.width, state.scissor.extent.height,
+                c0, c0 ? c0->d.width : 0, c0 ? c0->d.height : 0, c0 ? c0->d.format : 0,
+                state.color.blend_en, state.blend[0].src_rgb, state.blend[0].dst_rgb,
+                state.ds.dt, state.ds.dw, state.ds.df, state.rt.depth);
+            if (state.shader[4] && state.texture_pool.pool) {
+                unsigned ns = nvn_stage[4];
+                PoolKey pk = pool_key(&state.texture_pool);
+                auto pool = textures.find(pk);
+                auto &table = pool == textures.end() ? legacy_textures : pool->second;
+                for (auto &b : state.shader[4]->bindings) {
+                    if (b.source != XBG_SOURCE_TEXTURE) continue;
+                    for (unsigned e = 0; e < b.count; e++) {
+                        unsigned sl = b.slot + e;
+                        if (sl >= 256) continue;
+                        int id = int(state.tex[ns][sl] & 0xfffff);
+                        auto tex = table.find(id);
+                        if (tex != table.end()) {
+                            auto im = images.find(tex->second.texture.serial);
+                            if (im != images.end()) {
+                                fprintf(s_dump_file, "  FS_TEX b=%u s=%u: %ux%u fmt=%d mem=%p\n",
+                                    b.binding, sl, im->second->width, im->second->height, (int)im->second->fmt, tex->second.texture.mem);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if ((fr % 30) == 0) {
+            if (state.rt.color[0]) {
+                const tex_t *c0 = state.rt.color[0];
+                s_diag_color_cnt++;
+                if (c0->d.format != 63 || s_diag_color_cnt <= 5) {
+                    std::string vs = state.shader[0] ? state.shader[0]->key : "none";
+                    std::string fs = state.shader[4] ? state.shader[4]->key : "none";
+                    std::string tex_info = "";
+                    if (state.shader[4] && state.texture_pool.pool) {
+                        unsigned ns = nvn_stage[4];
+                        PoolKey pk = pool_key(&state.texture_pool);
+                        auto pool = textures.find(pk);
+                        auto &table = pool == textures.end() ? legacy_textures : pool->second;
+                        for (auto &b : state.shader[4]->bindings) {
+                            if (b.source != XBG_SOURCE_TEXTURE) continue;
+                            for (unsigned e = 0; e < b.count; e++) {
+                                unsigned sl = b.slot + e;
+                                if (sl >= 256) continue;
+                                int id = int(state.tex[ns][sl] & 0xfffff);
+                                auto tex = table.find(id);
+                                if (tex != table.end()) {
+                                    auto im = images.find(tex->second.texture.serial);
+                                    if (im != images.end()) {
+                                        char tb[128];
+                                        snprintf(tb, sizeof(tb), " [T%u:%u=%ux%u fmt=%d]", b.binding, sl, im->second->width, im->second->height, (int)im->second->fmt);
+                                        tex_info += tb;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    xbg_logf("[snk-cdraw] fr=%llu draw#%d col#%d vs=%s fs=%s cnt=%d prim=%d vp=(%.1f,%.1f,%.1f,%.1f) sc=(%d,%d,%u,%u) rt0=%p(%ux%u fmt=%d) bl=%u ds=%p%s",
+                        (unsigned long long)fr, s_diag_draw_cnt, s_diag_color_cnt, vs.c_str(), fs.c_str(), count, prim,
+                        state.viewport.x, state.viewport.y, state.viewport.width, state.viewport.height,
+                        state.scissor.offset.x, state.scissor.offset.y, state.scissor.extent.width, state.scissor.extent.height,
+                        c0, c0 ? c0->d.width : 0, c0 ? c0->d.height : 0, c0 ? c0->d.format : 0,
+                        state.color.blend_en, state.rt.depth, tex_info.c_str());
+                }
+            }
+        }
+    }
+    if(!gfx_skip_fs.empty() && state.shader[4] && gfx_skip_fs_matches(state.shader[4]->key.c_str())){
+        static int s_skipfs_once=0;if(!s_skipfs_once++)xbg_logf("gfx-skip-fs: skipping every draw with fs=%s",state.shader[4]->key.c_str());
+        return;
+    }
+    // RTPASS: every change of the colour render target inside one frame (memory address + format), so a post-process
+    // chain that renders into the same memory as the 3D scene target (in-place feedback) shows up directly.
+    if(scene_rt_dump_enabled && scene_rt_dumped<1 && (scene_rt_min_frame==0 ? scene_rt_draws>=200 : stats.presents.load()>=scene_rt_min_frame)){
+        const tex_t *c0=state.rt.color[0],*c1=state.rt.n>1?state.rt.color[1]:nullptr;
+        xbg_logf("ALLDRAW fr=%llu #%d mem=%p %ux%u fmt=%d mask=%u sc=%d,%d:%ux%u vp=%g,%g:%gx%g n=%d c1=%p/%ux%u fmt=%d fs=%s",
+            (unsigned long long)stats.presents.load(),s_diag_draw_cnt,c0?c0->mem:nullptr,c0?c0->d.width:0,c0?c0->d.height:0,c0?c0->d.format:0,
+            unsigned(state.mask.mask),state.scissor.offset.x,state.scissor.offset.y,state.scissor.extent.width,state.scissor.extent.height,
+            state.viewport.x,state.viewport.y,state.viewport.width,state.viewport.height,state.rt.n,
+            c1?c1->mem:nullptr,c1?c1->d.width:0,c1?c1->d.height:0,c1?c1->d.format:0,
+            state.shader[4]?state.shader[4]->key.c_str():"none");
+        if(state.rt.n>1){
+            char ab[320];size_t ao=0;ab[0]=0;
+            for(int i=0;i<state.rt.n && i<8;i++){
+                char one[96];int n=0;
+                if(state.rt.color[i]){Image &im=get_image(state.rt.color[i],false);
+                    n=snprintf(one,sizeof one,"%s%d:%llx:%p:gw%d:up%d",i?",":"",i,(unsigned long long)state.rt.color[i]->serial,(void*)im.image,int(im.gpu_written),int(im.uploaded));}
+                else n=snprintf(one,sizeof one,"%s%d:-",i?",":"",i);
+                if(n>0){ao+=size_t(n);if(ao>=sizeof ab)break;strncat(ab,one,sizeof ab-strlen(ab)-1);}
+            }
+            xbg_logf("ALLDRAW_ATT fr=%llu #%d n=%d fs=%s %s",(unsigned long long)stats.presents.load(),s_diag_draw_cnt,state.rt.n,
+                state.shader[4]?state.shader[4]->key.c_str():"none",ab);
+        }
+    }
+    if(scene_rt_dump_enabled)scene_rt_note_draw();
     // #region agent log
     // Draws that share the 8b27 depth buffer but write a different (or no) colour target: depth prepass candidates.
     if(flame_diag_enabled && fdiag_prevds && state.shader[0] && state.rt.depth && uint64_t(uintptr_t(state.rt.depth->mem))==fdiag_prevds && !(state.rt.color[0] && uint64_t(uintptr_t(state.rt.color[0]->mem))==fdiag_prev8)){
@@ -3872,6 +4476,21 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     need(state.rt.n>=0 && state.rt.n<=8,"Invalid draw color target count");
     VkShaderModule modules[5]{};for(unsigned i=0;i<5;i++)if(state.shader[i])modules[i]=state.shader[i]->module;
     uint32_t active_colors=0;for(int i=0;i<state.rt.n;i++)if(state.rt.color[i])active_colors|=1u<<i;
+    // 整数颜色目标：翻译后的片元着色器用 OpBitcast(float, int) 写，Vulkan 按数值转换成 0，必须换成整数输出。
+    // Integer color targets: the translated fragment shader writes through OpBitcast(float, int), which Vulkan
+    // converts numerically to zero; the module is rewritten to write the integers instead.
+    {uint32_t kinds=0;
+     for(int i=0;i<state.rt.n && i<8;i++){const tex_t *c=state.rt.color[i];if(!c)continue;
+        uint32_t k=0;switch(format(c->d.format)){
+        case VK_FORMAT_R8_UINT:case VK_FORMAT_R8G8_UINT:case VK_FORMAT_R8G8B8A8_UINT:case VK_FORMAT_B8G8R8A8_UINT:
+        case VK_FORMAT_R16_UINT:case VK_FORMAT_R16G16_UINT:case VK_FORMAT_R16G16B16A16_UINT:case VK_FORMAT_A2B10G10R10_UINT_PACK32:
+        case VK_FORMAT_R32_UINT:case VK_FORMAT_R32G32_UINT:case VK_FORMAT_R32G32B32A32_UINT:k=1;break;
+        case VK_FORMAT_R8_SINT:case VK_FORMAT_R8G8_SINT:case VK_FORMAT_R8G8B8A8_SINT:case VK_FORMAT_B8G8R8A8_SINT:
+        case VK_FORMAT_R16_SINT:case VK_FORMAT_R16G16_SINT:case VK_FORMAT_R16G16B16A16_SINT:case VK_FORMAT_A2B10G10R10_SINT_PACK32:
+        case VK_FORMAT_R32_SINT:case VK_FORMAT_R32G32_SINT:case VK_FORMAT_R32G32B32A32_SINT:k=2;break;
+        default:break;}
+        kinds|=k<<(2*i);}
+     if(kinds && state.shader[4]){VkShaderModule m=integer_output_module(state.shader[4],kinds);if(m)modules[4]=m;}}
     static std::vector<VkPipelineShaderStageCreateInfo> stages;stages.assign(5,VkPipelineShaderStageCreateInfo{});uint32_t stage_count=0;   // draw(): graphics thread only, not re-entrant
     int stage_result=xbg_graphics_stages(modules,state.rt.depth!=nullptr,active_colors,state.mask.mask,state.ms.a2c,stages.data(),&stage_count);
     if(stage_result)xbg_fatalf("Invalid graphics stage/depth-only state: %d count=%d first=%d prim=%d indexed=%u instances=%u colors=%#x mask=%#x depth=%u a2c=%u discard=%u vs=%s fs=%s",stage_result,count,first,prim,unsigned(indexed!=nullptr),instances,active_colors,state.mask.mask,unsigned(state.rt.depth!=nullptr),unsigned(state.ms.a2c),unsigned(state.rast_discard),state.shader[0]?state.shader[0]->key.c_str():"none",state.shader[4]?state.shader[4]->key.c_str():"none");stages.resize(stage_count);need(count>=0 && first>=0,"Negative draw range");if(!count || (indexed && indexed->instances==0 && !gpu_args))return;provenance_draw();
@@ -3929,6 +4548,11 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     if(rs.rasterizerDiscardEnable){rs.polygonMode=VK_POLYGON_MODE_FILL;rs.cullMode=VK_CULL_MODE_NONE;rs.frontFace=VK_FRONT_FACE_COUNTER_CLOCKWISE;rs.lineWidth=1;rs.depthBiasEnable=VK_FALSE;rs.depthBiasConstantFactor=0;rs.depthBiasClamp=0;rs.depthBiasSlopeFactor=0;rs.depthClampEnable=VK_FALSE;}
     VkPipelineMultisampleStateCreateInfo ms{VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO};ms.rasterizationSamples=p.samples;ms.alphaToCoverageEnable=state.ms.a2c;need(!state.ms.sl_en,"Custom sample locations unsupported");need(!state.ms.samples || state.ms.samples==uint32_t(p.samples),"NVN sample count differs from attachments");need(p.samples==VK_SAMPLE_COUNT_1_BIT || state.ms.enable,"Disabled multisampling on multisample target needs coverage emulation");
     VkPipelineDepthStencilStateCreateInfo ds{VK_STRUCTURE_TYPE_PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO};ds.depthTestEnable=state.ds.dt;ds.depthWriteEnable=state.ds.dw;ds.depthCompareOp=VkCompareOp(state.ds.df-1);ds.stencilTestEnable=state.ds.st;ds.front=stencil(false);ds.back=stencil(true);ds.depthBoundsTestEnable=state.bounds.enable;ds.minDepthBounds=state.bounds.minimum;ds.maxDepthBounds=state.bounds.maximum;need(!ds.depthBoundsTestEnable || cfg.enabled_core.depthBounds,"Depth bounds feature disabled");
+    // Depth-path facts once per distinct NVN depth func: the mapped VkCompareOp, whether the test writes, the viewport depth
+    // range and the attachment format. Printed regardless of the gfx-depth-always A/B so the "before" numbers are on record.
+    {static uint32_t seen_df=0;const uint32_t df=uint32_t(state.ds.df);
+     if(df<32 && !(seen_df&(1u<<df))){seen_df|=1u<<df;
+        xbg_logf("NVN depth func first use nvn=%u vk=%d test=%u write=%u viewport=%g/%g depthFmt=%#x depthExtent=%ux%u",df,df>=1&&df<=8?int(df-1):-1,unsigned(ds.depthTestEnable),unsigned(ds.depthWriteEnable),state.viewport.minDepth,state.viewport.maxDepth,state.rt.depth?state.rt.depth->d.format:0,state.rt.depth?state.rt.depth->d.width:0,state.rt.depth?state.rt.depth->d.height:0);}}
     const bool spell_depth_diagnostic=probe_is_active() && probe.spell_depth_test && state.shader[0] && state.shader[4] &&
         state.shader[0]->key=="41a5a80e5242a26c" && state.shader[4]->key=="b7dd0f48aea00196" &&
         ds.depthTestEnable && !ds.depthWriteEnable && ds.depthCompareOp==VK_COMPARE_OP_EQUAL;
@@ -4044,6 +4668,7 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     for(auto &b:vertex_buffers){VkDeviceSize off=b.second->offset;if(b.first<16 && bc.vb[b.first]==b.second->buffer && bc.vbo[b.first]==off){++binds_skipped;continue;}
         vkCmdBindVertexBuffers(c.command,b.first,1,&b.second->buffer,&off);if(b.first<16){bc.vb[b.first]=b.second->buffer;bc.vbo[b.first]=off;}}
     pass_prof_draw(c.command);
+    if(state.shader[4] && state.shader[4]->key=="183334461b277951"){static bool tdl=false;if(!tdl){tdl=true;xbg_logf("TONE_DRAW issued count=%u indexed=%d instances=%u first=%u",count,indexed?1:0,instances,first);}}
     if(indexed){if(bc.ib!=ib->buffer || bc.ibo!=ib->offset || bc.it!=index_type){vkCmdBindIndexBuffer(c.command,ib->buffer,ib->offset,index_type);bc.ib=ib->buffer;bc.ibo=ib->offset;bc.it=index_type;}else ++binds_skipped;if(gpu_args){retire_object(gpu_args->owned);vkCmdDrawIndexedIndirect(c.command,gpu_args->owned->view.buffer,gpu_args->offset,1,20);++gpu_indexed_draws;if(gpu_indexed_draws<=12 || !(gpu_indexed_draws%600))xbg_logf("NVN GPU indexed resident issued=%llu frame=%llu",(unsigned long long)gpu_indexed_draws,(unsigned long long)stats.presents.load());}else vkCmdDrawIndexed(c.command,count,indexed->instances,0,indexed->base_vertex,indexed->base_instance);}else vkCmdDraw(c.command,count,instances,first,first_instance);
     if(probe_is_active())probe_draw_occlusion();
     if(attachment_barrier_enabled){
@@ -4369,6 +4994,22 @@ void dispatch(p_dispatch p,uint64_t indirect_address=0){overlay_shadow={};struct
     if(!gpu_indirect){need(p.x>=0 && p.y>=0 && p.z>=0,"Negative compute dispatch");if(!p.x||!p.y||!p.z)return;need(uint32_t(p.x)<=properties.limits.maxComputeWorkGroupCount[0] && uint32_t(p.y)<=properties.limits.maxComputeWorkGroupCount[1] && uint32_t(p.z)<=properties.limits.maxComputeWorkGroupCount[2],"Compute dispatch exceeds device limit");}probe_dispatch_begin();
     uint64_t indirect_serial=slot_serial;Commands c;fire_trace_compute_begin();Descriptors &d=acquire_descriptors();descriptors(d,c,true);need(!gpu_indirect || (slot_serial==indirect_serial && slots[slot_index].cmd==c.command),"Indirect dispatch source slot retired during descriptor preparation");for(auto *im:storage_rg16_images)need(std::find(sampled_rg16_images.begin(),sampled_rg16_images.end(),im)==sampled_rg16_images.end(),"RG16 same-dispatch sampled/storage feedback requires explicit supported subresource semantics");VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=state.shader[5]->module;ci.stage.pName="main";ci.layout=d.pipeline_layout;PipelineLease pipeline;{CPU_SCOPE(Pipeline);XbgPipelineKey key;bool cacheable=xbg_compute_pipeline_key(key,ci,d.entry->definition.view());pipeline_lookup(pipeline,key,cacheable,nullptr,&ci);}vkCmdBindPipeline(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline.pipeline);vkCmdBindDescriptorSets(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,d.pipeline_layout,0,1,&d.set,uint32_t(d.dynamic_offsets.size()),d.dynamic_offsets.data());int prof_dispatch=pass_prof_compute_begin(c.command,p);
     auto indirect_proof=indirect_template_batch(d,p,gpu_indirect);probe_indirect_template(p);
+    // gfx-cs-map: only 3D storage images are reported (that is what the light
+    // LUTs are), and only when the (shader, grid) pair changes, so one line per
+    // producer instead of one per dispatch.
+    if(cs_map_enabled){
+        bool three_d=false;for(auto *im:cs_map_images)if(im && (im->depth>1 || im->create.imageType==VK_IMAGE_TYPE_3D))three_d=true;
+        if(three_d){
+            static std::string last;static unsigned lines=0;
+            std::string sig=state.shader[5]->key;char buf[96];snprintf(buf,sizeof buf,":%d,%d,%d",p.x,p.y,p.z);sig+=buf;
+            if(sig!=last && lines<4000){
+                last=sig;++lines;
+                std::string im;
+                for(auto *m:cs_map_images){if(!m)continue;char one[96];snprintf(one,sizeof one," %ux%ux%u/s%u/gw%d",m->width,m->height,m->depth,unsigned(m->source.serial),int(m->gpu_written));im+=one;}
+                xbg_logf("CSMAP fr=%llu shader=%s xyz=%d,%d,%d local=%u,%u,%u images%s",(unsigned long long)stats.presents.load(),state.shader[5]->key.c_str(),p.x,p.y,p.z,state.shader[5]->local[0],state.shader[5]->local[1],state.shader[5]->local[2],im.c_str());
+            }
+        }
+    }
     if(gpu_indirect){vkCmdDispatchIndirect(c.command,indirect.buffer,indirect.offset);static unsigned notes=0;if(notes++<8)xbg_logf("NVN GPU indirect dispatch shader=%s address=%#llx sourceSlotSerial=%llu",state.shader[5]->key.c_str(),(unsigned long long)indirect_address,(unsigned long long)indirect_serial);}
     else vkCmdDispatch(c.command,p.x,p.y,p.z);
     fire_trace_sort_end(c.command);fire_trace_hist_end(c.command);fire_trace_compute_end(c.command);
@@ -4447,6 +5088,8 @@ void clear_attachment(const p_clear_color *color,const p_clear_ds *depth,int sca
         VkImageAspectFlags requested=(depth->depth_mask?VK_IMAGE_ASPECT_DEPTH_BIT:0)|(sm?VK_IMAGE_ASPECT_STENCIL_BIT:0);need((aspect(state.rt.depth->d.format)&requested)==requested,"Clear requests absent depth/stencil aspect");
         if(depth->depth_mask){need(depth->depth>=0 && depth->depth<=1,"Depth clear value outside normalized range");a.aspectMask|=VK_IMAGE_ASPECT_DEPTH_BIT;}
         partial=sm && sm!=255;        if(sm && !partial)a.aspectMask|=VK_IMAGE_ASPECT_STENCIL_BIT;a.clearValue.depthStencil={depth->depth,uint32_t(depth->stencil)&255};
+        static unsigned ds_notes=0;if(ds_notes++<8)xbg_logf("NVN clear-value depth nvn=%#x vk=%u extent=%ux%u depth=%g stencil=%u depthMask=%u stencilMask=%u",state.rt.depth->d.format,unsigned(format(state.rt.depth->d.format)),state.rt.depth->d.width,state.rt.depth->d.height,depth->depth,unsigned(depth->stencil)&255,unsigned(depth->depth_mask),sm);
+        if(scene_rt_dump_enabled && state.rt.depth->d.width==512 && state.rt.depth->d.height==512 && state.rt.depth->d.format==0x32){++dbg_shadow_clears;dbg_shadow_clear=depth->depth;}
     }
     // #region agent log
     if(flame_diag_enabled && fdiag_state_seen){
@@ -4551,6 +5194,13 @@ bool guest_texture_write(const tex_t *t,unsigned level,unsigned layer,const NVNc
 }
 void copy_texture_buffer(const p_copy_b2t &request,bool to_buffer){preflight_cpu_reads();probe_boundary("copy-texture-buffer");
     need(request.tex,"Null buffer image texture");
+    if(scene_rt_dump_enabled && stats.presents.load()>=scene_rt_min_frame){const unsigned k=to_buffer?2u:1u;++dbg_copy_n[k];
+        if(dbg_copy_log[k]<40){++dbg_copy_log[k];
+            xbg_logf("COPY_%s fr=%llu tex=%p mem=%p %ux%u fmt=%#x serial=%llx region=%d,%d,%d %dx%dx%d lv=%u ly=%u buf=%#llx",to_buffer?"T2B":"B2T",
+                (unsigned long long)stats.presents.load(),(const void*)request.tex,(void*)request.tex->mem,
+                request.tex->d.width,request.tex->d.height,request.tex->d.format,(unsigned long long)request.tex->serial,
+                request.r.xoffset,request.r.yoffset,request.r.zoffset,request.r.width,request.r.height,request.r.depth,
+                request.has_view?request.view.base_level:0,request.has_view?request.view.min_layer:0,(unsigned long long)request.src);}}
     tex_t stable=*request.tex;p_copy_b2t p=request;p.tex=&stable;
     if(p.tex->d.format == 0 && p.has_view && p.view.set_format && p.view.format != 0){
         stable.d.format = p.view.format;
@@ -4699,7 +5349,14 @@ void copy_texture_buffer(const p_copy_b2t &request,bool to_buffer){preflight_cpu
         }
     }else im.gpu_written=true,provenance_write(im,__LINE__);
 }
-void copy_texture(const p_copy_t2t &p){preflight_cpu_reads();probe_boundary("copy-texture");if(flame_diag_enabled && fdiag_prev8 && uint64_t(uintptr_t(p.dst->mem))==fdiag_prev8){char sb[16];snprintf(sb,sizeof sb,"%llx",(unsigned long long)(uintptr_t(p.src->mem)>>4)&0xfffffffull);fdiag_event('T',sb,"");}Image &s=get_image(p.src,true),&d=get_image(p.dst,false);{static unsigned n=0;if(n++<60)xbg_logf("NVN COPYT2T src=%llu fmt=%#x %ux%ux%u L%u lv%u -> dst=%llu fmt=%#x %ux%u L%u lv%u decoded=%d/%d region=%d,%d,%d %dx%dx%d -> %d,%d,%d sv=%d/%u/%u dv=%d/%u/%u",(unsigned long long)p.src->serial,p.src->d.format,s.width,s.height,s.depth,s.layers,s.levels,(unsigned long long)p.dst->serial,p.dst->d.format,d.width,d.height,d.layers,d.levels,int(s.decoded),int(d.decoded),p.sr.xoffset,p.sr.yoffset,p.sr.zoffset,p.sr.width,p.sr.height,p.sr.depth,p.dr.xoffset,p.dr.yoffset,p.dr.zoffset,int(p.has_sv),p.has_sv?p.sv.base_level:0,p.has_sv?p.sv.min_layer:0,int(p.has_dv),p.has_dv?p.dv.base_level:0,p.has_dv?p.dv.min_layer:0);}
+void copy_texture(const p_copy_t2t &p){preflight_cpu_reads();probe_boundary("copy-texture");if(flame_diag_enabled && fdiag_prev8 && uint64_t(uintptr_t(p.dst->mem))==fdiag_prev8){char sb[16];snprintf(sb,sizeof sb,"%llx",(unsigned long long)(uintptr_t(p.src->mem)>>4)&0xfffffffull);fdiag_event('T',sb,"");}
+    if(scene_rt_dump_enabled && stats.presents.load()>=scene_rt_min_frame){++dbg_copy_n[3];
+        if(dbg_copy_log[3]<40){++dbg_copy_log[3];
+            xbg_logf("COPY_T2T fr=%llu src=%p mem=%p %ux%u fmt=%#x serial=%llx -> dst=%p mem=%p %ux%u fmt=%#x serial=%llx region=%d,%d,%d %dx%dx%d -> %d,%d,%d",(unsigned long long)stats.presents.load(),
+                (const void*)p.src,(void*)p.src->mem,p.src->d.width,p.src->d.height,p.src->d.format,(unsigned long long)p.src->serial,
+                (const void*)p.dst,(void*)p.dst->mem,p.dst->d.width,p.dst->d.height,p.dst->d.format,(unsigned long long)p.dst->serial,
+                p.sr.xoffset,p.sr.yoffset,p.sr.zoffset,p.sr.width,p.sr.height,p.sr.depth,p.dr.xoffset,p.dr.yoffset,p.dr.zoffset);}}
+    Image &s=get_image(p.src,true),&d=get_image(p.dst,false);{static unsigned n=0;if(n++<60)xbg_logf("NVN COPYT2T src=%llu fmt=%#x %ux%ux%u L%u lv%u -> dst=%llu fmt=%#x %ux%u L%u lv%u decoded=%d/%d region=%d,%d,%d %dx%dx%d -> %d,%d,%d sv=%d/%u/%u dv=%d/%u/%u",(unsigned long long)p.src->serial,p.src->d.format,s.width,s.height,s.depth,s.layers,s.levels,(unsigned long long)p.dst->serial,p.dst->d.format,d.width,d.height,d.layers,d.levels,int(s.decoded),int(d.decoded),p.sr.xoffset,p.sr.yoffset,p.sr.zoffset,p.sr.width,p.sr.height,p.sr.depth,p.dr.xoffset,p.dr.yoffset,p.dr.zoffset,int(p.has_sv),p.has_sv?p.sv.base_level:0,p.has_sv?p.sv.min_layer:0,int(p.has_dv),p.has_dv?p.dv.base_level:0,p.has_dv?p.dv.min_layer:0);}
     if(p.has_sv && p.sv.set_format)(void)s.view_format(&p.sv);
     if(p.has_dv && p.dv.set_format)(void)d.view_format(&p.dv);
     // 已知ASTC-pack源是ASTC4x4，目的BC3及既有RGBA BC目标从建图起解码，不迁移已有内容。
@@ -5269,7 +5926,7 @@ void execute(const uint8_t *pc,unsigned depth,uint64_t &budget){
                 if(last.pending){pending_events.push_back({addr,mode,v,&last});++events_deferred;evguard::guard(addr);}else apply_event(addr,mode,v);
                 break;}
             complete_all();cpu_access(addr,4,10);snapshot_invalidate(addr,4);auto ptr=reinterpret_cast<uint32_t*>(addr);if(mode==NVN_EVENT_SIGNAL_MODE_ADD)__atomic_fetch_add(ptr,v,__ATOMIC_SEQ_CST);else{need(mode==NVN_EVENT_SIGNAL_MODE_WRITE,"Unknown event mode");__atomic_store_n(ptr,v,__ATOMIC_SEQ_CST);}break;}
-        case OP_COPY_B2B:{need(n>=24,"Truncated buffer copy");uint64_t a[3];memcpy(a,p,24);need(a[0]&&a[1]&&a[2]<=256ull*1024*1024,"Invalid buffer copy");if(gpu_buffer_copy(a[0],a[1],a[2]))break;cpu_access(a[0],a[2],11);invalidate_cpu_range(a[1],a[2]);memmove(reinterpret_cast<void*>(a[1]),reinterpret_cast<void*>(a[0]),a[2]);break;}
+        case OP_COPY_B2B:{need(n>=24,"Truncated buffer copy");uint64_t a[3];memcpy(a,p,24);need(a[0]&&a[1]&&a[2]<=256ull*1024*1024,"Invalid buffer copy");if(scene_rt_dump_enabled && stats.presents.load()>=scene_rt_min_frame){++dbg_copy_n[0];if(dbg_copy_log[0]<40){++dbg_copy_log[0];xbg_logf("COPY_B2B fr=%llu src=%#llx dst=%#llx n=%llu",(unsigned long long)stats.presents.load(),(unsigned long long)a[0],(unsigned long long)a[1],(unsigned long long)a[2]);}}if(gpu_buffer_copy(a[0],a[1],a[2]))break;cpu_access(a[0],a[2],11);invalidate_cpu_range(a[1],a[2]);memmove(reinterpret_cast<void*>(a[1]),reinterpret_cast<void*>(a[0]),a[2]);break;}
         case OP_UPDATE_UB:{need(n>=16,"Truncated uniform update");uint64_t a[2];memcpy(a,p,16);need(a[0] && a[1]<=n-16,"Invalid uniform update");invalidate_cpu_range(a[0],a[1]);memcpy(reinterpret_cast<void*>(a[0]),p+16,a[1]);break;}
         case OP_SET_RT:state.rt=payload<p_set_rt>(p,n);break;
         case OP_CLEAR_COLOR:{auto a=payload<p_clear_color>(p,n);if(state.render_cond_skip)break;if(flame_diag_enabled && fdiag_prev8 && state.rt.color[0] && uint64_t(uintptr_t(state.rt.color[0]->mem))==fdiag_prev8)fdiag_event('C',"","");clear_attachment(&a,nullptr);break;}
@@ -5283,7 +5940,8 @@ void execute(const uint8_t *pc,unsigned depth,uint64_t &budget){
         case OP_BIND_VATTR:{auto a=variable_payload<p_bind_vattr>(p,n);need(a.first==0 && a.n>=0 && a.n<=16 && n>=offsetof(p_bind_vattr,st)+size_t(a.n)*4,"Invalid vertex attribute record");need(xbg_vertex_attributes_replace(state.attrib,reinterpret_cast<const uint32_t*>(a.st),a.n)==0,"Invalid vertex attribute replacement");break;}
         case OP_BIND_VSTREAM:{auto a=variable_payload<p_bind_vstream>(p,n);need(a.first>=0 && a.n>=0 && a.first+a.n<=16 && n>=offsetof(p_bind_vstream,st)+size_t(a.n)*sizeof(vs_st),"Invalid vertex stream record");memcpy(state.stream+a.first,a.st,a.n*sizeof(vs_st));break;}
         case OP_BIND_VBUF:{auto a=variable_payload<p_bind_vbuf>(p,n);need(a.first>=0 && a.n>=0 && a.first+a.n<=16 && n>=offsetof(p_bind_vbuf,r)+size_t(a.n)*sizeof(NVNbufferRange),"Invalid vertex buffer record");memcpy(state.vb+a.first,a.r,a.n*sizeof(NVNbufferRange));break;}
-        case OP_BIND_UBO:case OP_BIND_SSBO:{auto a=payload<p_bind_buf>(p,n);need(a.stage>=0 && a.stage<6 && a.index>=0 && a.index<16,"Invalid shader buffer slot");(h.op==OP_BIND_UBO?state.ub:state.sb)[a.stage][a.index]={a.addr,a.size};++buf_gen[a.stage];break;}
+        case OP_BIND_UBO:case OP_BIND_SSBO:{auto a=payload<p_bind_buf>(p,n);need(a.stage>=0 && a.stage<6 && a.index>=0 && a.index<16,"Invalid shader buffer slot");(h.op==OP_BIND_UBO?state.ub:state.sb)[a.stage][a.index]={a.addr,a.size};++buf_gen[a.stage];
+            if(scene_rt_dump_enabled){if(h.op==OP_BIND_UBO){++dbg_ub_bind_n[a.stage][a.index];dbg_ub_bind_seq[a.stage][a.index]=budget;dbg_ub_mem[a.stage][a.index]=a.addr;}else ++dbg_sb_bind_n[a.stage][a.index];}break;}
         case OP_BIND_TEX:case OP_BIND_SAMP:case OP_BIND_IMG:case OP_BIND_TEX1:{
             // OP_BIND_TEX1 is the combined handle bind (nvn_obj.h p_bind_tex1): bind_rec turns it into the separate
             // texture / sampler form and adds the numbering bases of the pools the record was made with.
@@ -5664,6 +6322,12 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
       warm::keep_rewritten=shader_reuse!=0;xbg_logf("NVN shader loads take the warm-up's rewritten SPIR-V=%d (marker gfx-shader-reuse; 2 also rewrites and compares)",shader_reuse);}}
     xbg_module_id_hook=warm::module_id;{std::string lp=warm::list_path();FILE *nw=fopen((lp.substr(0,lp.find_last_of('/'))+"/gfx-no-warm").c_str(),"rb");warm::enabled=!nw;if(nw)fclose(nw);}warm::start();probe_init();
     wtrack::enabled=false;state=State{};state.color.logic_op=3;state.color.alpha_func=8;for(unsigned i=0;i<8;i++)state.blend[i]={i,2,1,2,1,1,1};stats.reset();timing=XbgCpuTiming(timing_clock);pipeline_counts={};pipeline_before={};pipeline_tick=0;timing_active=false;timing_first=timing_last=0;live_profile_used=false;descriptor_detail=false;descriptor_timing=XbgDescriptorTiming{};descriptor_root=nullptr;draw_detail=false;draw_timing=XbgDrawTiming{};draw_root=nullptr;completed=0;last_attachment_trace=UINT64_MAX;sampler_mirror_clamp_enabled=VK_FALSE;failed=false;error_text[0]=0;initialized=true;
+    {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');std::string mp=(cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-scene-rt";FILE *m=fopen(mp.c_str(),"rb");scene_rt_dump_enabled=m!=nullptr;scene_rt_min_frame=0;if(m){if(fscanf(m,"%u",&scene_rt_min_frame)!=1)scene_rt_min_frame=0;fclose(m);}xbg_logf("NVN scene RT dump=%d from frame %u (marker gfx-scene-rt)",int(scene_rt_dump_enabled),scene_rt_min_frame);}
+    {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-lut-canary").c_str(),"rb");lut_canary=m!=nullptr;if(m)fclose(m);xbg_logf("NVN 3D light-LUT canary=%d (marker gfx-lut-canary)",int(lut_canary));}
+    {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-cs-map").c_str(),"rb");cs_map_enabled=m!=nullptr;if(m)fclose(m);xbg_logf("NVN compute->storage-image map=%d (marker gfx-cs-map)",int(cs_map_enabled));}
+    {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-skip-fs").c_str(),"rb");gfx_skip_fs.clear();
+     if(m){char b[64]{};if(fgets(b,sizeof b,m)){std::string s(b);while(!s.empty()&&(s.back()=='\n'||s.back()=='\r'||s.back()==' '||s.back()=='\t'))s.pop_back();gfx_skip_fs=s;}fclose(m);}
+     xbg_logf("NVN skip draws by fragment shader prefix='%s' (marker gfx-skip-fs)",gfx_skip_fs.c_str());}
     {std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-sync-submit").c_str(),"rb");sync_submit_enabled=false;if(m){sync_submit_enabled=fgetc(m)=='1';fclose(m);}xbg_logf("NVN synchronous queue submits=%d (marker gfx-sync-submit)",int(sync_submit_enabled));
      FILE *sc=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-sem-chain").c_str(),"rb");
      const char *profile=getenv("FFRS_PROFILE_TABLET");
@@ -5957,13 +6621,13 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
     return fence<=completed;
 }
 extern "C" void xbg_legacy_finish(){gfx_drain();std::lock_guard<std::recursive_mutex> lock(mutex);need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();VK(vkQueueWaitIdle(cfg.queue));}
-static uint64_t s_target_frame_ns = 33333333ull; // Default 30 FPS (33.333333 ms)
+static uint64_t s_target_frame_ns = 0; // 0 = unthrottled (swapchain interval locks to 30 Hz without double pacing)
 static uint64_t s_next_present_ns = 0;
 static uint32_t s_pace_check_counter = 0;
 static int s_logged_target_fps = -1;
 
 static void xbg_refresh_target_fps() {
-    int target_fps = 30; // default 30 FPS for stable 30Hz target in game mode
+    int target_fps = 0; // default 0 (unthrottled software pacing; Vulkan swapchain handles 30Hz VSync)
     const char *env_fps = getenv("FFRS_TARGET_FPS");
     if (env_fps && atoi(env_fps) >= 0) target_fps = atoi(env_fps);
     const std::string marker = pipeline_cache_path().substr(0, pipeline_cache_path().find_last_of('/')) + "/gfx-target-fps";
@@ -6112,7 +6776,123 @@ void flame_diag_roi_read(){
     // #endregion
 }
 
-static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::lock_guard<std::recursive_mutex> lock(mutex);preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");probe_present(im);Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);fire_trace_present(im,c.command);c.finish();if(flame_diag_enabled)flame_diag_roi_record(im);submit_slots(false);if(flame_diag_enabled){gpu_sync(perf.sync_readback);flame_diag_roi_read();}uint64_t pace_ns=xbg_frame_pace();int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r){static unsigned err_n=0;if(err_n++<10)xbg_logf("Game presentation dropped/warning: %d",r);}++stats.presents;if(flame_diag_enabled){fdiag_present=texture->serial;fdiag_present_mem=uint64_t(uintptr_t(texture->mem));
+// gfx-scene-rt: full-image readback of the 3D scene target at present time (B10G11R11, 4 B/px, ~5.8 MB), 3 frames max.
+// Slot 0 = the 1600x900 fmt 0x3f attachment, slot 1 = the 1600x900 image the frame samples (the composite's input).
+struct SrtSlot{VkBuffer buf{};VkDeviceMemory mem{};uint8_t *map=nullptr;uint32_t w=0,h=0,fmt=0,fr=0,bpp=4;VkFormat vfmt=VK_FORMAT_UNDEFINED;uint64_t mem_addr=0,serial=0;void *img=nullptr;int gpu=0;const char *name="rt";};
+static SrtSlot srt_slots[32];
+static void srt_record_one(SrtSlot &s,const tex_t *t,const char *name,uint32_t min_dim=64,uint32_t slice=0){
+    s.w=s.h=0;
+    if(!t){if(min_dim<=16)xbg_logf("SCENE_RT %s absent",name);return;}
+    Image &im=get_image(t,false);
+    if(name[0]=='m'||name[0]=='g')xbg_logf("LUT_SHAPE %s img=%p %ux%ux%u layers=%u levels=%u vkfmt=%d bpp=%u usage=%#x gw=%d up=%d",name,(void*)im.image,im.width,im.height,im.depth,im.layers,im.levels,int(im.fmt),im.bpp,unsigned(im.usage),int(im.gpu_written),int(im.uploaded));
+    if(!im.image || (!(im.aspects&VK_IMAGE_ASPECT_COLOR_BIT) && !(im.aspects&VK_IMAGE_ASPECT_DEPTH_BIT)) || (im.bpp!=1 && im.bpp!=2 && im.bpp!=4 && im.bpp!=8) || im.width<min_dim || im.height<min_dim){
+        xbg_logf("SCENE_RT %s shape skip img=%p aspects=%d bpp=%u %ux%u min=%u",name,(void*)im.image,int(im.aspects),im.bpp,im.width,im.height,min_dim);return;}
+    if(im.samples!=VK_SAMPLE_COUNT_1_BIT){xbg_logf("SCENE_RT %s skipped %ux%u samples=%d",name,im.width,im.height,int(im.samples));return;}
+    if(!(im.usage&VK_IMAGE_USAGE_TRANSFER_SRC_BIT)){xbg_logf("SCENE_RT %s no TRANSFER_SRC usage=%#x %ux%u fmt=%d",name,unsigned(im.usage),im.width,im.height,int(im.fmt));return;}
+    const size_t bytes=size_t(im.width)*size_t(im.height)*im.bpp;
+    fdiag_staging(s.buf,s.mem,s.map,bytes);
+    if(!s.map)return;
+    Commands rc;
+    im.transition(rc.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+    VkBufferImageCopy r{};r.imageSubresource={(im.aspects&VK_IMAGE_ASPECT_DEPTH_BIT)?VK_IMAGE_ASPECT_DEPTH_BIT:VK_IMAGE_ASPECT_COLOR_BIT,0,0,1};r.imageExtent={im.width,im.height,1};
+    if(slice){if(im.depth>1)r.imageOffset.z=int32_t(slice);else r.imageSubresource.baseArrayLayer=slice;}
+    vkCmdCopyImageToBuffer(rc.command,im.image,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,s.buf,1,&r);
+    im.transition(rc.command,VK_IMAGE_LAYOUT_GENERAL);
+    rc.finish();
+    s.w=im.width;s.h=im.height;s.fmt=uint32_t(im.source.d.format);s.vfmt=im.fmt;s.fr=uint32_t(stats.presents.load());
+    s.mem_addr=uint64_t(uintptr_t(t->mem));s.serial=t->serial;s.name=name;s.bpp=uint32_t(im.bpp);s.img=(void*)im.image;s.gpu=int(im.gpu_written);
+}
+// 光照 LUT 的 guest 侧内容：若 guest 内存本身是稠密的，说明 guest 已填好、丢在我们没上传；若 guest 也是稀疏/零，
+// 说明生产者（compute 或某个被丢掉的 pass）根本没跑。
+// Guest-side content of a lighting LUT: dense guest memory means the guest filled it and we lost the upload;
+// sparse/zero guest memory means the producer never ran.
+static void srt_guest_scan(const char *name,const tex_t *t){
+    if(!t||!t->mem){xbg_logf("LUT_GUEST %s absent",name);return;}
+    const size_t n=t->L.size;
+    if(!n||n>(4u<<20)){xbg_logf("LUT_GUEST %s size=%zu skip",name,n);return;}
+    const uint8_t *b=reinterpret_cast<const uint8_t*>(t->mem);size_t nz=0;float mn=1e30f,mx=-1e30f;
+    for(size_t i=0;i<n;i++)if(b[i])++nz;
+    const float *f=reinterpret_cast<const float*>(b);
+    for(size_t i=0;i<n/4 && i<4096;i++){float v=f[i];if(v==v){if(v<mn)mn=v;if(v>mx)mx=v;}}
+    char head[192];int o=0;for(unsigned i=0;i<12 && i<n/4;i++)o+=snprintf(head+o,sizeof head-o,"%s%.4g",i?",":"",double(f[i]));
+    xbg_logf("LUT_GUEST %s mem=%p bytes=%zu nz=%.2f%% fmin=%.4g fmax=%.4g head=[%s]",name,(void*)t->mem,n,100.0*double(nz)/double(n),double(mn),double(mx),head);
+}
+void scene_rt_dump_record(){
+    if(!scene_rt_dump_enabled || scene_rt_dumped>=3 || !scene_rt_tex || scene_rt_draws<200 || stats.presents.load()<scene_rt_min_frame)return;
+    xbg_logf("COPY_COUNT fr=%llu b2b=%u b2t=%u t2b=%u t2t=%u",(unsigned long long)stats.presents.load(),dbg_copy_n[0],dbg_copy_n[1],dbg_copy_n[2],dbg_copy_n[3]);
+    static const char *in_names[6]={"in0","in1","in2","in3","in4","in5"};
+    static const char *small_names[4]={"small0","small1","small2","small3"};
+    srt_record_one(srt_slots[0],scene_rt_tex,"rt");
+    srt_record_one(srt_slots[1],scene_rt_bt,"bt");
+    srt_record_one(srt_slots[2],scene_rt_ds,"depth");
+    if(!srt_slots[2].w && scene_rt_ds){Image &d=get_image(scene_rt_ds,false);xbg_logf("SCENE_RT depth skip %ux%u aspects=%d bpp=%u vkfmt=%d samples=%d",d.width,d.height,int(d.aspects),d.bpp,int(d.fmt),int(d.samples));}
+    if(scene_rt_rt1 && &get_image(scene_rt_rt1,false)!=&get_image(scene_rt_tex,false) && &get_image(scene_rt_rt1,false)!=&get_image(scene_rt_bt,false))
+        srt_record_one(srt_slots[3],scene_rt_rt1,"rt1"); else srt_slots[3].w=0;
+    for(unsigned k=0;k<6;k++)srt_record_one(srt_slots[4+k],scene_rt_in[k],in_names[k]);
+    srt_record_one(srt_slots[10],scene_rt_bloom,"bloom");
+    for(unsigned k=0;k<4;k++)srt_record_one(srt_slots[11+k],scene_rt_small[k],small_names[k],1);
+    static const char *extra_names[8]={"tex0","tex1","tex2","tex3","tex4","tex5","tex6","tex7"};
+    for(unsigned k=0;k<8;k++)srt_record_one(srt_slots[15+k],scene_rt_extra[k],extra_names[k],1);
+    srt_record_one(srt_slots[23],scene_rt_mask,"mask",1);
+    srt_record_one(srt_slots[24],scene_rt_light,"light",1);
+    srt_record_one(srt_slots[25],scene_rt_shadow,"shadow",1);
+    srt_record_one(srt_slots[26],scene_rt_mattex[0],"mat128",1);
+    srt_record_one(srt_slots[27],scene_rt_mattex[1],"mat129",1);
+    srt_record_one(srt_slots[28],scene_rt_grid,"grid",1);
+    srt_guest_scan("mat128",scene_rt_mattex[0]);
+    srt_guest_scan("mat129",scene_rt_mattex[1]);
+    srt_guest_scan("grid",scene_rt_grid);
+    // 中段切片：3D LUT 只 dump 第 0 层会误导（各层内容差别很大）。
+    // Middle slice: dumping only layer 0 of a 3D LUT is misleading.
+    {auto mid=[](const tex_t *t){Image &im=get_image(t,false);return im.depth>1?im.depth/2:(im.layers>1?im.layers/2:0u);};
+     srt_record_one(srt_slots[29],scene_rt_mattex[0],"mat128mid",1,mid(scene_rt_mattex[0]));
+     srt_record_one(srt_slots[30],scene_rt_mattex[1],"mat129mid",1,mid(scene_rt_mattex[1]));
+     srt_record_one(srt_slots[31],scene_rt_grid,"gridmid",1,mid(scene_rt_grid));}
+}
+void scene_rt_dump_read(){
+    bool wrote=false;
+    for(SrtSlot &s:srt_slots){
+        if(!s.w)continue;
+        char path[512];snprintf(path,sizeof path,"%s/scene-%s-%u.bin",probe.base.c_str(),s.name,scene_rt_dumped);
+        FILE *f=fopen(path,"wb");
+        if(f){uint32_t hd[8]={0x30545253u,s.fr,s.w,s.h,s.fmt,uint32_t(s.vfmt),s.bpp,scene_rt_draws};
+            fwrite(hd,4,8,f);fwrite(s.map,1,size_t(s.w)*s.h*s.bpp,f);fclose(f);
+            xbg_logf("SCENE_RT %s fr=%u %ux%u nvnfmt=%#x vkfmt=%d bpp=%u draws=%u sampled=%u mem=%llx serial=%llx img=%p gw=%d -> %s",
+                s.name,s.fr,s.w,s.h,s.fmt,int(s.vfmt),s.bpp,scene_rt_draws,scene_rt_sampled,(unsigned long long)s.mem_addr,(unsigned long long)s.serial,s.img,s.gpu,path);
+            wrote=true;}
+        s.w=s.h=0;
+    }
+    if(wrote)++scene_rt_dumped;
+}
+
+static void xbg_present_texture_now(const win_t *window,const tex_t *texture){std::lock_guard<std::recursive_mutex> lock(mutex);preflight_cpu_reads();{SiteScope site(SITE_PRESENT);cur_op=61;TimingRoot timing_root;CPU_SCOPE(Other);need(initialized&&cfg.present,"Game presentation callback not installed");uint64_t present_begin=timing_clock();Image &im=get_image(texture,false);need(im.gpu_written,"Game tried to present a texture never rendered");probe_present(im);
+    if (!s_dump_done) {
+        if (s_do_dump) {
+            s_do_dump = false;
+            s_dump_done = true;
+            if (s_dump_file) {
+                fclose(s_dump_file);
+                s_dump_file = nullptr;
+                xbg_logf("[snk-dump] Frame dump complete! Total %d draws written to /sdcard/draw_dump.txt", s_dump_draw_idx);
+            }
+        } else if (s_diag_draw_cnt >= 500) {
+            s_dump_file = fopen("/sdcard/draw_dump.txt", "w");
+            if (!s_dump_file) s_dump_file = fopen("/sdcard/Android/data/org.snk.the1st.gamewindow/files/draw_dump.txt", "w");
+            if (!s_dump_file) s_dump_file = fopen("/data/data/org.snk.the1st.gamewindow/draw_dump.txt", "w");
+            if (s_dump_file) {
+                s_do_dump = true;
+                s_dump_draw_idx = 0;
+                xbg_logf("[snk-dump] Starting frame dump (previous frame had %d draws)...", s_diag_draw_cnt);
+            } else {
+                xbg_logf("[snk-dump] FAILED to open dump file: %s", strerror(errno));
+            }
+        }
+    }
+    static uint64_t s_last_pres_log = 0;
+    if ((stats.presents.load() % 30) == 0 && stats.presents.load() != s_last_pres_log) {
+        s_last_pres_log = stats.presents.load();
+        xbg_logf("[snk-present] fr=%llu im=%p mem=%p %ux%u fmt=%d", (unsigned long long)s_last_pres_log, &im, texture->mem, im.width, im.height, (int)im.fmt);
+    }Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);fire_trace_present(im,c.command);c.finish();if(flame_diag_enabled)flame_diag_roi_record(im);scene_rt_dump_record();submit_slots(false);if(flame_diag_enabled||scene_rt_dump_enabled)gpu_sync(perf.sync_readback);if(flame_diag_enabled)flame_diag_roi_read();scene_rt_dump_read();uint64_t pace_ns=xbg_frame_pace();int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r){static unsigned err_n=0;if(err_n++<10)xbg_logf("Game presentation dropped/warning: %d",r);}++stats.presents;if(flame_diag_enabled){fdiag_present=texture->serial;fdiag_present_mem=uint64_t(uintptr_t(texture->mem));
         uint64_t other_draw=0,other_inst=0,other_bind=0,other_zero=0;for(int i=2;i<flame_diag_keys;i++){other_draw+=fdiag_draws[i];other_inst+=fdiag_inst[i];other_bind+=fdiag_binds[i];other_zero+=fdiag_zero[i];}
         xbg_logf("FLAME_FRAME fr=%llu be4e_draw=%llu be4e_inst=%llu be4e_bind=%llu be4e_zero=%llu f8b27_draw=%llu f8b27_inst=%llu f8b27_bind=%llu f8b27_zero=%llu f8b27_nz=%llu f8b27_sig=%#llx f8b27_mem=%#llx other_draw=%llu other_inst=%llu other_bind=%llu other_zero=%llu skip=%llu ds=%u/%u/%u blend=%u/%u/%u rt=%#llx dsrt=%#llx vp=%#llx sc=%#llx bi=%llu bv=%llu cnt=%llu prim=%d itype=%d present=%llu pmem=%#llx pf=%llu pmean=%llu roi=%u,%u,%u,%u im=%llu,%llu c5a=%#x c5b=%#x c5c=%#x c2a=%#x c0a=%#x ubo=%#llx c5mask=%#llx c5min=%llu c5max=%llu c5n=%llu rtpx=%llu rtw=%llu rth=%llu b18=%#x rthash=%#llx texhash=%#llx vb0=%#llx:%llu vb1=%#llx:%llu vb2=%#llx:%llu vb3=%#llx:%llu ibuf=%#llx ibytes=%llu",
             (unsigned long long)stats.presents.load(),(unsigned long long)fdiag_draws[0],(unsigned long long)fdiag_inst[0],(unsigned long long)fdiag_binds[0],(unsigned long long)fdiag_zero[0],

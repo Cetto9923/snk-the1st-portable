@@ -21,6 +21,8 @@ int ffrs_audio_set_diagnostics(const char *directory);
 /* Own app files directory. Experimental transport remains off unless its
  * explicit gfx-audio-paced-transport marker contains '1'. */
 int ffrs_audio_set_platform_directory(const char *directory);
+/* The directory set above, or NULL before the host sets one. Read-only. */
+const char *ffrs_audio_platform_directory(void);
 #ifdef __cplusplus
 }
 #endif

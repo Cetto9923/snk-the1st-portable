@@ -89,16 +89,6 @@ uint64_t snk_png_encoder_set_pixel_data(void *self, const void *data, size_t siz
 uint64_t snk_png_encoder_encode(void *self, size_t *size_out, void *output, size_t capacity);
 uint64_t snk_png_encoder_size_max(const void *self);
 
-uint64_t snk_movie_media_data_ctor(void *self);
-uint64_t snk_movie_media_data_dtor(void *self);
-uint64_t snk_movie_media_data_clear(void *self);
-uint64_t snk_movie_media_data_find_string(const void *self, const char *key, const char **value);
-uint64_t snk_movie_media_data_find_int32(const void *self, const char *key, int *value);
-uint64_t snk_movie_media_data_find_int64(const void *self, const char *key, long *value);
-uint64_t snk_movie_status_to_string(int status);
-uint64_t snk_movie_extractor_ctor(void *self, int container, int cache);
-uint64_t snk_movie_decoder_ctor(void *self, int type, int format, int mode, int argument);
-
 /* div returns the quotient in x0 and the remainder in x1. */
 struct snk_div_result {
     int quotient;

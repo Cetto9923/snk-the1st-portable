@@ -372,9 +372,11 @@ void nvn_memory_pool_flush_mapped_range(const void *pool, ptrdiff_t offset, size
     known = p != NULL && p->initialized;
     pthread_mutex_unlock(&s_pool_lock);
     s_stats.flushes++;
-    fprintf(stderr, "[nvn] nvnMemoryPoolFlushMappedRange: pool=%p offset=%" PRIdPTR " size=%zu initialized=%d; "
-                    "the storage is host memory the guest writes itself, so it is already coherent\n",
-            pool, offset, size, known);
+    static unsigned said;
+    if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+        fprintf(stderr, "[nvn] nvnMemoryPoolFlushMappedRange: pool=%p offset=%" PRIdPTR " size=%zu initialized=%d; "
+                        "the storage is host memory the guest writes itself, so it is already coherent\n",
+                pool, offset, size, known);
     NVN_VOID_RETURN();
 }
 
@@ -386,9 +388,11 @@ void nvn_memory_pool_invalidate_mapped_range(const void *pool, ptrdiff_t offset,
     known = p != NULL && p->initialized;
     pthread_mutex_unlock(&s_pool_lock);
     s_stats.invalidates++;
-    fprintf(stderr, "[nvn] nvnMemoryPoolInvalidateMappedRange: pool=%p offset=%" PRIdPTR " size=%zu initialized=%d; "
-                    "the storage is host memory the guest writes itself, so there is no stale cache to drop\n",
-            pool, offset, size, known);
+    static unsigned said;
+    if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+        fprintf(stderr, "[nvn] nvnMemoryPoolInvalidateMappedRange: pool=%p offset=%" PRIdPTR " size=%zu initialized=%d; "
+                        "the storage is host memory the guest writes itself, so there is no stale cache to drop\n",
+                pool, offset, size, known);
     NVN_VOID_RETURN();
 }
 

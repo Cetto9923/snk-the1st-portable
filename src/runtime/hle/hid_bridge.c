@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdio.h>
 #include <string.h>
+#include <android/log.h>
 _Static_assert(sizeof(ffrs_npad_state) == 0x28, "Npad ABI");
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static ffrs_npad_state current;
@@ -21,11 +22,14 @@ void ffrs_hid_publish(int on, uint64_t buttons, int32_t lx, int32_t ly, int32_t 
     current.lx = on ? clamp(lx) : 0; current.ly = on ? clamp(ly) : 0;
     current.rx = on ? clamp(rx) : 0; current.ry = on ? clamp(ry) : 0;
     if (!on) pressed = 0;
+    if (buttons) {
+        __android_log_print(ANDROID_LOG_INFO, "SNK-HID", "publish on=%d buttons=0x%llx pressed=0x%llx", on, (unsigned long long)buttons, (unsigned long long)pressed);
+    }
     pthread_mutex_unlock(&lock);
 }
 static void initialize(void) {
     pthread_mutex_lock(&lock); initialized = 1; pthread_mutex_unlock(&lock);
-    fprintf(stderr, "[hle] hid initialized: input comes from Android events\n");
+    __android_log_print(ANDROID_LOG_INFO, "SNK-HID", "hid initialized");
 }
 static void set_styles(uint32_t value) { pthread_mutex_lock(&lock); styles = value; pthread_mutex_unlock(&lock); }
 static void set_ids(const uint32_t *values, uint64_t count) {
@@ -38,9 +42,16 @@ static void set_ids(const uint32_t *values, uint64_t count) {
 }
 static uint32_t style_locked(uint32_t id) {
     if (!initialized || !connected) return 0;
-    if (id == 0 && (ids & 1) && (styles & 1)) return 1;
-    if (id == 0x20 && !(styles & 1) && (ids & 0x100) && (styles & 2)) return 2;
-    return 0;
+    if (ids & (1u << 8)) {
+        // Game declared NpadId::Handheld support (0x20)
+        // Handheld console mode (e.g. RG477M): Handheld is the sole active controller.
+        if (id == 0x20) return 2; // Handheld
+        return 0; // Other slots disconnected in handheld mode to prevent style oscillation
+    }
+    // Docked mode
+    if (id == 0x20) return 0;
+    uint32_t supported = styles & (1 | 4);
+    return supported ? supported : (1 | 4); // FullKey | JoyDual
 }
 static uint32_t get_style(const uint32_t *id) {
     pthread_mutex_lock(&lock); uint32_t s = id ? style_locked(*id) : 0; pthread_mutex_unlock(&lock); return s;
@@ -52,7 +63,9 @@ static void state(ffrs_npad_state *out, const uint32_t *id, uint32_t style) {
     pthread_mutex_lock(&lock);
     memset(out, 0, sizeof(*out));
     out->sampling = ++current.sampling;
-    if (id && (style_locked(*id) & style)) {
+    int is_handheld = (ids & (1u << 8)) != 0;
+    int allow = is_handheld ? (style == 2 || (id && *id == 0x20)) : (style != 2);
+    if (connected && allow) {
         int64_t sequence = out->sampling; *out = current; out->sampling = sequence;
         out->buttons |= pressed; pressed = 0;
         const int32_t axes[4] = {out->lx, out->ly, out->rx, out->ry};
@@ -65,6 +78,9 @@ static void state(ffrs_npad_state *out, const uint32_t *id, uint32_t style) {
         if (axes[2] > 0x4000) out->buttons |= 1u << 22;
         if (axes[3] < -0x4000) out->buttons |= 1u << 23;
         out->attributes = style == 2 ? 0x3f : 0x17;
+        if (out->buttons) {
+            __android_log_print(ANDROID_LOG_INFO, "SNK-HID", "state id=%u style=%u buttons=0x%llx", id ? *id : 999, style, (unsigned long long)out->buttons);
+        }
     }
     pthread_mutex_unlock(&lock);
 }
@@ -116,8 +132,21 @@ static const entry entries[] = {
  B("_ZN2nn3hid17StopSixAxisSensorERKNS0_19SixAxisSensorHandleE",unsupported_device,1,0),
  B("_ZN2nn3hid25SetGyroscopeZeroDriftModeERKNS0_19SixAxisSensorHandleERKNS0_22GyroscopeZeroDriftModeE",gyro_mode,2,0),
 };
+static const uint32_t s_npad_id_handheld = 0x20;
+static const uint32_t s_npad_id_no1 = 0x00;
+
 uint64_t ffrs_hid_lookup(const char *name, unsigned *arguments, unsigned *returns) {
     if (!name) return 0;
+    if (!strcmp(name, "_ZN2nn3hid6NpadId8HandheldE")) {
+        if (arguments) *arguments = 0;
+        if (returns) *returns = 0;
+        return (uint64_t)(uintptr_t)&s_npad_id_handheld;
+    }
+    if (!strcmp(name, "_ZN2nn3hid6NpadId3No1E")) {
+        if (arguments) *arguments = 0;
+        if (returns) *returns = 0;
+        return (uint64_t)(uintptr_t)&s_npad_id_no1;
+    }
     for (size_t i = 0; i < sizeof(entries)/sizeof(*entries); i++) if (!strcmp(name, entries[i].name)) {
         if (arguments) *arguments = entries[i].arguments;
         if (returns) *returns = entries[i].returns;

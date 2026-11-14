@@ -10,6 +10,7 @@
 #include "guest_process.h"
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
+#include <media/NdkMediaExtractor.h>
 #include <algorithm>
 #include <array>
 #include <climits>
@@ -28,7 +29,8 @@
 
 namespace {
 constexpr uint32_t OK=0,UNKNOWN=0x1000,STATE=0x1006,SHORT_BUFFER=0x100a,
-    ARGUMENT=0x100b,CONFIGURE=0x100c,NO_OUTPUT=0x100e,NO_INPUT=0x1011;
+    ARGUMENT=0x100b,CONFIGURE=0x100c,NO_OUTPUT=0x100e,NO_INPUT=0x1011,
+    END_OF_STREAM=0x2000;
 enum Kind { I32=0,I64=1,SIZE=2,FLOAT=3,DOUBLE=4,POINTER=5,STRING=6,RECT=7,BYTES=8 };
 struct Value {Kind kind=I32;int64_t number=0;std::string text;std::array<int,4> rect{};std::vector<uint8_t> bytes;};
 struct Metadata {std::map<std::string,Value> values;};
@@ -94,7 +96,7 @@ struct DecoderImpl {
 };
 struct Decoder {void **vtable;DecoderImpl *impl;};
 static_assert(sizeof(Decoder)==16,"Decoder object ABI");
-std::mutex virtual_mutex;void *virtual_gates[19]{};size_t live_decoders=0;
+std::mutex virtual_mutex;void *virtual_gates[35]{};size_t live_decoders=0;size_t live_extractors=0;
 std::mutex diagnostics_mutex;std::string diagnostics_directory;size_t diagnostic_bytes=0;unsigned diagnostic_chunks=0;
 void diagnose_input(DecoderImpl *d,const uint8_t *data,size_t n,int64_t pts,uint32_t flags) {
     std::lock_guard<std::mutex> lock(diagnostics_mutex);
@@ -111,6 +113,7 @@ void diagnose_input(DecoderImpl *d,const uint8_t *data,size_t n,int64_t pts,uint
 /* subsdk123528/40/58/70 -> PLT34b550 -> symbol290 SignalEvent(EventType*).
  * These are the client's ordinary manual/auto-reset events, not SystemEvent. */
 void signal(DecoderImpl *d,unsigned event) {if(d->events[event])nso_host_os_signal_event(d->events[event]);}
+void clear_event(DecoderImpl *d,unsigned event) {if(d->events[event])nso_host_os_clear_event(d->events[event]);}
 void callback_input(AMediaCodec *,void *user,int32_t index) {
     auto *d=static_cast<DecoderImpl*>(user);std::lock_guard<std::mutex> l(d->mutex);
     if(d->stopping)return;d->available_inputs.push_back(index);signal(d,0);
@@ -152,26 +155,60 @@ void decoder_delete(Decoder *self) {decoder_dtor(self);if(guest_process_interpos
 uint32_t configure(Decoder *self,const MediaData *metadata) {
     if(!self||!self->impl||!metadata||!metadata->impl)return ARGUMENT;
     auto *d=self->impl;std::lock_guard<std::recursive_mutex> api(d->api_mutex);
-    const char *mime=d->type==3?"video/x-vnd.on2.vp9":d->type==1?"video/avc":nullptr;
-    if(!mime||d->output!=4||d->mode!=1){fprintf(stderr,"[movie] unsupported decoder combination type=%d output=%d mode=%d\n",d->type,d->output,d->mode);return CONFIGURE;}
-    int w=i32(*metadata->impl,"width"),h=i32(*metadata->impl,"height");
-    if(w<=0||h<=0||w>8192||h>8192||(w&1)||(h&1))return ARGUMENT;
+    const char *mime=nullptr;
+    bool is_audio=false;
+    if(d->type==1) mime="video/avc";
+    else if(d->type==2) mime="video/x-vnd.on2.vp8";
+    else if(d->type==3) mime="video/x-vnd.on2.vp9";
+    else if(d->type==4) { mime="audio/mp4a-latm"; is_audio=true; }
+    else if(d->type==5) { mime="audio/vorbis"; is_audio=true; }
+    if(!mime){fprintf(stderr,"[movie] unsupported decoder combination type=%d output=%d mode=%d\n",d->type,d->output,d->mode);return CONFIGURE;}
+    int w=0,h=0;
+    if(!is_audio){
+        w=i32(*metadata->impl,"width");h=i32(*metadata->impl,"height");
+        if(w<=0||h<=0||w>8192||h>8192||(w&1)||(h&1))return ARGUMENT;
+    }
     codec_close(d);
     {std::lock_guard<std::mutex> l(d->mutex);d->configuration=*metadata->impl;d->format=*metadata->impl;d->error=0;d->native_error=0;d->stopping=false;}
     AMediaFormat *f=format_make(*metadata->impl);if(!f)return CONFIGURE;
-    AMediaFormat_setString(f,"mime",mime);AMediaFormat_setInt32(f,"color-format",21);
-    AMediaCodec *codec=AMediaCodec_createDecoderByType(mime);if(!codec){AMediaFormat_delete(f);return CONFIGURE;}
+    AMediaFormat_setString(f,"mime",mime);
+    if(!is_audio){
+        AMediaFormat_setInt32(f,"color-format",21);
+    } else {
+        int sample_rate=i32(*metadata->impl,"sample-rate",48000);
+        int channels=i32(*metadata->impl,"channel-count",2);
+        AMediaFormat_setInt32(f,"sample-rate",sample_rate);
+        AMediaFormat_setInt32(f,"channel-count",channels);
+    }
+    AMediaCodec *codec = nullptr;
+    const char *preferred = nullptr;
+    if (d->type == 1) preferred = "c2.android.avc.decoder";
+    else if (d->type == 2) preferred = "c2.android.vp8.decoder";
+    else if (d->type == 3) preferred = "c2.android.vp9.decoder";
+    else if (d->type == 4) preferred = "c2.android.aac.decoder";
+    else if (d->type == 5) preferred = "c2.android.vorbis.decoder";
+    if (preferred) {
+        codec = AMediaCodec_createCodecByName(preferred);
+        if (codec) fprintf(stderr, "[movie] created preferred software codec: %s\n", preferred);
+    }
+    if (!codec) codec = AMediaCodec_createDecoderByType(mime);
+    if (!codec) { AMediaFormat_delete(f); return CONFIGURE; }
     char *codec_name=nullptr;
     if(AMediaCodec_getName(codec,&codec_name)==AMEDIA_OK&&codec_name){fprintf(stderr,"[movie] actual codec name=%s\n",codec_name);AMediaCodec_releaseName(codec,codec_name);}
     {std::lock_guard<std::mutex> l(d->mutex);d->codec=codec;}
     media_status_t r=AMediaCodec_setAsyncNotifyCallback(codec,callbacks,d);
     if(r==AMEDIA_OK)r=AMediaCodec_configure(codec,f,nullptr,nullptr,0);
-    fprintf(stderr,"[movie] configure actual codec mime=%s %dx%d status=%d\n",mime,w,h,r);AMediaFormat_delete(f);
+    if(!is_audio) fprintf(stderr,"[movie] configure actual codec mime=%s %dx%d status=%d\n",mime,w,h,r);
+    else fprintf(stderr,"[movie] configure actual audio codec mime=%s status=%d\n",mime,r);
+    AMediaFormat_delete(f);
     if(r!=AMEDIA_OK){codec_close(d);return CONFIGURE;}return OK;
 }
 uint32_t register_events(Decoder *self,void *const *events) {
     if(!self||!self->impl||!events)return ARGUMENT;auto *d=self->impl;std::lock_guard<std::mutex> l(d->mutex);
-    std::copy(events,events+4,d->events.begin());if(!d->available_inputs.empty())signal(d,0);if(!d->available_outputs.empty())signal(d,1);return OK;
+    std::copy(events,events+4,d->events.begin());
+    if(!d->available_inputs.empty())signal(d,0);else clear_event(d,0);
+    if(!d->available_outputs.empty())signal(d,1);else clear_event(d,1);
+    clear_event(d,2);clear_event(d,3);return OK;
 }
 uint32_t start(Decoder *self) {
     if(!self||!self->impl)return STATE;auto *d=self->impl;
@@ -213,8 +250,10 @@ uint32_t output_format(Decoder *self,MediaData *out) {
 }
 uint32_t acquire_input(Decoder *self,int *index,int *remaining) {
     if(!self||!self->impl||!index||!remaining)return ARGUMENT;auto *d=self->impl;std::lock_guard<std::mutex> l(d->mutex);
-    *index=-1;*remaining=0;if(d->error)return d->error;if(d->available_inputs.empty())return NO_INPUT;
-    *index=d->available_inputs.front();d->available_inputs.pop_front();d->acquired_inputs.insert(*index);*remaining=int(d->available_inputs.size());return OK;
+    *index=-1;*remaining=0;if(d->error)return d->error;
+    if(d->available_inputs.empty()){clear_event(d,0);return NO_INPUT;}
+    *index=d->available_inputs.front();d->available_inputs.pop_front();d->acquired_inputs.insert(*index);*remaining=int(d->available_inputs.size());
+    if(!d->available_inputs.empty())signal(d,0);else clear_event(d,0);return OK;
 }
 uint32_t input_buffer(Decoder *self,int index,Buffer *out) {
     if(!self||!self->impl||!out)return ARGUMENT;auto *d=self->impl;
@@ -235,12 +274,27 @@ uint32_t send_input(Decoder *self,int index,int offset,int size,int64_t pts,uint
 }
 uint32_t acquire_output(Decoder *self,int *index,int64_t *pts,uint32_t *flags,int *remaining) {
     if(!self||!self->impl||!index||!pts||!flags||!remaining)return ARGUMENT;auto *d=self->impl;std::lock_guard<std::mutex> l(d->mutex);
-    *index=-1;*pts=0;*flags=0;*remaining=0;if(d->error)return d->error;if(d->available_outputs.empty())return NO_OUTPUT;
-    *index=d->available_outputs.front();d->available_outputs.pop_front();auto &o=d->outputs.at(*index);o.acquired=true;*pts=o.info.presentationTimeUs;*flags=o.info.flags;*remaining=int(d->available_outputs.size());return OK;
+    *index=-1;*pts=0;*flags=0;*remaining=0;if(d->error)return d->error;
+    if(d->available_outputs.empty()){clear_event(d,1);return NO_OUTPUT;}
+    *index=d->available_outputs.front();d->available_outputs.pop_front();auto &o=d->outputs.at(*index);o.acquired=true;*pts=o.info.presentationTimeUs;*flags=o.info.flags;*remaining=int(d->available_outputs.size());
+    if(!d->available_outputs.empty())signal(d,1);else clear_event(d,1);return OK;
 }
 uint32_t buffer_size(Decoder *self,int *bytes,int *auxiliary) {
     if(!self||!self->impl||!bytes||!auxiliary)return ARGUMENT;std::lock_guard<std::mutex> l(self->impl->mutex);
-    int w=i32(self->impl->format,"width"),h=i32(self->impl->format,"height");if(w<=0||h<=0)return STATE;
+    auto *d=self->impl;
+    if(d->type==4 || d->type==5){
+        *bytes = 16384;
+        *auxiliary = 1;
+        return OK;
+    }
+    int w=i32(self->impl->format,"width"),h=i32(self->impl->format,"height");
+    /* The size hint must never be an error: the player asks for it before the
+     * output format is known, and a failure there makes it fall back to an
+     * 8-byte destination that no decoded frame can fit into (observed as
+     * "capacity=8" against a 3,110,400-byte 1920x1080 NV12 frame). Advertising
+     * a 1080p NV12 ceiling keeps every allocation large enough. */
+    if(w<=0||h<=0){w=1920;h=1080;}
+    {static unsigned size_logs=0;if(size_logs++<3)fprintf(stderr,"[movie] buffer_size type=%d w=%d h=%d bytes=%d\n",d->type,w,h,int(uint64_t(w)*h+2ull*(w/2)*(h/2)));}
     /* Original VA122470..122484 only accepts mode1 and writes 1 to out2. */
     uint64_t n=uint64_t(w)*h+2ull*(w/2)*(h/2);if(n>INT_MAX)return ARGUMENT;*bytes=int(n);*auxiliary=1;return OK;
 }
@@ -281,19 +335,50 @@ uint32_t get_output(Decoder *self,int index,Buffer *out) {
     std::lock_guard<std::recursive_mutex> api(d->api_mutex);std::lock_guard<std::mutex> l(d->mutex);
     out->offset=out->size=0;auto i=d->outputs.find(index);if(!d->codec||i==d->outputs.end()||!i->second.acquired)return ARGUMENT;
     auto &o=i->second;if(o.info.offset<0||o.info.size<0)return UNKNOWN;
+    if(!o.info.size)return OK;
+    /* output==3 is the title's "give me this frame as NV12" request: buffer_size()
+     * already reserves width*height*3/2 for it and output_metadata() advertises
+     * y-stride=w / uv-offset=w*h, i.e. a tight NV12 plane pair. Answering it with
+     * a one-byte token left every movie frame empty, which is why the opening
+     * animations played black. Fall through to the same NV12 conversion used by
+     * the other output modes; failures are logged below with the exact status. */
     size_t n=0;uint8_t *p=AMediaCodec_getOutputBuffer(d->codec,size_t(index),&n);
     if(size_t(o.info.offset)>n||size_t(o.info.size)>n-size_t(o.info.offset))return UNKNOWN;
-    if(!o.info.size)return OK;
     if(!p||!out->base)return UNKNOWN;
+    if(d->type==4 || d->type==5){
+        if(size_t(o.info.size)>out->capacity)return SHORT_BUFFER;
+        memcpy(out->base,p+o.info.offset,size_t(o.info.size));
+        out->size=o.info.size;
+        return OK;
+    }
     AMediaFormat *f=AMediaCodec_getBufferFormat(d->codec,size_t(index));if(f){format_read(o.format,f);AMediaFormat_delete(f);}
-    size_t written=0;uint32_t r=copy_nv12(o.format,p+o.info.offset,size_t(o.info.size),static_cast<uint8_t*>(out->base),out->capacity,written);
-    if(r==OK)out->size=int32_t(written);else fprintf(stderr,"[movie] output copy failed status=%#x index=%d codecBytes=%zu infoBytes=%d capacity=%llu\n",r,index,n,o.info.size,(unsigned long long)out->capacity);return r;
+    size_t written=0;
+    /* Measured contract, 2026-11-13: the guest hands get_output a Buffer whose
+     * base is a valid guest pointer but whose capacity reads 8 for a 1920x1080
+     * NV12 frame (3,110,400 bytes), and it never calls buffer_size() at all.
+     * Copying a full frame there corrupts the guest heap and the game dies with
+     * x0=0x4141414141414141 / doc unreadable, so the capacity is truthful and
+     * the buffer really is tiny. Until the guest's sizing path is identified,
+     * only copy when the advertised capacity can hold the frame. */
+    uint32_t r=copy_nv12(o.format,p+o.info.offset,size_t(o.info.size),static_cast<uint8_t*>(out->base),out->capacity,written);
+    if(r!=OK){
+        static unsigned cap_logs=0;
+        if(cap_logs++<4)fprintf(stderr,"[movie] host buffer too small capacity=%llu frame=%zu base=%p -> frame dropped\n",
+            (unsigned long long)out->capacity,size_t(i32(o.format,"width"))*size_t(i32(o.format,"height"))*3/2,out->base);
+    }
+    if(r==OK){out->size=int32_t(written);
+        static unsigned ok_logs=0;
+        if(ok_logs++<4)fprintf(stderr,"[movie] NV12 copy ok type=%d output=%d w=%d h=%d stride=%d slice=%d color=%#x written=%zu capacity=%llu\n",
+            d->type,d->output,i32(o.format,"width"),i32(o.format,"height"),i32(o.format,"stride"),i32(o.format,"slice-height",-1),unsigned(i32(o.format,"color-format",0)),written,(unsigned long long)out->capacity);
+    } else fprintf(stderr,"[movie] output copy failed status=%#x index=%d codecBytes=%zu infoBytes=%d capacity=%llu\n",r,index,n,o.info.size,(unsigned long long)out->capacity);return r;
 }
 uint32_t release_output(Decoder *self,int index) {
     if(!self||!self->impl)return ARGUMENT;auto *d=self->impl;
     std::lock_guard<std::recursive_mutex> api(d->api_mutex);AMediaCodec *codec;
     {std::lock_guard<std::mutex> l(d->mutex);auto i=d->outputs.find(index);if(i==d->outputs.end()||!i->second.acquired)return ARGUMENT;codec=d->codec;d->outputs.erase(i);}
-    return codec&&AMediaCodec_releaseOutputBuffer(codec,size_t(index),false)==AMEDIA_OK?OK:UNKNOWN;
+    media_status_t r = codec ? AMediaCodec_releaseOutputBuffer(codec,size_t(index),false) : AMEDIA_ERROR_UNKNOWN;
+    if (r != AMEDIA_OK) fprintf(stderr, "[movie] releaseOutputBuffer index=%d failed status=%d\n", index, r);
+    return r==AMEDIA_OK?OK:UNKNOWN;
 }
 uint32_t last_error(Decoder *self) {if(!self||!self->impl)return ARGUMENT;std::lock_guard<std::mutex> l(self->impl->mutex);return self->impl->error;}
 uint32_t buffer_format(Decoder *self,int index,MediaData *out) {
@@ -342,16 +427,330 @@ bool h264_configuration(const uint8_t *sps,size_t sps_size,const uint8_t *pps,si
     std::vector<uint8_t> s{0,0,0,1};s.insert(s.end(),sps,sps+sps_size);md_bytes(out,"csd-0",s);
     s={0,0,0,1};s.insert(s.end(),pps,pps+pps_size);md_bytes(out,"csd-1",s);return true;
 }
+struct ExtractorImpl {
+    std::mutex mutex;
+    AMediaExtractor *ex = nullptr;
+    int containerType, cacheSize;
+    int64_t durationUs = 0;
+    int fd = -1;
+    ExtractorImpl(int c, int s) : containerType(c), cacheSize(s) {
+        ex = AMediaExtractor_new();
+    }
+    ~ExtractorImpl() {
+        if (ex) {
+            AMediaExtractor_delete(ex);
+            ex = nullptr;
+        }
+        if (fd >= 0) {
+            close(fd);
+            fd = -1;
+        }
+    }
+};
+
+struct Extractor {
+    void **vtable;
+    ExtractorImpl *impl;
+};
+static_assert(sizeof(Extractor) == 16, "Extractor object ABI");
+
+void extractor_ctor(Extractor *self, int container, int cache) {
+    std::lock_guard<std::mutex> l(virtual_mutex);
+    if (!self || !virtual_gates[19]) abort();
+    self->vtable = &virtual_gates[19];
+    self->impl = new ExtractorImpl(container, cache);
+    ++live_extractors;
+    fprintf(stderr, "[movie] Extractor native bridge container=%d cache=%d\n", container, cache);
+}
+
+void extractor_dtor(Extractor *self) {
+    if (!self || !self->impl) return;
+    delete self->impl;
+    self->impl = nullptr;
+    std::lock_guard<std::mutex> l(virtual_mutex);
+    --live_extractors;
+}
+
+void extractor_delete(Extractor *self) {
+    extractor_dtor(self);
+    if (guest_process_interposed_free(self) != 1) abort();
+}
+
+uint32_t extractor_set_data_source_path(Extractor *self, const char *path) {
+    if (!self || !self->impl || !path) return ARGUMENT;
+    auto *e = self->impl;
+    std::lock_guard<std::mutex> l(e->mutex);
+    if (!e->ex) e->ex = AMediaExtractor_new();
+    if (!e->ex) return UNKNOWN;
+
+    char host_path[512] = {0};
+    int res = nso_host_fs_resolve_path(path, host_path, sizeof(host_path));
+    if (res != 0) {
+        if (path[0] == '/') {
+            snprintf(host_path, sizeof(host_path), "%s", path);
+        } else {
+            snprintf(host_path, sizeof(host_path), "/sdcard/SNK/romfs/%s", path);
+        }
+    }
+    fprintf(stderr, "[movie] Extractor::SetDataSource: guest_path='%s' -> host_path='%s'\n", path, host_path);
+
+    int fd = open(host_path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        fprintf(stderr, "[movie] Extractor::SetDataSource: open failed for '%s' errno=%d (%s)\n",
+                host_path, errno, strerror(errno));
+        return 0x1000;
+    }
+    struct stat st;
+    if (fstat(fd, &st) != 0) {
+        close(fd);
+        return 0x1000;
+    }
+    media_status_t status = AMediaExtractor_setDataSourceFd(e->ex, fd, 0, st.st_size);
+    if (status != AMEDIA_OK) {
+        fprintf(stderr, "[movie] Extractor::SetDataSource: AMediaExtractor_setDataSourceFd failed status=%d\n", status);
+        close(fd);
+        return 0x1000;
+    }
+    if (e->fd >= 0) close(e->fd);
+    e->fd = fd;
+
+    size_t numTracks = AMediaExtractor_getTrackCount(e->ex);
+    for (size_t i = 0; i < numTracks; i++) {
+        AMediaFormat *fmt = AMediaExtractor_getTrackFormat(e->ex, i);
+        if (fmt) {
+            int64_t dur = 0;
+            if (AMediaFormat_getInt64(fmt, AMEDIAFORMAT_KEY_DURATION, &dur) && dur > e->durationUs) {
+                e->durationUs = dur;
+            }
+            AMediaFormat_delete(fmt);
+        }
+    }
+    fprintf(stderr, "[movie] Extractor::SetDataSource success: tracks=%zu durationUs=%lld\n",
+            numTracks, (long long)e->durationUs);
+    return OK;
+}
+
+uint32_t extractor_set_data_source_mem(Extractor *self, const void *data, int size) {
+    (void)self; (void)data; (void)size;
+    return ARGUMENT;
+}
+
+uint32_t extractor_get_track_count(Extractor *self, int *out_count) {
+    if (!self || !self->impl || !out_count) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    *out_count = (int)AMediaExtractor_getTrackCount(self->impl->ex);
+    return OK;
+}
+
+uint32_t extractor_get_track_configuration(Extractor *self, int track, MediaData *out) {
+    if (!self || !self->impl || !out || !out->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    AMediaFormat *fmt = AMediaExtractor_getTrackFormat(self->impl->ex, (size_t)track);
+    if (!fmt) return ARGUMENT;
+
+    const char *mime = nullptr;
+    if (AMediaFormat_getString(fmt, AMEDIAFORMAT_KEY_MIME, &mime) && mime) {
+        md_string(out, "mime", mime);
+    }
+    int32_t i32val = 0;
+    int64_t i64val = 0;
+    if (AMediaFormat_getInt64(fmt, AMEDIAFORMAT_KEY_DURATION, &i64val)) {
+        md_i64(out, "durationUs", i64val);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_WIDTH, &i32val)) {
+        md_i32(out, "width", i32val);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_HEIGHT, &i32val)) {
+        md_i32(out, "height", i32val);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_BIT_RATE, &i32val)) {
+        md_i32(out, "bit-rate", i32val);
+    } else {
+        md_i32(out, "bit-rate", 2000000);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_FRAME_RATE, &i32val)) {
+        md_i32(out, "frame-rate", i32val);
+    } else {
+        md_i32(out, "frame-rate", 30);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_CHANNEL_COUNT, &i32val)) {
+        md_i32(out, "channel-count", i32val);
+    }
+    if (AMediaFormat_getInt32(fmt, AMEDIAFORMAT_KEY_SAMPLE_RATE, &i32val)) {
+        md_i32(out, "sample-rate", i32val);
+    }
+
+    void *csd = nullptr;
+    size_t csd_len = 0;
+    if (AMediaFormat_getBuffer(fmt, "csd-0", &csd, &csd_len) && csd && csd_len) {
+        md_bytes(out, "csd-0", std::vector<uint8_t>((uint8_t*)csd, (uint8_t*)csd + csd_len));
+    }
+    if (AMediaFormat_getBuffer(fmt, "csd-1", &csd, &csd_len) && csd && csd_len) {
+        md_bytes(out, "csd-1", std::vector<uint8_t>((uint8_t*)csd, (uint8_t*)csd + csd_len));
+    }
+
+    AMediaFormat_delete(fmt);
+    return OK;
+}
+
+uint32_t extractor_select_track(Extractor *self, int track) {
+    if (!self || !self->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    AMediaExtractor_selectTrack(self->impl->ex, (size_t)track);
+    return OK;
+}
+
+uint32_t extractor_unselect_track(Extractor *self, int track) {
+    if (!self || !self->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    AMediaExtractor_unselectTrack(self->impl->ex, (size_t)track);
+    return OK;
+}
+
+uint32_t extractor_seek_to(Extractor *self, int64_t time_us) {
+    if (!self || !self->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    AMediaExtractor_seekTo(self->impl->ex, time_us, AMEDIAEXTRACTOR_SEEK_CLOSEST_SYNC);
+    return OK;
+}
+
+uint32_t extractor_get_track_index_for_available_data(Extractor *self, size_t *out_track) {
+    if (!self || !self->impl || !out_track) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    int track = AMediaExtractor_getSampleTrackIndex(self->impl->ex);
+    if (track < 0) return END_OF_STREAM;
+    *out_track = (size_t)track;
+    return OK;
+}
+
+uint32_t extractor_read(Extractor *self, Buffer *buf) {
+    if (!self || !self->impl || !buf) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex || !buf->base) return UNKNOWN;
+    ssize_t n = AMediaExtractor_readSampleData(self->impl->ex, (uint8_t*)buf->base, (size_t)buf->capacity);
+    if (n < 0) {
+        buf->size = 0;
+        buf->offset = 0;
+        return END_OF_STREAM;
+    }
+    buf->size = (int32_t)n;
+    buf->offset = 0;
+    return OK;
+}
+
+uint32_t extractor_advance(Extractor *self) {
+    if (!self || !self->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    bool ok = AMediaExtractor_advance(self->impl->ex);
+    return ok ? OK : END_OF_STREAM;
+}
+
+uint32_t extractor_get_sample_time(Extractor *self, int64_t *out_time) {
+    if (!self || !self->impl || !out_time) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    int64_t t = AMediaExtractor_getSampleTime(self->impl->ex);
+    if (t < 0) return END_OF_STREAM;
+    *out_time = t;
+    return OK;
+}
+
+uint32_t extractor_get_sample_meta_data(Extractor *self, MediaData *out) {
+    if (!self || !self->impl || !out || !out->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (!self->impl->ex) return UNKNOWN;
+    uint32_t flags = (uint32_t)AMediaExtractor_getSampleFlags(self->impl->ex);
+    int64_t t = AMediaExtractor_getSampleTime(self->impl->ex);
+    if (t < 0) flags |= 4; // AMEDIACODEC_BUFFER_FLAG_END_OF_STREAM
+    md_i32(out, "flags", (int32_t)flags);
+    return OK;
+}
+
+uint32_t extractor_get_buffered_range(Extractor *self, int64_t *start, int64_t *end) {
+    if (!self || !self->impl) return ARGUMENT;
+    std::lock_guard<std::mutex> l(self->impl->mutex);
+    if (start) *start = 0;
+    if (end) *end = self->impl->durationUs;
+    return OK;
+}
+
+uint32_t extractor_set_data_source_stream(Extractor *self, void *reader, const char *path) {
+    (void)reader;
+    return extractor_set_data_source_path(self, path);
+}
+
+const char *movie_status_to_string(int status) {
+    switch (status) {
+        case 0: return "Success";
+        case 0x1000: return "Unknown";
+        case 0x1006: return "InvalidState";
+        case 0x100a: return "ShortBuffer";
+        case 0x100b: return "InvalidArgument";
+        case 0x100c: return "ConfigureFailed";
+        case 0x100e: return "NoOutput";
+        case 0x1011: return "NoInput";
+        case 0x2000: return "EndOfStream";
+        case 0x5003: return "NotEnoughData";
+        default: return "MovieStatus";
+    }
+}
+
 #define V(fn,n,r) {reinterpret_cast<void(*)(void)>(fn),n,r}
-const ffrs_movie_virtual methods[]={V(decoder_dtor,1,0),V(decoder_delete,1,0),V(configure,2,1),V(register_events,2,1),V(output_format,2,1),V(start,1,1),V(stop,1,1),V(reset,1,1),V(flush,1,1),V(acquire_input,3,1),V(input_buffer,3,1),V(send_input,6,1),V(acquire_output,5,1),V(get_output,3,1),V(buffer_size,3,1),V(release_output,2,1),V(last_error,1,1),V(output_with_format,4,1),V(buffer_format,3,1)};
+const ffrs_movie_virtual methods[]={
+    // Decoder virtuals (0..18)
+    V(decoder_dtor,1,0),
+    V(decoder_delete,1,0),
+    V(configure,2,1),
+    V(register_events,2,1),
+    V(output_format,2,1),
+    V(start,1,1),
+    V(stop,1,1),
+    V(reset,1,1),
+    V(flush,1,1),
+    V(acquire_input,3,1),
+    V(input_buffer,3,1),
+    V(send_input,6,1),
+    V(acquire_output,5,1),
+    V(get_output,3,1),
+    V(buffer_size,3,1),
+    V(release_output,2,1),
+    V(last_error,1,1),
+    V(output_with_format,4,1),
+    V(buffer_format,3,1),
+
+    // Extractor virtuals (19..34, slots 0..15)
+    V(extractor_dtor,1,0),
+    V(extractor_delete,1,0),
+    V(extractor_set_data_source_path,2,1),
+    V(extractor_set_data_source_mem,3,1),
+    V(extractor_get_track_count,2,1),
+    V(extractor_get_track_configuration,3,1),
+    V(extractor_select_track,2,1),
+    V(extractor_unselect_track,2,1),
+    V(extractor_seek_to,2,1),
+    V(extractor_get_track_index_for_available_data,2,1),
+    V(extractor_read,2,1),
+    V(extractor_advance,1,1),
+    V(extractor_get_sample_time,2,1),
+    V(extractor_get_sample_meta_data,2,1),
+    V(extractor_get_buffered_range,3,1),
+    V(extractor_set_data_source_stream,3,1)
+};
 #undef V
 }
 
 extern "C" const ffrs_movie_virtual *ffrs_movie_decoder_virtuals(size_t *count) {if(count)*count=sizeof(methods)/sizeof(methods[0]);return methods;}
 extern "C" int ffrs_movie_decoder_publish_virtuals(void *const *gates,size_t count) {
-    std::lock_guard<std::mutex> l(virtual_mutex);if(live_decoders)return -1;
+    std::lock_guard<std::mutex> l(virtual_mutex);if(live_decoders || live_extractors)return -1;
     if(!gates&&!count){std::fill(std::begin(virtual_gates),std::end(virtual_gates),nullptr);return 0;}
-    if(!gates||count!=19)return -1;for(size_t i=0;i<count;i++)if(!gates[i])return -1;
+    if(!gates||count!=35)return -1;for(size_t i=0;i<count;i++)if(!gates[i])return -1;
     std::copy(gates,gates+count,virtual_gates);return 0;
 }
 extern "C" int ffrs_movie_decoder_set_diagnostics(const char *directory) {
@@ -364,6 +763,8 @@ extern "C" uint64_t ffrs_movie_decoder_lookup(const char *name,unsigned *argumen
 #define E(name,fn,a,r) {name,reinterpret_cast<void(*)(void)>(fn),a,r}
     static const Entry entries[]={
         E("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi",decoder_ctor,5,0),
+        E("_ZN5movie9ExtractorC1ENS_13ContainerTypeENS_9CacheSizeE",extractor_ctor,3,0),
+        E("_ZN5movie14StatusToStringENS_6StatusE",movie_status_to_string,1,1),
         E("_ZN5movie9MediaDataC1Ev",md_ctor,1,0),E("_ZN5movie9MediaDataD1Ev",md_dtor,1,0),E("_ZN5movie9MediaData5ClearEv",md_clear,1,0),
         E("_ZN5movie9MediaDataC1ERKS0_",md_copy,2,0),E("_ZN5movie9MediaDataaSERKS0_",md_assign,2,1),
         E("_ZN5movie9MediaData8SetInt32EPKci",md_i32,3,0),E("_ZN5movie9MediaData8SetInt64EPKcl",md_i64,3,0),

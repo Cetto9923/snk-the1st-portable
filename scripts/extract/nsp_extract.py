@@ -159,8 +159,8 @@ class Nsp:
                 "encryption_type": encryption_type, "key_area": key_area}
 
     def body_key(self, section, titlekey: bytes) -> bytes:
-        """Encryption type 3 (AES-CTR for rights-id titles) uses the title key."""
-        if section["encryption_type"] == 3:
+        """Encryption type 3 and 260 (AES-CTR for rights-id titles) use the title key."""
+        if section["encryption_type"] in (3, 260):
             return titlekey
         name = f"key_area_key_application_{section['key_area']:02x}"
         if name not in self.keys:
@@ -351,6 +351,10 @@ def main():
     parser.add_argument("--report", type=Path, default=None)
     args = parser.parse_args()
 
+    local_root = (Path(__file__).resolve().parents[2] / ".local").resolve()
+    if not args.out.resolve().is_relative_to(local_root):
+        parser.error("--out must be inside this project's .local directory")
+
     keys = load_keyset(args.keys)
     nsp = Nsp(args.nsp, keys)
     print(f"[+] program NCA: {nsp.nca_name} offset={nsp.nca_offset} size={nsp.nca_size}")
@@ -375,7 +379,7 @@ def main():
                     if handle.read(4) in (b"NSO0", b"MOD0", b"ERSO"):
                         nso_files.append(item["name"])
         if nso_files:
-            print(f"[SUCCESS] titlekek {kek_name} -> {titlekey.hex()}")
+            print(f"[SUCCESS] titlekek {kek_name} selected")
             print(f"[+] ExeFS files: {', '.join(w['name'] for w in written)}")
             print(f"[+] NSO modules: {', '.join(nso_files)}")
             chosen = (kek_name, titlekey, written)
@@ -385,13 +389,16 @@ def main():
         return 1
 
     kek_name, titlekey, written = chosen
-    (args.out.parent / "titlekey.json").write_text(json.dumps(
-        {"nsp": str(args.nsp), "kek": kek_name, "titlekey": titlekey.hex(),
-         "rights_id": nsp.rights_id(), "nca_header_key": nsp.header_key_name},
-        indent=2), encoding="utf-8")
+    key_path = args.out.parent / "titlekey.json"
+    fd = os.open(key_path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as key_file:
+        json.dump({"nsp": str(args.nsp), "kek": kek_name, "titlekey": titlekey.hex(),
+                   "rights_id": nsp.rights_id(), "nca_header_key": nsp.header_key_name},
+                  key_file, indent=2)
 
     report = {"nsp": str(args.nsp), "nca": nsp.nca_name, "nca_size": nsp.nca_size,
-              "titlekek": kek_name, "titlekey": titlekey.hex(),
+              "titlekek": kek_name,
               "rights_id": nsp.rights_id(), "exefs": written}
     try:
         files, romfs_info = nsp.romfs_inventory(titlekey)

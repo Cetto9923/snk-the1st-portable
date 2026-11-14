@@ -1383,10 +1383,14 @@ static void bind_handles(void *buffer, uint32_t op, int stage, int first, int co
         }
         pthread_mutex_unlock(&s_lock);
         if (tex_base || samp_base) {
-            fprintf(stderr, "[nvn] the handles bound in a batch are read at replay without the numbering "
-                            "base of the descriptor pools this buffer bound (texture pool base %d, sampler "
-                            "pool base %d); the single texture bind carries the bases\n",
-                    tex_base, samp_base);
+            static int warned = 0;
+            if (!warned) {
+                warned = 1;
+                fprintf(stderr, "[nvn] the handles bound in a batch are read at replay without the numbering "
+                                "base of the descriptor pools this buffer bound (texture pool base %d, sampler "
+                                "pool base %d); the single texture bind carries the bases\n",
+                        tex_base, samp_base);
+            }
         }
     }
 }

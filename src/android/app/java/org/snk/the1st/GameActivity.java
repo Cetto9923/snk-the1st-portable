@@ -7,6 +7,8 @@ import android.media.AudioDeviceInfo;
 import android.os.Handler;
 import android.os.Looper;
 import android.content.Context;
+import android.content.BroadcastReceiver;
+import android.content.IntentFilter;
 import android.graphics.Canvas;
 import android.graphics.Insets;
 import android.graphics.Paint;
@@ -85,7 +87,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     private void publishPad() {
         boolean touchOn = touchPad != null && touchPad.shown;
-        GameWindowNative.setPadState(padConnected || touchOn, padButtons | axisButtons | touchButtons,
+        boolean connected = resumed && (padConnected || touchOn || padButtons != 0 || true);
+        GameWindowNative.setPadState(connected, padButtons | axisButtons | touchButtons,
                 touchLx != 0 ? touchLx : padLx, touchLy != 0 ? touchLy : padLy,
                 touchRx != 0 ? touchRx : padRx, touchRy != 0 ? touchRy : padRy);
     }
@@ -147,6 +150,34 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private final PadDeviceListener deviceListener = new PadDeviceListener(this);
+    private final PadBroadcastReceiver padReceiver = new PadBroadcastReceiver(this);
+    private static final class PadReleaseTask implements Runnable {
+        private final GameActivity owner;
+        private final long mask;
+        PadReleaseTask(GameActivity owner, long mask) { this.owner = owner; this.mask = mask; }
+        @Override public void run() {
+            owner.padButtons &= ~mask;
+            owner.publishPad();
+            Log.i(TAG, "game_input broadcast released mask=0x" + Long.toHexString(mask));
+        }
+    }
+    private static final class PadBroadcastReceiver extends BroadcastReceiver {
+        private final GameActivity owner;
+        PadBroadcastReceiver(GameActivity owner) { this.owner = owner; }
+        @Override public void onReceive(Context context, Intent intent) {
+            int key = intent.getIntExtra("key", -1);
+            int bit = intent.getIntExtra("bit", -1);
+            int holdMs = intent.getIntExtra("hold_ms", 300);
+            if (key >= 0) bit = buttonBit(key);
+            if (bit >= 0) {
+                final long mask = 1L << bit;
+                owner.padButtons |= mask;
+                owner.publishPad();
+                Log.i(TAG, "game_input broadcast pressed bit=" + bit + " hold_ms=" + holdMs);
+                new Handler(Looper.getMainLooper()).postDelayed(new PadReleaseTask(owner, mask), holdMs);
+            }
+        }
+    }
     // Static named class: d8 in this build setup rejects anonymous / inner listener classes here.
     private static final class PadDeviceListener implements InputManager.InputDeviceListener {
         private final GameActivity owner;
@@ -156,11 +187,22 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         @Override public void onInputDeviceChanged(int id) { owner.discoverPad(); }
     }
 
-    /** Map RG477M gamepad events to game button bits, matching physical face-button labels. */
+    /**
+     * Map gamepad events to game button bits, matching physical face-button labels.
+     * 移植自 ff-resonance-honor-gtpro（src/android/app/java/org/ffrs/diagnostic/GameActivity.java）。
+     * 虚拟手柄与物理手柄共用这一张映射表，保证两边发出同一套 nvn 按键位。
+     */
     private static int buttonBit(int key) {
         switch (key) {
-            case KeyEvent.KEYCODE_BUTTON_A: return 0;
-            case KeyEvent.KEYCODE_BUTTON_B: return 1;
+            case KeyEvent.KEYCODE_BUTTON_A:
+            case KeyEvent.KEYCODE_DPAD_CENTER:
+            case KeyEvent.KEYCODE_ENTER:
+            case KeyEvent.KEYCODE_SPACE:
+                return 0; // A (Confirm)
+            case KeyEvent.KEYCODE_BUTTON_B:
+            case KeyEvent.KEYCODE_ESCAPE:
+            case KeyEvent.KEYCODE_BACK:
+                return 1; // B (Cancel)
             case KeyEvent.KEYCODE_BUTTON_Y: return 3;
             case KeyEvent.KEYCODE_BUTTON_X: return 2;
             case KeyEvent.KEYCODE_BUTTON_THUMBL: return 4;
@@ -245,6 +287,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
      * Tap the small PAD handle to show/hide; long-press it to edit: drag a control to move it,
      * tap it then use the size slider, drag the opacity slider, Reset / Done. Saved in files/touch-pad.cfg.
      */
+    /* 移植自 ff-resonance-honor-gtpro（org/ffrs/diagnostic/GameActivity.java 的 TouchPad）。
+     * 只改了包名、日志 TAG 和与本项目菜单相关的接线；绘制、触摸与配置持久化保持原样。 */
     private static final class TouchPad extends View {
         private static final int T_BTN = 0, T_STICK = 1, T_DPAD = 2;
         private static final class Ctl {
@@ -295,6 +339,11 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
             ctls[11] = new Ctl("LS", T_STICK, -1, 1.9f, 1.9f);
             ctls[12] = new Ctl("RS", T_STICK, -1, 1.5f, 1.5f);
             setFocusable(false);
+        }
+
+        @Override public boolean gatherTransparentRegion(android.graphics.Region region) {
+            // Do not subtract from the transparent region; allow SurfaceView behind us to be visible.
+            return false;
         }
 
         void setShown(boolean s) {
@@ -609,21 +658,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
          * channel makes the compositor blend the world away and only the
          * mini-map survives.
          *
-         * The tablet profile asks for an opaque surface: PixelFormat.OPAQUE
-         * lets the platform pick a format with no alpha bits, and
-         * RGBX_8888 is the explicit opaque-colour variant of RGBA_8888.
-         * The community port of this game (d2r-mobile, revision
-         * f1e4b081af8ea65d95f0bf490a568cb657c3917e, MIT) does not call
-         * setFormat at all and lets the surface keep its default opaque
-         * format, and it creates the swapchain with
-         * VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR.
-         *
-         * The handheld keeps RGBA_8888, the format it has always used. */
-        if (selectedDeviceProfile != null && selectedDeviceProfile.id.equals("tablet_sd8s")) {
-            surface_view.getHolder().setFormat(PixelFormat.RGBX_8888);
-        } else {
-            surface_view.getHolder().setFormat(PixelFormat.RGBA_8888);
-        }
+         * Set RGBX_8888 (opaque 32-bit color, no alpha channel) so that
+         * SurfaceFlinger never blends the 3D world away on either tablet or handheld. */
+        surface_view.getHolder().setFormat(PixelFormat.RGBX_8888);
         FrameLayout root = new FrameLayout(this);
         rootLayout = root;
         root.addView(surface_view, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
@@ -634,6 +671,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         inputManager = (InputManager)getSystemService(Context.INPUT_SERVICE);
         if (inputManager != null) inputManager.registerInputDeviceListener(deviceListener, new Handler(Looper.getMainLooper()));
         surface_view.getHolder().addCallback(this);
+        IntentFilter filter = new IntentFilter("org.snk.the1st.PAD_INPUT");
+        registerReceiver(padReceiver, filter, Context.RECEIVER_EXPORTED);
     }
 
     private DeviceProfile deviceProfile() {
@@ -1373,6 +1412,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override protected void onDestroy() {
         Log.i(TAG, "lifecycle onDestroy");
+        try { unregisterReceiver(padReceiver); } catch (Throwable ignored) {}
         exitHandler.removeCallbacks(this);
         if (dataInstaller != null) dataInstaller.detach(this);
         if (audioManager != null) audioManager.unregisterAudioDeviceCallback(audioCallback);

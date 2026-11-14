@@ -892,18 +892,17 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
      * Only the tablet profile changes. The handheld presents by rendering
      * straight into the swapchain image, so no blit carries an alpha channel
      * there, and its composite alpha stays exactly as it was. */
-    if (tablet_profile && tablet_profile[0] == '1') {
+    if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR) {
         swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
-        if (!(capabilities.supportedCompositeAlpha & swapchain_info.compositeAlpha)) {
-            for (uint32_t bit = 1; bit <= 8; bit <<= 1) {
-                if (capabilities.supportedCompositeAlpha & bit) {
-                    swapchain_info.compositeAlpha = (VkCompositeAlphaFlagBitsKHR)bit;
-                    break;
-                }
+    } else if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+        swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    } else {
+        for (uint32_t bit = 1; bit <= 8; bit <<= 1) {
+            if (capabilities.supportedCompositeAlpha & bit) {
+                swapchain_info.compositeAlpha = (VkCompositeAlphaFlagBitsKHR)bit;
+                break;
             }
         }
-    } else {
-        swapchain_info.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
     }
     fprintf(stderr, "[nvn] vulkan: composite alpha selected=%#x supported=%#x "
                     "(tablet=%d; opaque game layer ignores the alpha of the copied frame)\n",
@@ -1224,6 +1223,7 @@ static int nvn_vulkan_present_image(nvn_device_state *device, void *image, uint3
         if (destination_x > 0 || destination_y > 0 ||
             destination_w < (int32_t)st->width || destination_h < (int32_t)st->height) {
             memset(&black, 0, sizeof(black));
+            black.float32[3] = 1.0f;
             memset(&range, 0, sizeof(range));
             range.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
             range.levelCount = 1;

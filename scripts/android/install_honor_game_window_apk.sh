@@ -8,16 +8,26 @@ FFRS_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 HONOR_SERIAL="A42BBB5109000333"
 RG477M_SERIAL="RG477M01445122"
 
-FFRS_DEVICE="${FFRS_DEVICE:-${HONOR_SERIAL}}"
+# Support explicit device target via FFRS_DEVICE or TARGET_DEVICE or auto-detect
+TARGET_DEVICE="${TARGET_DEVICE:-${FFRS_DEVICE:-}}"
+if [[ -z "${TARGET_DEVICE}" ]]; then
+    # Auto-detect if only one is attached or prefer Honor
+    if adb -s "${RG477M_SERIAL}" get-state >/dev/null 2>&1 && ! adb -s "${HONOR_SERIAL}" get-state >/dev/null 2>&1; then
+        TARGET_DEVICE="${RG477M_SERIAL}"
+    else
+        TARGET_DEVICE="${HONOR_SERIAL}"
+    fi
+fi
+FFRS_DEVICE="${TARGET_DEVICE}"
 FFRS_APK="${FFRS_APK:-${FFRS_ROOT}/.local/android-apk/snk-the1st-game-window-debug.apk}"
 FFRS_PACKAGE="org.snk.the1st.gamewindow"
 FFRS_ACTIVITY="org.snk.the1st.GameActivity"
-FFRS_LOGS="${FFRS_ROOT}/.local/logs/android-game-window"
+FFRS_LOGS="${FFRS_ROOT}/.local/logs/android-game-window-${FFRS_DEVICE}"
 mkdir -p "${FFRS_LOGS}"
 
-# Device isolation enforcement
-if [[ "${FFRS_DEVICE}" == "${RG477M_SERIAL}" ]]; then
-    echo "BLOCKED_DEVICE: Operating on RG477M01445122 is strictly forbidden in honor-gtpro!" >&2
+# Device validation
+if [[ "${FFRS_DEVICE}" != "${HONOR_SERIAL}" && "${FFRS_DEVICE}" != "${RG477M_SERIAL}" ]]; then
+    echo "BLOCKED_DEVICE: device ${FFRS_DEVICE} is not in the approved list (Honor: ${HONOR_SERIAL}, RG477M: ${RG477M_SERIAL})" >&2
     exit 2
 fi
 
@@ -47,8 +57,8 @@ step() {
 echo "Target Device: ${FFRS_DEVICE} (Honor GT Pro)"
 step device-properties adb -s "${FFRS_DEVICE}" shell "getprop ro.product.model; getprop ro.build.version.sdk"
 step install adb -s "${FFRS_DEVICE}" install -r "${FFRS_APK}"
+step grant-storage adb -s "${FFRS_DEVICE}" shell "appops set ${FFRS_PACKAGE} MANAGE_EXTERNAL_STORAGE allow 2>/dev/null || true"
 step force-stop adb -s "${FFRS_DEVICE}" shell am force-stop "${FFRS_PACKAGE}"
-step logcat-clear adb -s "${FFRS_DEVICE}" logcat -c
 
 # Launch without any Intent extras: pure cold-start autodiscovery
 step cold-launch adb -s "${FFRS_DEVICE}" shell am start -W -n "${FFRS_PACKAGE}/${FFRS_ACTIVITY}"

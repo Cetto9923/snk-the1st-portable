@@ -62,7 +62,7 @@ static void *wait_impl(void *p,int64_t ns,int timed){
     lock();wait_set *s=find_set(p);if(!s||!s->first||s->waiting)invalid("wait empty/unknown/already waiting");s->waiting=1;
     if(++s->waits==1)fprintf(stderr,"[multiwait] first wait set=%p timed=%d\n",p,timed);
     void *ready=NULL;int result=0;
-    for(;;){for(holder *h=s->first;h;h=h->linked_next)if(nso_host_os_is_event_signaled(h->event)){ready=h->object;break;}
+    for(;;){for(holder *h=s->first;h;h=h->linked_next)if(nso_host_os_is_event_signaled(h->event)){ready=h->object;nso_host_os_consume_if_auto(h->event);break;}
         if(ready||result==ETIMEDOUT)break;
         if(result)invalid("condition wait failed");
 #if defined(__APPLE__)

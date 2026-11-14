@@ -9,6 +9,7 @@
     <application android:label="@string/app_name" android:icon="@mipmap/ic_launcher"
         android:roundIcon="@mipmap/ic_launcher" android:debuggable="true"
         android:allowBackup="false" android:extractNativeLibs="true"
+        android:allowNativeHeapPointerTagging="false"
         android:theme="@android:style/Theme.Material.NoActionBar">
         <activity android:name="org.snk.the1st.GameActivity" android:exported="true"
             android:label="@string/app_name"

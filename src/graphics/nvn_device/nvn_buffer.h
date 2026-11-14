@@ -45,15 +45,13 @@
 #include <stddef.h>
 #include <stdint.h>
 
-/* How many buffers the runtime tracks at the same time. The guest keeps its
- * buffers in a pool, so a handful is enough; a guest that wants more is told
- * so instead of being served silently. */
-#define NVN_BUFFER_MAX_BUFFERS 64
+/* How many buffers the runtime tracks at the same time. Increased to 16384
+ * so complex games with multiple pools/draw calls never run out of slots. */
+#define NVN_BUFFER_MAX_BUFFERS 16384
 
-/* How many buffer builders the runtime tracks at the same time. The guest
- * makes a builder, fills it, initializes a buffer with it and reuses the
- * builder for the next buffer, so a few are enough. */
-#define NVN_BUFFER_MAX_BUILDERS 16
+/* How many buffer builders the runtime tracks at the same time. Increased
+ * to 4096 so builder allocations across frames/threads never overflow. */
+#define NVN_BUFFER_MAX_BUILDERS 4096
 
 /* The eighteen names of this family. The builder's seven names and the
  * buffer's eleven names live in one table, because the guest resolves them as

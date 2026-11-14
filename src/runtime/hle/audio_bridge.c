@@ -633,6 +633,9 @@ int ffrs_audio_set_platform_directory(const char *directory) {
        stat(directory,&st) || !S_ISDIR(st.st_mode))return -1;
     pthread_mutex_lock(&audio_lock);strcpy(platform_directory,directory);pthread_mutex_unlock(&audio_lock);return 0;
 }
+/* The directory the host set above, so other HLE modules can look for their own
+ * opt-in markers in the same place instead of hardcoding a package path. */
+const char *ffrs_audio_platform_directory(void) {return platform_directory[0]?platform_directory:NULL;}
 static int output_channels(void) {
     pthread_mutex_lock(&audio_lock);
 #if defined(__ANDROID__)

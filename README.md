@@ -2,7 +2,7 @@
 
 Switch 原生游戏《空之轨迹 the 1st》（TID `01001E9023920000`）在 Android 平板上的原生移植工程。
 
-当前状态：**Phase 0 完成（基线与复用差距已量化），Phase 1 未开始**。游戏本体已解密，guest 模块图已建立，HLE 复用率已测出；尚未在真机启动 guest。
+当前状态：guest 曾在真机执行到资源加载，但尚无真实可玩画面验收。资源读取器已补充压缩块解码，并从本体解析出文件清单与少量原始资源；音频、图形及完整游戏流程仍待实现和验证。最新记录见 `coordination/HANDOFF.md`。
 
 ## 恢复入口
 
@@ -27,7 +27,7 @@ python3 scripts/extract/nso_decompress.py .local/nca/exefs/main --out .local/nca
 python3 scripts/analysis/module_graph.py --modules main=... --hle src/runtime/hle/guest_process.c \
     --resolver <基线>/scripts/runtime/resolve_import_callers.py --out .local/analysis/module_graph.json
 
-# 构建 Android APK（继承基线脚本，包名待改为本游戏）
+# 设备资源空闲后构建 Android APK（当前包名已独立）
 bash scripts/android/build_game_window_apk.sh
 ```
 

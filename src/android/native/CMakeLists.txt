@@ -57,6 +57,92 @@ if(ANDROID)
     set(FFRS_GUEST_HLE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../runtime/hle" CACHE PATH "Typed runtime HLE source directory")
     set(FFRS_GUEST_NVN_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../graphics/nvn_device" CACHE PATH "NVN device source directory")
     enable_language(ASM)
+    # libopus (decoder only, fixed-point): the title decodes BGM/SE through
+    # nn::codec, and an Opus packet decoder is the whole of what it needs from
+    # it. The vendored snapshot in third_party/opus was assembled for exactly
+    # this configuration: top-level silk files only, no silk/fixed or silk/float
+    # subdirectories, so FIXED_POINT is the only configuration it can build.
+    set(FFRS_OPUS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/opus" CACHE PATH "libopus source directory")
+    add_library(ffrs_opus STATIC
+        "${FFRS_OPUS_DIR}/silk/CNG.c"
+        "${FFRS_OPUS_DIR}/silk/LPC_analysis_filter.c"
+        "${FFRS_OPUS_DIR}/silk/LPC_fit.c"
+        "${FFRS_OPUS_DIR}/silk/LPC_inv_pred_gain.c"
+        "${FFRS_OPUS_DIR}/silk/LP_variable_cutoff.c"
+        "${FFRS_OPUS_DIR}/silk/NLSF2A.c"
+        "${FFRS_OPUS_DIR}/silk/NLSF_decode.c"
+        "${FFRS_OPUS_DIR}/silk/NLSF_stabilize.c"
+        "${FFRS_OPUS_DIR}/silk/NLSF_unpack.c"
+        "${FFRS_OPUS_DIR}/silk/PLC.c"
+        "${FFRS_OPUS_DIR}/silk/biquad_alt.c"
+        "${FFRS_OPUS_DIR}/silk/bwexpander.c"
+        "${FFRS_OPUS_DIR}/silk/bwexpander_32.c"
+        "${FFRS_OPUS_DIR}/silk/code_signs.c"
+        "${FFRS_OPUS_DIR}/silk/dec_API.c"
+        "${FFRS_OPUS_DIR}/silk/decode_core.c"
+        "${FFRS_OPUS_DIR}/silk/decode_frame.c"
+        "${FFRS_OPUS_DIR}/silk/decode_indices.c"
+        "${FFRS_OPUS_DIR}/silk/decode_parameters.c"
+        "${FFRS_OPUS_DIR}/silk/decode_pitch.c"
+        "${FFRS_OPUS_DIR}/silk/decode_pulses.c"
+        "${FFRS_OPUS_DIR}/silk/decoder_set_fs.c"
+        "${FFRS_OPUS_DIR}/silk/gain_quant.c"
+        "${FFRS_OPUS_DIR}/silk/init_decoder.c"
+        "${FFRS_OPUS_DIR}/silk/inner_prod_aligned.c"
+        "${FFRS_OPUS_DIR}/silk/interpolate.c"
+        "${FFRS_OPUS_DIR}/silk/lin2log.c"
+        "${FFRS_OPUS_DIR}/silk/log2lin.c"
+        "${FFRS_OPUS_DIR}/silk/pitch_est_tables.c"
+        "${FFRS_OPUS_DIR}/silk/resampler.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_down2.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_down2_3.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_private_AR2.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_private_IIR_FIR.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_private_down_FIR.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_private_up2_HQ.c"
+        "${FFRS_OPUS_DIR}/silk/resampler_rom.c"
+        "${FFRS_OPUS_DIR}/silk/shell_coder.c"
+        "${FFRS_OPUS_DIR}/silk/sigm_Q15.c"
+        "${FFRS_OPUS_DIR}/silk/sort.c"
+        "${FFRS_OPUS_DIR}/silk/stereo_MS_to_LR.c"
+        "${FFRS_OPUS_DIR}/silk/stereo_decode_pred.c"
+        "${FFRS_OPUS_DIR}/silk/sum_sqr_shift.c"
+        "${FFRS_OPUS_DIR}/silk/table_LSF_cos.c"
+        "${FFRS_OPUS_DIR}/silk/tables_LTP.c"
+        "${FFRS_OPUS_DIR}/silk/tables_NLSF_CB_NB_MB.c"
+        "${FFRS_OPUS_DIR}/silk/tables_NLSF_CB_WB.c"
+        "${FFRS_OPUS_DIR}/silk/tables_gain.c"
+        "${FFRS_OPUS_DIR}/silk/tables_other.c"
+        "${FFRS_OPUS_DIR}/silk/tables_pitch_lag.c"
+        "${FFRS_OPUS_DIR}/silk/tables_pulses_per_block.c"
+        "${FFRS_OPUS_DIR}/celt/bands.c"
+        "${FFRS_OPUS_DIR}/celt/celt.c"
+        "${FFRS_OPUS_DIR}/celt/celt_decoder.c"
+        "${FFRS_OPUS_DIR}/celt/celt_lpc.c"
+        "${FFRS_OPUS_DIR}/celt/cwrs.c"
+        "${FFRS_OPUS_DIR}/celt/entcode.c"
+        "${FFRS_OPUS_DIR}/celt/entdec.c"
+        "${FFRS_OPUS_DIR}/celt/entenc.c"
+        "${FFRS_OPUS_DIR}/celt/kiss_fft.c"
+        "${FFRS_OPUS_DIR}/celt/laplace.c"
+        "${FFRS_OPUS_DIR}/celt/mathops.c"
+        "${FFRS_OPUS_DIR}/celt/mdct.c"
+        "${FFRS_OPUS_DIR}/celt/modes.c"
+        "${FFRS_OPUS_DIR}/celt/pitch.c"
+        "${FFRS_OPUS_DIR}/celt/quant_bands.c"
+        "${FFRS_OPUS_DIR}/celt/rate.c"
+        "${FFRS_OPUS_DIR}/celt/vq.c"
+        "${FFRS_OPUS_DIR}/src/extensions.c"
+        "${FFRS_OPUS_DIR}/src/opus.c"
+        "${FFRS_OPUS_DIR}/src/opus_decoder.c"
+        "${FFRS_OPUS_DIR}/src/opus_multistream.c"
+        "${FFRS_OPUS_DIR}/src/opus_multistream_decoder.c"
+        "${FFRS_OPUS_DIR}/src/repacketizer.c"
+    )
+    target_include_directories(ffrs_opus PRIVATE
+        "${FFRS_OPUS_DIR}/include" "${FFRS_OPUS_DIR}/celt"
+        "${FFRS_OPUS_DIR}/silk" "${FFRS_OPUS_DIR}/src")
+    target_compile_definitions(ffrs_opus PRIVATE FIXED_POINT=1 OPUS_BUILD=1)
     add_library(ffrs_guest_runtime STATIC
         "${FFRS_GUEST_NSO_DIR}/nso_loader.c"
         "${FFRS_GUEST_NSO_DIR}/nso_boot.c"
@@ -177,7 +263,7 @@ if(ANDROID)
     add_library(ffrs_game_window SHARED game_window_jni.cpp game_vulkan_probe.cpp guest_boot_jni.cpp)
     set_target_properties(ffrs_game_window PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
     target_include_directories(ffrs_game_window PRIVATE "${FFRS_NATIVE_WINDOW_HLE_DIR}" "${FFRS_GUEST_NSO_DIR}")
-    target_link_libraries(ffrs_game_window PRIVATE android log vulkan ffrs_guest_runtime)
+    target_link_libraries(ffrs_game_window PRIVATE android log vulkan ffrs_guest_runtime ffrs_opus)
     find_package(Python3 REQUIRED COMPONENTS Interpreter)
     foreach(target probe_rg477m nso_diagnostic ffrs_diagnostic ffrs_game_window)
         target_link_options(${target} PRIVATE "-Wl,-z,max-page-size=16384" "-Wl,--build-id=sha1" "-Wl,--eh-frame-hdr")

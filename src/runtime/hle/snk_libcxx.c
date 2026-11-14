@@ -1,4 +1,6 @@
 #include "snk_libcxx.h"
+#include "guest_process.h"
+#include "../nso/native_boundary.h"
 
 #include <pthread.h>
 #include <stdbool.h>
@@ -195,13 +197,23 @@ static uint64_t snk_recursive_mutex_try_lock(void *object) {
  * that is already zero calls that callback without a decrement, which
  * is what the extracted nnSdk code does. */
 static uint64_t snk_shared_weak_count_release_weak(void *object) {
+    if (!object) return 0;
     uint64_t *counter = (uint64_t *)((char *)object + 0x10);
     uint64_t value = __atomic_load_n(counter, __ATOMIC_ACQUIRE);
     if (value == 0) {
         void **vtable = *(void ***)object;
         if (vtable) {
             void (*on_zero_weak)(void *) = *(void **)((char *)vtable + 0x20);
-            if (on_zero_weak) on_zero_weak(object);
+            if (on_zero_weak) {
+                nb_scope *scope = guest_process_current_boundary();
+                if (scope) {
+                    nb_registers reg = {0};
+                    reg.x[0] = (uint64_t)(uintptr_t)object;
+                    nb_call_from_host(scope, (void (*)(void))(uintptr_t)on_zero_weak, &reg);
+                } else {
+                    on_zero_weak(object);
+                }
+            }
         }
         return 0;
     }
@@ -234,6 +246,16 @@ static uint64_t snk_next_prime(uint64_t value) {
     }
 }
 
+static uint64_t snk_sized_delete(void *ptr, uint64_t size) {
+    (void)size;
+    if (ptr) {
+        if (guest_process_interposed_free(ptr) != 1) {
+            fprintf(stderr, "[snk-libcxx] _ZdlPvm: guest_process_interposed_free failed for %p\n", ptr);
+        }
+    }
+    return 0;
+}
+
 /* ====================================================================== */
 /* The import table                                                    */
 /* ====================================================================== */
@@ -256,6 +278,8 @@ static const struct snk_libcxx_entry s_entries[] = {
     { "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEEaSERKS5_", (uintptr_t)&snk_string_assign, 2, 1 },
     { "_ZNSt3__112basic_stringIcNS_11char_traitsIcEENS_9allocatorIcEEE7replaceEmmPKc", (uintptr_t)&snk_string_replace, 4, 1 },
     { "_ZNSt3__112__next_primeEm", (uintptr_t)&snk_next_prime, 1, 1 },
+    { "_ZdlPvm", (uintptr_t)&snk_sized_delete, 2, 0 },
+    { "_ZdaPvm", (uintptr_t)&snk_sized_delete, 2, 0 },
 };
 
 uint64_t snk_libcxx_lookup(const char *name, unsigned *arguments, unsigned *returns) {

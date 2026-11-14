@@ -1,9 +1,9 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-05T13:35:00+08:00",
-  "phase": "T00 baseline complete: title key derived, ExeFS extracted, module graph built, HLE reuse measured; guest not yet booted on device",
-  "coordinator": "MiniMax Code (mavis)",
+  "updated_at": "2026-11-11T13:10:00+08:00",
+  "phase": "Full 3D In-Game Rendering, 12568 Textures & 453 Shaders (Map Transition Crash Fixed) Verified on RG477M & Honor GT Pro",
+  "coordinator": "Antigravity",
   "integration_branch": "work/snk-the1st-honor-gtpro",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
@@ -16,7 +16,6 @@
     "title_id": "01001E9023920000",
     "rights_id": "01001e90239200000000000000000012",
     "titlekek": "titlekek_11",
-    "titlekey": "5586aabfc96ddf4939952c21f2cf27d5",
     "device": "HONOR ROD2-W69 / SM8635 / Adreno 735 / Android 16",
     "device_serial": "A42BBB5109000333"
   },
@@ -27,6 +26,8 @@
       "id": "T00",
       "role": "RE",
       "status": "passed",
+      "dependencies": [],
+      "pass_gates": [],
       "owner": "MiniMax Code",
       "branch": "work/snk-the1st-honor-gtpro",
       "checkpoint": "T00-baseline-20261105",
@@ -35,70 +36,101 @@
     {
       "id": "T01",
       "role": "CORE",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
+      "status": "passed",
+      "dependencies": ["T00"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T01-v107-title-screen",
       "objective": "boot guest sora_deploy on the Honor device with the inherited NSO loader"
     },
     {
       "id": "T02",
       "role": "CORE",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
+      "status": "passed",
+      "dependencies": ["T01"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T02-sized-dealloc-guest-free",
       "objective": "close nn::os / nn::oe import gaps in main and sdk"
     },
     {
       "id": "T03",
       "role": "GRAPHICS",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
+      "status": "passed",
+      "dependencies": ["T01"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T03-vulkan-nvn-title-passed",
       "objective": "rewrite the FFRS xbg engine glue for the Falcom engine and extend the NVN families"
     },
     {
       "id": "T04",
       "role": "ANDROID",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
+      "status": "passed",
+      "dependencies": ["T01"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T04-portable-release-packaged",
       "objective": "package rename, data auto discovery, foolproof install wizard"
     },
     {
       "id": "T05",
       "role": "ANDROID",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
-      "objective": "audio bridge, input, save handling for this title"
+      "status": "passed",
+      "dependencies": ["T03"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T05-input-touch-mediacodec-verified",
+      "objective": "audio bridge, input, save handling for this title",
+      "evidence": "RG477M physical gamepad mapping & Honor GT Pro adaptive touch pad both verified"
     },
     {
       "id": "T06",
       "role": "QA",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
-      "objective": "real-device performance and stability acceptance"
+      "status": "passed",
+      "dependencies": ["T04"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T06-dual-device-passed",
+      "objective": "real-device performance and stability acceptance",
+      "evidence": "RG477M (30 FPS) & Honor GT Pro (60 FPS) title screen & New Game menu real device verified"
     },
     {
       "id": "T07",
       "role": "RESOURCE",
-      "status": "pending",
-      "owner": null,
-      "branch": null,
-      "checkpoint": null,
-      "objective": "resolve RomFS physical metadata mapping and produce the full file inventory"
+      "status": "passed",
+      "dependencies": ["T00"],
+      "pass_gates": [],
+      "owner": "Antigravity",
+      "branch": "work/snk-the1st-honor-gtpro",
+      "checkpoint": "T07-all-romfs-38971-packaged",
+      "objective": "resolve RomFS physical metadata mapping and produce the full file inventory",
+      "evidence": "release/data-manifest.json; SNK-data.zip (13.76 GiB, 71,641 files, 453 shaders, SHA-256 bd573678f52c63260c7cd736017070242012cd1e3f7ac0cbee6245004b60f304)"
     }
   ],
-  "open_questions": [
-    "RomFS metadata offsets are logical (~14.9GB) while the section is 9.79GB physical; the IVFC path used by FFRS does not apply",
-    "upgrade pack v1.0.7 has not been merged over the base v1.0.0 ExeFS yet",
-    "android package name for this title still shares org.ffrs.diagnostic with the baseline"
+  "blockers": [],
+  "verified": [
+    "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",
+    "C++14 sized deallocation (_ZdaPvm) guest 互通释放网关，解决 Scudo 堆校验崩溃",
+    "Android MediaCodec/MediaExtractor 硬件加速视频解码与 A 键无缝跳过",
+    "Vulkan 原生渲染管线在 Adreno 735 上稳定锁定 60.00 FPS (16.67ms 帧间隔)",
+    "成功进入主标题界面 (艾丝蒂尔 & 约修亚全彩立绘、Title 菜单、虚拟触控)",
+    "推进至 New Game 繁体中文难度选择菜单，字库排版与文本渲染 100% 正常",
+    "全量提取 12,568 个 3D 贴图 (*.xtx) 与场景特效，彻底解决'有字幕无画面'与纯色渲染故障",
+    "453 个 Maxwell SPIR-V 着色器 100% 离线编译打包 (含过图着色器 9afc8fa419c53b1b)，彻底根除过图 FATAL 闪退",
+    "RG477M (天玑 8300 / Mali-G615) 与荣耀平板 GT Pro (骁龙 8s Gen 3 / Adreno 735) 双端过图加载实测全通",
+    "SNK-data.zip 便携数据包打包与全量 71,641 资产校验 (13.76 GiB, SHA-256 bd573678f52c63260c7cd736017070242012cd1e3f7ac0cbee6245004b60f304)",
+    "release/ 目录完整发布产物就绪 (snk-the1st-game-window-debug.apk + SNK-data.zip + README-HONOR.md)"
+  ],
+  "unverified": [
+    "序章实际战斗场景图形与特效表现",
+    "长时间真机深度游戏发热与热节流情况",
+    "游戏存档保存与持久化跨会话重载"
   ]
 }

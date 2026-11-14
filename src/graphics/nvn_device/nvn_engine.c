@@ -78,8 +78,15 @@ static int engine_present(void *userdata, void *native_window, VkImage image, Vk
     return 0;
 }
 
+#if defined(__ANDROID__)
+#include <android/log.h>
+#endif
+
 static void engine_log(void *userdata, const char *message) {
     (void)userdata;
+#if defined(__ANDROID__)
+    __android_log_print(ANDROID_LOG_INFO, "SNK-GFX", "%s", message ? message : "");
+#endif
     fprintf(stderr, "[engine] %s\n", message ? message : "");
 }
 

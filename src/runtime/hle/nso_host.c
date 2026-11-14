@@ -1098,7 +1098,7 @@ typedef struct {
 static nso_fs_file_entry s_fs_open_files[NSO_FS_MAX_OPEN_FILES];
 static pthread_mutex_t s_fs_file_mutex = PTHREAD_MUTEX_INITIALIZER;
 
-static int resolve_fs_path(const char *nn_path, char *out_host_path, size_t out_size) {
+int nso_host_fs_resolve_path(const char *nn_path, char *out_host_path, size_t out_size) {
     if (!nn_path || !out_host_path || out_size == 0) return -1;
 
     const char *colon = strchr(nn_path, ':');
@@ -1155,6 +1155,10 @@ static int resolve_fs_path(const char *nn_path, char *out_host_path, size_t out_
         if (snprintf(out_host_path, out_size, "%s/%s", mount_host_path, norm_subpath) >= (int)out_size) return -1;
     }
     return 0;
+}
+
+static inline int resolve_fs_path(const char *nn_path, char *out_host_path, size_t out_size) {
+    return nso_host_fs_resolve_path(nn_path, out_host_path, out_size);
 }
 
 static int fs_path_is_writable(const char *path) {
@@ -2983,6 +2987,29 @@ bool nso_host_os_is_event_signaled(void *event) {
         pthread_mutex_unlock(&e->mutex);
     } else {
         s = ((uint8_t *)event)[0x10] != 0;
+    }
+    pthread_mutex_unlock(&s_event_registry_mutex);
+    return s;
+}
+
+bool nso_host_os_consume_if_auto(void *event) {
+    if (!event) return false;
+    pthread_mutex_lock(&s_event_registry_mutex);
+    struct nso_event_entry *e = find_event_locked(event);
+    bool s = false;
+    if (e) {
+        pthread_mutex_lock(&e->mutex);
+        s = e->signaled;
+        if (s && e->clear_mode == NN_OS_EVENT_CLEAR_MODE_AUTO) {
+            e->signaled = false;
+            ((uint8_t *)event)[0x10] = 0;
+        }
+        pthread_mutex_unlock(&e->mutex);
+    } else {
+        s = ((uint8_t *)event)[0x10] != 0;
+        if (s && ((uint8_t *)event)[0x12] == NN_OS_EVENT_CLEAR_MODE_AUTO) {
+            ((uint8_t *)event)[0x10] = 0;
+        }
     }
     pthread_mutex_unlock(&s_event_registry_mutex);
     return s;

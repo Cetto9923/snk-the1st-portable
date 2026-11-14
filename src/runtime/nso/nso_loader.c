@@ -588,6 +588,24 @@ static void fault_handler(int sig,siginfo_t *si,void *context) {
             } else fprintf(stderr,"[fault-doc] doc[0x10] memory unreadable\n");
         } else fprintf(stderr,"[fault-doc] doc unreadable (0x%" PRIx64 ")\n", doc);
     }
+    /* Intrusive container the crashing function was splicing into: x19 is the
+     * owner, x8 the neighbour node whose stale link the store followed. */
+    {
+        uint64_t count=0,head=0,tail=0,next=0,prev=0;
+        if (regs[19] && safe_read_mem((uintptr_t)regs[19]+0x38f0,&count,8)==8 &&
+            safe_read_mem((uintptr_t)regs[19]+0x3920,&head,8)==8 &&
+            safe_read_mem((uintptr_t)regs[19]+0x3928,&tail,8)==8)
+            fprintf(stderr,"[fault-list] container=0x%" PRIx64 " count=0x%" PRIx64 " head=0x%" PRIx64 " tail=0x%" PRIx64 "\n",
+                    regs[19], count, head, tail);
+        if (regs[8] && safe_read_mem((uintptr_t)regs[8]+0x38,&next,8)==8 &&
+            safe_read_mem((uintptr_t)regs[8]+0x40,&prev,8)==8)
+            fprintf(stderr,"[fault-list] node=0x%" PRIx64 " next=0x%" PRIx64 " prev=0x%" PRIx64 "\n",
+                    regs[8], next, prev);
+    }
+    {
+        extern void snk_hle_dump_allocators(void) __attribute__((weak));
+        if (snk_hle_dump_allocators) snk_hle_dump_allocators();
+    }
     for(int depth=0;depth<16 && stack_hi>=16 && !(fp&15) && fp>=stack_lo && fp<=stack_hi-16;depth++) {
         const uint64_t *frame=(const uint64_t*)(uintptr_t)fp;
         uint64_t next=frame[0],ret=frame[1];

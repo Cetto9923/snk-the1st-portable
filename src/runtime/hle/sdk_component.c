@@ -63,6 +63,13 @@ static const struct sdk_verified_image verified_images[] = {
       { 0x32,0xa9,0x6a,0xdc,0x6f,0xf4,0x74,0xf9,0x9f,0x9f,0xa7,0x99,0x58,0x03,0x26,0x7c,
         0xf6,0xad,0x54,0x40,0xc2,0x95,0xf5,0x00,0x9f,0xb4,0x77,0xf8,0xb9,0xfe,0x82,0x7f },
       0x9b0be0, 5000000 },
+    /* v1.0.7 update (title 01001E9023920800, 22.5.0, CN/KR): ExeFS sdk.nso,
+     * 12,217,984 B, extracted to .local/snk_game_dir/sdk.nso and deployed as
+     * /sdcard/SNK/sdk.nso. Audit: ChunkDuration at 0x9d32c8 holds 5000000. */
+    { "sora-no-kiseki-the-1st-v1.0.7",
+      { 0xf5,0x18,0xe8,0xad,0x45,0x97,0x1a,0xa4,0x68,0x99,0x69,0xc0,0xbe,0xdf,0xa0,0xb2,
+        0x8a,0x95,0xe5,0x24,0x53,0x72,0xb6,0x03,0x21,0x4e,0xed,0x78,0xb4,0x01,0x0d,0xaf },
+      0x9d32c8, 5000000 },
 };
 
 /* Address of the verified data symbol inside the loaded image. */
@@ -165,6 +172,29 @@ uint64_t ffrs_sdk_component_lookup(const char *name, unsigned *arguments, unsign
     else if(!strcmp(name,"_ZN2nn5audio29GetResamplerOutputSampleCountEPKNS0_13ResamplerTypeEi")){address=(uintptr_t)resampler_count;args=2;rets=1;}
     else if(!strcmp(name,"_ZN2nn5audio19InitializeResamplerEPNS0_13ResamplerTypeEPvmiii")){address=(uintptr_t)resampler_init;args=6;rets=1;}
     else if(!strcmp(name,"_ZN2nn5audio22ProcessResamplerBufferEPNS0_13ResamplerTypeEPiPsmPKsi")){address=(uintptr_t)resampler_process;args=6;rets=1;}
+    else if(!strncmp(name,"_ZN2nn5audio",12)){
+        /* 通用兜底：把 sdk.nso 自己导出的 nn::audio 符号解析到真实实现。
+         *
+         * 实测结果（2026-11-13）：打开后 260 个符号全部命中，AcquireSubMix
+         * 失败次数从 31 降到 0，AudioRenderer 的配置终于能搭起来。但游戏随后
+         * 新建的音频线程会在 sdk.nso 内访问空指针 +0x1f8 崩溃——说明配置层通了、
+         * 底层的音频系统线程还缺配套实现（输出桥 AudioOut 仍走 HLE，不匹配）。
+         *
+         * 因此默认关闭：只有显式设置 FFRS_AUDIO_NATIVE_ALL=1 才启用，避免为了
+         * 一个尚未打通的子系统把可玩的游戏弄崩。关掉时返回值与改动前完全一致。 */
+        static int native_all = -1;
+        if (native_all < 0) {
+            const char *v = getenv("FFRS_AUDIO_NATIVE_ALL");
+            native_all = v && v[0] == '1';
+        }
+        if (native_all) {
+            uint32_t sym = nso_find_symbol(sdk, name);
+            uint64_t value = sym ? nso_symbol_value(sdk, sym) : 0;
+            if (value) address = nso_addr(sdk, value);
+            if (arguments) fprintf(stderr, "[sdk-component] audio %s -> %s%#llx\n",
+                                   name, address ? "sdk.nso " : "not-exported ", (unsigned long long)value);
+        }
+    }
     if (address) { if (arguments) *arguments=args; if (returns) *returns=rets; }
     return address;
 }
