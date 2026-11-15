@@ -224,6 +224,7 @@ if(ANDROID)
         "${FFRS_NVN_VULKAN_DIR}/nvn/nvn_tex.c"
         "${FFRS_NVN_VULKAN_DIR}/tex/nvn_deswizzle.c"
         "${FFRS_NVN_VULKAN_DIR}/xbg_host_bridge.c"
+        "${FFRS_NVN_VULKAN_DIR}/xbg_dirty.c"
         "${FFRS_NVN_VULKAN_DIR}/nvn_vk_adapter.c"
         "${FFRS_NVN_VULKAN_DIR}/engine/xbg_blit.cpp"
         "${FFRS_NVN_VULKAN_DIR}/engine/xbg_clear.cpp"

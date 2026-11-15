@@ -9,9 +9,8 @@
  *   nvn_new_serial()             the global increasing sequence both the host and the engine use to
  *                                name the host textures and programs (nvn_obj.h: "New serial (> 0,
  *                                globally increasing)").
- *   nvn_dirty_since()            the dirty-page tracker's "was this range written since the stamp"
- *                                query. The engine declares it weak and only uses it together with
- *                                the rest of the tracker, which this port does not have.
+ * Page-generation APIs are supplied separately by xbg_dirty.c. Their Mali
+ * geometry-cache entry remains opt-in through gfx-vcache.
  *   nvn_pool_flags()             the memory pool flags (NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS lets
  *                                the engine skip a storage writeback a later writeback already
  *                                covers). There is no pool flag registry here.

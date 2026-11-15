@@ -533,11 +533,12 @@ static size_t safe_read_mem(uintptr_t addr, void *dst, size_t n) {
 #endif
 }
 extern int xbg_evguard_fault(void *address, int is_write, void *context) __attribute__((weak));
+extern int xbg_dirty_fault(void *address, int is_write) __attribute__((weak));
 
 static void fault_handler(int sig,siginfo_t *si,void *context) {
     ucontext_t *u=context;
 #if defined(__linux__) && defined(__aarch64__)
-    if(sig==SIGSEGV && si && u && xbg_evguard_fault){
+    if(sig==SIGSEGV && si && u && (xbg_evguard_fault || xbg_dirty_fault)){
         int is_write=0;
         const unsigned char *record=u->uc_mcontext.__reserved;
         size_t remaining=sizeof(u->uc_mcontext.__reserved);
@@ -550,7 +551,8 @@ static void fault_handler(int sig,siginfo_t *si,void *context) {
             }
             record+=header->size;remaining-=header->size;
         }
-        if(xbg_evguard_fault(si->si_addr,is_write,context))return;
+        if(xbg_dirty_fault && xbg_dirty_fault(si->si_addr,is_write))return;
+        if(xbg_evguard_fault && xbg_evguard_fault(si->si_addr,is_write,context))return;
     }
 #endif
     uint64_t pc=0,lr=0,fp=0,sp=0,fa=si?(uintptr_t)si->si_addr:0,regs[29]={0};

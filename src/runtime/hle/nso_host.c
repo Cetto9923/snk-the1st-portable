@@ -15,6 +15,8 @@ extern int ffrs_multiwait_event_waiting(void *) __attribute__((weak));
 #include "../nso/nso_loader.h"
 #include "../../graphics/nvn_device/nvn_device.h"
 extern void xbg_wtrack_prepare(void *, size_t) __attribute__((weak));
+extern int xbg_dirty_write_begin(void *, size_t) __attribute__((weak));
+extern void xbg_dirty_write_end(int) __attribute__((weak));
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -1325,8 +1327,12 @@ int32_t nso_host_fs_read_file(size_t *out_bytes_read, nn_fs_file_handle handle, 
     pthread_mutex_unlock(&s_fs_file_mutex);
 
     // Kernel writes return EFAULT on tracked read-only pages instead of faulting.
+    int dirty_lease = xbg_dirty_write_begin && xbg_dirty_write_end ? xbg_dirty_write_begin(buffer, size) : 0;
     if (size && xbg_wtrack_prepare) xbg_wtrack_prepare(buffer, size);
     ssize_t n = pread(fd, buffer, size, (off_t)offset);
+    int read_errno = errno;
+    if (xbg_dirty_write_end) xbg_dirty_write_end(dirty_lease);
+    errno = read_errno;
     if (n < 0) {
         fprintf(stderr, "[hle] nn::fs::ReadFile: pread failed fd=%d offset=%lld size=%zu errno=%d (%s)\n",
                 fd, (long long)offset, size, errno, strerror(errno));

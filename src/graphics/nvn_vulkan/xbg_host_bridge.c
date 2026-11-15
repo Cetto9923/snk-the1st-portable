@@ -15,19 +15,6 @@ static uint64_t g_serial;
 
 uint64_t nvn_new_serial(void) { return __atomic_add_fetch(&g_serial, 1, __ATOMIC_RELAXED) + 1; }
 
-/* The dirty-page tracker's "was this range written since the stamp" query.
- *
- * The engine declares this weak and uses it only together with the rest of the tracker
- * (nvn_dirty_tracked, nvn_dirty_protect, nvn_dirty_now), which this port does not have: the guest
- * pages are not write-protected here, so nothing can report a write. The stub answers "never
- * written", which keeps the cross-frame vertex / index cache and the texture dirty checks off. */
-int nvn_dirty_since(const void *addr, size_t len, uint64_t stamp) {
-    (void)addr;
-    (void)len;
-    (void)stamp;
-    return 0;
-}
-
 /* The memory pool flags of a range.
  *
  * The engine uses NVN_MEMORY_POOL_FLAGS_CPU_NO_ACCESS to skip a storage writeback that a later

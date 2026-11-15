@@ -619,3 +619,20 @@
 - 程序桶链候选已正常读回城门，截图rg-program-buckets-scene.png人物、柱体和城墙持续显示。PID32313同点simpleperf10秒8165样本、丢失0，nvn_program_info_if_changed退出至少1%热点，memcpy17.01%仍第一，rg-program-buckets-profile.txt。CPU比例只作热点定位，不能据此声称端到端已提速。
 - 新真实移动窗口在操作前声明600帧，program-buckets-motion-plan.json记录PID、源码dirty基线、APK、flags和动作。无录屏，横向杆左右各1秒、释放0.2秒。601次成功queue回调、601个不同工作帧、失败0、重复0，25.404914FPS，p50 37.913ms、p95 48.765462ms、p99 55.106461ms、max86.723615ms，超过100ms为0，未按帧时间删行。原CSV、metrics、actions和运行退出0日志均留.local/publication。该移动指标没有优于前次25.588FPS，未声称稳定30或严格同轨迹提升。
 - 完整图形67项66通过1私有输入跳过。程序查找组件另补1000个不同链位置的销毁、异址复用与存活对象验证，通过ASan/UBSan。下一步保留本轮索引查找有界性修正，评估为现有vertex/index缓存接入完整dirty tracker，以减少每帧约22MB几何复制，须先覆盖真实写入、宿主pread、池销毁与并发保护，未实现前保持vcache0。
+
+## T59 宿主页写入跟踪与几何缓存
+
+- 新增xbg_dirty.c/h，借鉴只读nxnative f02d0474cf1ed1de32ccee1313e1448d4f7da401的nvn_dirty.c页状态与代际思路，保留完整MIT许可。移除旧nvn_dirty_since恒0stub。只在Mali且显式gfx-vcache1时启用，缺标记默认仍关闭，Adreno默认不启用。
+- 内存池同步注册/撤销，退出时恢复RW。描述符边界不可变，退休描述符仅在相同页边界下复用，重新发布前原子推进每页代际。共享边界页的写入与撤销必须同时戳记全部覆盖范围，避免缓存查找切换到邻接池后误判干净。
+- 页面状态先BUSY、mprotect完成后再发布最终状态。NSO现有Linux ARM64故障处理器先路由写故障。NN ReadFile在保护互斥锁下执行pread，保留errno，避免准备写入后再次被渲染线程设只读而触发EFAULT。没有修改游戏包与存档字节。
+- tests/graphics/test_snk_dirty_tracker.py编译真实模块及真实NN ReadFile片段，ASan/UBSan覆盖2000次保护竞争/宿主读取、至少2000次真实写保护故障、两线程写入、共享页、2000次销毁复用、三个分配失败位置、mprotect失败、错误errno与关闭恢复。dirty-tracker-host-entry-tests.log通过，最新完整graphics68项67通过1私有fixture跳过，runtime9通过。
+- 首候选APK74f80db4，RG覆盖安装成功，vcache1/defer2/async0/wtrack0/perf0。同城门站立27.4-27.6FPS、CPU约18.5ms、GPU24.2ms。vcache命中22.30MB/帧，实际vertex约0.03MB、index约0.01MB，storage仍17.2MB。rg-geometry-dirty-initial.log、rg-geometry-dirty-scene.png。
+- 首版描述符每次注册追加，发现临时池每帧注册/撤销，已补相同页边界复用。后候选APK3512136b78520b3a508c1005dd10534cdfafc7921340d9e68e07281341de6beb，rg-dirty-reuse-install.log成功，graphics68项67通过1跳过。当前源码另删除未调用的prepare薄封装，行为入口不变，下一构建需重新记录SHA。
+- PID19744已明确从Load Game列表选save003艾里兹街道10:35，保存列表缩略图正常。加载后进入城门对白“时间刚刚好呢”，当前34-35FPS/730draw/13dispatch属于对白场景，不能和旧900draw自由场景直接比较。日志rg-dirty-reuse-explicit-gameplay.log中注册累计79209次、369描述符槽、13活跃池，复用后没有随每帧追加持续增长。当前界面rg-dirty-reuse-explicit-gameplay.png。下一步正常推进到城内自由移动并新建普通存档，再做600帧移动与视觉回归。
+
+## T60 用户新增设备适配方向
+
+- 用户明确所有设备均使用底座模式，477M允许降低内部渲染分辨率。高端手机期望1080p，先稳定30帧与正常显示，60帧后续独立验证。无需再次询问重启。
+- 已只读核对FFRS的DeviceProfile.java，它用分档连接operation mode与目标帧率。本项目当前JNI只把tablet_sd8s当docked，且所有Mali统一540，未满足用户新增要求，须改为底座模式与内部渲染分辨率分别配置。FFRS_PROFILE_TABLET还控制荣耀特有路径，不能直接把它对所有手机置1。
+- 原始main NSO build仍4f4fd1aed39eb96a649aba489ad3767d，rodata表main+61901c有640x360、800x450、960x540、1280x720、1440x810、1600x900、1920x1080、2560x1440、2880x1620、3840x2160。1080对应selector6。当前运行时基准1600x900，1080入口尚须验证附件、viewport与UV一起更新，不能只改变最终surface尺寸就声称原生1080。
+- 公开参考已查官方Qualcomm Snapdragon 8 Elite Gen5、MediaTek Dimensity9500规格及RogelioLB/nxnative-android、shenmintao/nxnative-android。后者明确Mali仍在调查，其他项目帧率不迁移为本项目验收。任天堂官方确认第一代Switch底座最高1920x1080/60Hz输出，具体游戏内部渲染率需实测。

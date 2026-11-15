@@ -8,6 +8,7 @@
  * objects, and a field that moved would be read as another field.
  */
 #include "nvn_engine.h"
+#include "../nvn_vulkan/xbg_dirty.h"
 
 #include <pthread.h>
 #include <stdio.h>
@@ -257,11 +258,13 @@ int nvn_engine_submit_with_release(const uint64_t *handles, int count,
 
 void nvn_engine_pool_add(void *memory, size_t bytes) {
     if (!nvn_engine_ready() || !memory || !bytes) return;
+    xbg_dirty_add(memory, bytes);
     xbg_legacy_pool_add(memory, bytes);
 }
 
 void nvn_engine_pool_del(void *memory) {
     if (!nvn_engine_ready() || !memory) return;
+    xbg_dirty_remove(memory);
     xbg_legacy_pool_del(memory);
 }
 
