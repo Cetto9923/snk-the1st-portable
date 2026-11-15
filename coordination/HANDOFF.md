@@ -768,3 +768,18 @@
 - onepass APK4e313a76已覆盖装机，PID12400，rg-cull-output-onepass-first.png为真实Continue7场景。flower-cull-onepass-cache1-motion事先600帧，601不同工作帧26.642139FPS、p50 36.063ms、p95 46.851ms、p99 53.877ms、max62.501ms，失败0/重复0/>100ms0。末尾画面rg-cull-onepass-motion-end.png两主角/NPC/墙体/路面正常，why4多窗口0、写回29.6MB/约2.75ms。独立SF短历史27.5943FPS，不能称稳定30或T64端到端提速。
 - 当前唯一设备477M，cache1/tex-dirty0/540/底座1/async0/defer2/vcache1/wtrack0/probe0，FFRS无进程。未运行输入脚本。普通save00745:23保留。荣耀暂停，其他机型与高端真1080仍未实测，公开release仍a35c458。
 - 下一步采集CPU热点中的纹理哈希来源。28ef旧采样中hash_memory166条调用链均来自get_image_slow的0x395678，对当前onepass ELF addr2line指向2437普通CPU纹理校验，但输入ELF版本不同，仅作线索。需准确新包映射或有界probe核纹理是否被页追踪覆盖。
+
+## T65 重复纹理校验诊断
+
+- T63 a44417f与T64 ec3e71c均已推送独立任务分支，公开release仍a35c458。当前T65基于ec3e71c，只有总控写入。下一有界probe3诊断仅记录普通CPU纹理哈希路径上12个不同的大纹理的pool/尺寸/stable/stamp/tracked状态，不读取额外纹理数据、不增加GPU等待。诊断暂未构建或安装，不用其包作正式FPS验收。
+
+- build-texture-tracking-diagnostic.log退出0，APKe64e26ce845596ba97f22f67d94a3ef7241fd262fb31129c2da93e400debca91覆盖安装，PID16319，正常Continue7。cache1/tex-dirty1。probe3四秒后finally0，rg-texture-tracking-diagnostic.log未出现任何大纹理普通哈希日志，rg原命令退出1表示没有匹配行。当前站立7824样本/丢失0，rg-texdirty-tracked-profile.txt里hash_memory无采样，说明该纹理校验入口已走页追踪。它没有证明移动FPS收益。
+- 主线程TID16392的/proc stat最后CPU7，不增加绑核。旧绑核失败在T59已记录。当前正在同save007/cache1/tex-dirty1下600帧移动，所有采样工具已结束，probe0，原始plan输入前记录。私有measure脚本新增实际storage/texture marker检查，避免计划和配置不一致。
+- 临时texture诊断源码已撤回，仅保留.local/publication/texture-tracking-diagnostic.patch与原始日志。产品源码仍ec3e71c。后续要构建无诊断正常包复验，不能把当前诊断包直接发布。
+
+- Texdirty/cache1诊断包probe0正式分离窗口flower-texdirty-cache1-motion为601不同工作帧27.201711FPS、p95 46.361ms、max73.308ms，失败0/重复0/>100ms0。图形诊断钩子没有额外GPU读回，仍需正常包复验。站立profile页查询nvn_dirty_since仅0.22%采样，原大块hash不再出现，减少哈希已实证但稳定30未达到。
+- 代码现有gfx-slot-count允许2..16，缺省16，T59组件已覆盖2/4/16退休回绕。当前应用RSS约5.7GB、系统有swap，线程主核实际CPU7。下一步正常ec3源码包试4槽，其他cache1/tex-dirty1/540/底座1/async0不变，记录同save007移动和在途写回。此为现有诊断配置试验，暂无收益结论，不改系统调度。
+
+- 正常源码ec3e71c重新构建5576b32bf01855c7f5b7e4420f5a95104549f8b0684a22f29bf8d93954f8c1ad（无临时诊断钩子）并覆盖安装，PID20127。启动仍Continue确认，补A后rg-four-slots-loaded.png才确认真实save007，未在标题测移动。
+- 4槽/cache1/tex-dirty1/540/底座1/async0/defer2/vcache1/wtrack0，flower-four-slots-motion事先600帧，601不同工作帧28.617652FPS、p50 33.553ms、p95 43.559ms、p99 51.541ms、max88.746ms，失败0/重复0/>100ms0。RSS从16槽6336436kB降4槽4394512kB，VmSwap分别17352/17284kB。末尾why4=0、GPU约23ms、submitCPU约17-18ms。配置尚未固化默认，稳定30未达到。
+- 当前同包同位置simpleperf10秒8431样本、丢失0，rg-four-slots-profile/samples.txt。精确当前ELF addr2line把state_find采样0x32f9a8等定位nvn_render_state.c:228-232，都是前端桶冲突后的全表遍历。采样state_find1.51%、nvn_texture_info_of2.10%。下一步复用已有nvn_program.c索引链方式，替换render state与texture桶冲突后的全表查找，必须覆盖表增长、原始状态复制、defaults、Finalize和地址复用。没有从旧包地址直接宣布定位成功。
