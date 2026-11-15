@@ -6,12 +6,14 @@
  */
 #include "movie_decoder.h"
 #include "movie_buffer.h"
+#include "movie_nv12.h"
 #include "nso_host.h"
 #include "guest_process.h"
 #include <media/NdkMediaCodec.h>
 #include <media/NdkMediaFormat.h>
 #include <media/NdkMediaExtractor.h>
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <climits>
 #include <cstdio>
@@ -26,6 +28,11 @@
 #include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
+extern "C" {
+#include "../../graphics/nvn_device/nvn_bridge.h"
+int nvn_bridge_texture_copy(const void *,ffrs_tex *) __attribute__((weak));
+int xbg_game_texture_write_rgba(const void *,const uint8_t *,size_t,uint32_t,uint32_t) __attribute__((weak));
+}
 
 namespace {
 constexpr uint32_t OK=0,UNKNOWN=0x1000,STATE=0x1006,SHORT_BUFFER=0x100a,
@@ -92,6 +99,7 @@ struct DecoderImpl {
     std::array<void*,4> events{};Metadata configuration,format;
     std::deque<int> available_inputs,available_outputs;
     std::set<int> acquired_inputs;std::map<int,Output> outputs;
+    std::vector<uint8_t> video_nv12,video_rgba;
     DecoderImpl(int t,int o,int m,int p):type(t),output(o),mode(m),priority(p){}
 };
 struct Decoder {void **vtable;DecoderImpl *impl;};
@@ -280,6 +288,9 @@ uint32_t acquire_output(Decoder *self,int *index,int64_t *pts,uint32_t *flags,in
     if(!d->available_outputs.empty())signal(d,1);else clear_event(d,1);return OK;
 }
 uint32_t buffer_size(Decoder *self,int *bytes,int *auxiliary) {
+    static std::atomic<unsigned> entry_logs{0};
+    if(entry_logs.fetch_add(1)<6)fprintf(stderr,"[movie] buffer_size entry self=%p impl=%p bytes=%p auxiliary=%p\n",
+        self,self?self->impl:nullptr,bytes,auxiliary);
     if(!self||!self->impl||!bytes||!auxiliary)return ARGUMENT;std::lock_guard<std::mutex> l(self->impl->mutex);
     auto *d=self->impl;
     if(d->type==4 || d->type==5){
@@ -335,13 +346,10 @@ uint32_t get_output(Decoder *self,int index,Buffer *out) {
     std::lock_guard<std::recursive_mutex> api(d->api_mutex);std::lock_guard<std::mutex> l(d->mutex);
     out->offset=out->size=0;auto i=d->outputs.find(index);if(!d->codec||i==d->outputs.end()||!i->second.acquired)return ARGUMENT;
     auto &o=i->second;if(o.info.offset<0||o.info.size<0)return UNKNOWN;
+    static std::atomic<unsigned> contract_logs{0};
+    if(contract_logs.fetch_add(1)<6)fprintf(stderr,"[movie] get_output contract self=%p vtable=%p size_slot=%p expected=%p buffer=%p capacity=%llu\n",
+        self,self->vtable,self->vtable[14],virtual_gates[14],out,(unsigned long long)out->capacity);
     if(!o.info.size)return OK;
-    /* output==3 is the title's "give me this frame as NV12" request: buffer_size()
-     * already reserves width*height*3/2 for it and output_metadata() advertises
-     * y-stride=w / uv-offset=w*h, i.e. a tight NV12 plane pair. Answering it with
-     * a one-byte token left every movie frame empty, which is why the opening
-     * animations played black. Fall through to the same NV12 conversion used by
-     * the other output modes; failures are logged below with the exact status. */
     size_t n=0;uint8_t *p=AMediaCodec_getOutputBuffer(d->codec,size_t(index),&n);
     if(size_t(o.info.offset)>n||size_t(o.info.size)>n-size_t(o.info.offset))return UNKNOWN;
     if(!p||!out->base)return UNKNOWN;
@@ -353,13 +361,37 @@ uint32_t get_output(Decoder *self,int index,Buffer *out) {
     }
     AMediaFormat *f=AMediaCodec_getBufferFormat(d->codec,size_t(index));if(f){format_read(o.format,f);AMediaFormat_delete(f);}
     size_t written=0;
-    /* Measured contract, 2026-11-13: the guest hands get_output a Buffer whose
-     * base is a valid guest pointer but whose capacity reads 8 for a 1920x1080
-     * NV12 frame (3,110,400 bytes), and it never calls buffer_size() at all.
-     * Copying a full frame there corrupts the guest heap and the game dies with
-     * x0=0x4141414141414141 / doc unreadable, so the capacity is truthful and
-     * the buffer really is tiny. Until the guest's sizing path is identified,
-     * only copy when the advertised capacity can hold the frame. */
+    // Sora main5f0978..5f09b0 supplies an NVN texture object and capacity8.
+    // Its video output is a texture destination, while mode1 uses raw NV12.
+    if(d->output==3 && d->mode==2 && out->capacity==8 && out->device){
+        ffrs_tex texture{};
+        int known=nvn_bridge_texture_copy?nvn_bridge_texture_copy(out->base,&texture):0;
+        static std::atomic<unsigned> target_logs{0};
+        if(target_logs.fetch_add(1)<4)fprintf(stderr,"[movie] NVN output destination object=%p known=%d target=%d format=%#x extent=%ux%ux%u levels=%u samples=%d\n",
+            out->base,known,texture.d.target,texture.d.format,texture.d.width,texture.d.height,texture.d.depth,texture.d.levels,texture.d.samples);
+        if(!known || !xbg_game_texture_write_rgba)return ARGUMENT;
+        int width=i32(o.format,"width"),height=i32(o.format,"height");
+        if(width<=0 || height<=0 || width>32768 || height>32768 ||
+           texture.d.width!=uint32_t(width) || texture.d.height!=uint32_t(height) ||
+           texture.d.target!=1 || texture.d.format!=0x25 || texture.d.levels!=1 ||
+           texture.d.depth!=1 || texture.d.samples>1 || texture.L.size>INT_MAX)return ARGUMENT;
+        const size_t pixels=size_t(width)*height;
+        try{d->video_nv12.resize(pixels*3/2);d->video_rgba.resize(pixels*4);}
+        catch(const std::bad_alloc &){return UNKNOWN;}
+        uint32_t result=copy_nv12(o.format,p+o.info.offset,size_t(o.info.size),
+            d->video_nv12.data(),d->video_nv12.size(),written);
+        if(result!=OK)return result;
+        if(!movie_nv12_to_rgba(d->video_nv12.data(),written,d->video_rgba.data(),d->video_rgba.size(),
+            uint32_t(width),uint32_t(height),i32(o.format,"color-standard"),i32(o.format,"color-range")))return ARGUMENT;
+        if(xbg_game_texture_write_rgba(&texture,d->video_rgba.data(),d->video_rgba.size(),
+            uint32_t(width),uint32_t(height)))return UNKNOWN;
+        out->size=int32_t(texture.L.size);
+        static std::atomic<unsigned> texture_logs{0};
+        if(texture_logs.fetch_add(1)<6)fprintf(stderr,"[movie] decoded NVN texture frame index=%d texture=%p serial=%llu format=%#x extent=%dx%d rgba=%zu\n",
+            index,out->base,(unsigned long long)texture.serial,texture.d.format,width,height,d->video_rgba.size());
+        return OK;
+    }
+    // Raw output destinations retain their advertised capacity contract.
     uint32_t r=copy_nv12(o.format,p+o.info.offset,size_t(o.info.size),static_cast<uint8_t*>(out->base),out->capacity,written);
     if(r!=OK){
         static unsigned cap_logs=0;

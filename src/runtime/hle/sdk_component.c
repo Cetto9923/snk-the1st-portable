@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stddef.h>
 
 static nso_module *sdk;
 static int ready;
@@ -74,6 +75,27 @@ static const struct sdk_verified_image verified_images[] = {
 
 /* Address of the verified data symbol inside the loaded image. */
 static uint64_t active_chunk_duration_address;
+static int compressor_dsp_ready;
+
+_Static_assert(sizeof(struct ffrs_sdk_compressor_parameter) == 0x38, "SDK compressor parameter size");
+_Static_assert(offsetof(struct ffrs_sdk_compressor_parameter, threshold_db) == 0x14, "SDK compressor threshold offset");
+_Static_assert(offsetof(struct ffrs_sdk_compressor_parameter, attack_coefficient) == 0x28, "SDK compressor attack offset");
+_Static_assert(offsetof(struct ffrs_sdk_compressor_parameter, output_gain_db) == 0x30, "SDK compressor gain offset");
+_Static_assert(sizeof(struct ffrs_sdk_compressor_state) == 0x40, "SDK compressor state size");
+
+static int verify_compressor_dsp(const struct sdk_verified_image *image) {
+    if (image->chunk_duration_address != 0x9d32c8) return 0;
+    static const struct { const char *name; uint64_t offset; } functions[] = {
+        {FFRS_SDK_COMPRESSOR_INITIALIZE, 0x251400},
+        {FFRS_SDK_COMPRESSOR_CONFIGURE, 0x251550},
+        {FFRS_SDK_COMPRESSOR_APPLY, 0x251690}
+    };
+    for (size_t i = 0; i < sizeof functions / sizeof functions[0]; ++i) {
+        uint32_t symbol = nso_find_symbol(sdk, functions[i].name);
+        if (!symbol || nso_symbol_value(sdk, symbol) != functions[i].offset) return 0;
+    }
+    return 1;
+}
 
 static const struct sdk_verified_image *match_verified_image(const unsigned char *digest) {
     for (size_t i = 0; i < sizeof(verified_images) / sizeof(verified_images[0]); i++)
@@ -114,6 +136,7 @@ int ffrs_sdk_component_load(const char *path) {
     }
     fprintf(stderr, "[sdk-component] verified native DSP image title=%s base=%p image_bytes=%zu unresolved=%u; no SDK init\n",
             image->title, (void *)(uintptr_t)nso_base(sdk), owner.charged, nso_unresolved_count(sdk));
+    compressor_dsp_ready = verify_compressor_dsp(image);
     __atomic_store_n(&ready, 1, __ATOMIC_RELEASE);
     pthread_mutex_unlock(&load_lock); return 0;
 }
@@ -159,6 +182,29 @@ static uint32_t resampler_process(void *state,int *count,int16_t *output,uint64_
     nb_registers p={.x={(uintptr_t)state,(uintptr_t)count,(uintptr_t)output,capacity,(uintptr_t)input,(uint32_t)frames}};
     invoke(0x263690,&p);return (uint32_t)p.x[0];
 }
+
+/* Audited v1.0.7 DSP functions. Configure/initialize are leaf routines. Apply's
+ * sole call is the SDK's own memcpy on its disabled-copy path. None enters
+ * the renderer service, TLS helpers, allocator or SDK startup. */
+static void compressor_initialize(const struct ffrs_sdk_compressor_parameter *parameter,
+                                   struct ffrs_sdk_compressor_state *state) {
+    nb_registers packet = {.x = {(uintptr_t)parameter, (uintptr_t)state}};
+    invoke(0x251400, &packet);
+}
+
+static void compressor_configure(const struct ffrs_sdk_compressor_parameter *parameter,
+                                 struct ffrs_sdk_compressor_state *state) {
+    nb_registers packet = {.x = {(uintptr_t)parameter, (uintptr_t)state}};
+    invoke(0x251550, &packet);
+}
+
+static void compressor_apply(const struct ffrs_sdk_compressor_parameter *parameter,
+        struct ffrs_sdk_compressor_state *state, bool enabled,
+        const int32_t *const *inputs, int32_t *const *outputs, int frames, void *statistics) {
+    nb_registers packet = {.x = {(uintptr_t)parameter, (uintptr_t)state, (uint32_t)enabled,
+        (uintptr_t)inputs, (uintptr_t)outputs, (uint32_t)frames, (uintptr_t)statistics}};
+    invoke(0x251690, &packet);
+}
 uint64_t ffrs_sdk_component_lookup(const char *name, unsigned *arguments, unsigned *returns) {
     if (!__atomic_load_n(&ready, __ATOMIC_ACQUIRE) || !name) return 0;
     uint64_t address = 0; unsigned args = 0,rets=0;
@@ -172,6 +218,15 @@ uint64_t ffrs_sdk_component_lookup(const char *name, unsigned *arguments, unsign
     else if(!strcmp(name,"_ZN2nn5audio29GetResamplerOutputSampleCountEPKNS0_13ResamplerTypeEi")){address=(uintptr_t)resampler_count;args=2;rets=1;}
     else if(!strcmp(name,"_ZN2nn5audio19InitializeResamplerEPNS0_13ResamplerTypeEPvmiii")){address=(uintptr_t)resampler_init;args=6;rets=1;}
     else if(!strcmp(name,"_ZN2nn5audio22ProcessResamplerBufferEPNS0_13ResamplerTypeEPiPsmPKsi")){address=(uintptr_t)resampler_process;args=6;rets=1;}
+    else if (compressor_dsp_ready && !strcmp(name, FFRS_SDK_COMPRESSOR_INITIALIZE)) {
+        address = (uintptr_t)compressor_initialize; args = 2;
+    }
+    else if (compressor_dsp_ready && !strcmp(name, FFRS_SDK_COMPRESSOR_CONFIGURE)) {
+        address = (uintptr_t)compressor_configure; args = 2;
+    }
+    else if (compressor_dsp_ready && !strcmp(name, FFRS_SDK_COMPRESSOR_APPLY)) {
+        address = (uintptr_t)compressor_apply; args = 7;
+    }
     else if(!strncmp(name,"_ZN2nn5audio",12)){
         /* 通用兜底：把 sdk.nso 自己导出的 nn::audio 符号解析到真实实现。
          *

@@ -14,13 +14,29 @@ final class DeviceProfile {
         this.targetFps = targetFps;
     }
 
+    static int formFactorWidthDp(int width, int height, int densityDpi, int windowWidthDp) {
+        if (width <= 0 || height <= 0 || densityDpi <= 0) return windowWidthDp;
+        return (int)Math.min(Integer.MAX_VALUE, (long)Math.min(width, height) * 160 / densityDpi);
+    }
+
     static DeviceProfile select(String soc, int smallestWidthDp, String override) {
+        return select(soc, null, smallestWidthDp, override);
+    }
+
+    static DeviceProfile select(String soc, String model, int smallestWidthDp, String override) {
         String id = override == null ? "" : override.trim().toLowerCase(Locale.ROOT);
         if (id.equals("handheld_mid")) return new DeviceProfile(id, 720, 30);
-        if (id.equals("tablet_sd8s")) return new DeviceProfile(id, 1080, 60);
+        if (id.equals("tablet_sd8s")) return new DeviceProfile(id, 1080, 30);
         if (id.equals("odin_elite")) return new DeviceProfile(id, 1080, 30);
+        if (id.equals("phone_mali")) return new DeviceProfile(id, 720, 30);
+        String device = model == null ? "" : model.trim().toLowerCase(Locale.ROOT);
+        if (device.contains("rg477m") || device.contains("rg-477m"))
+            return new DeviceProfile("handheld_mid", 720, 30);
         String chip = soc == null ? "" : soc.trim().toLowerCase(Locale.ROOT);
-        if (chip.equals("sm8635") && smallestWidthDp >= 600) return new DeviceProfile("tablet_sd8s", 1080, 60);
+        if (chip.equals("sm8635") && smallestWidthDp >= 600)
+            return new DeviceProfile("tablet_sd8s", 1080, 30);
+        if (chip.startsWith("mt68") || chip.startsWith("mt69") || chip.startsWith("dimensity"))
+            return new DeviceProfile("phone_mali", 720, 30);
         return new DeviceProfile("handheld_mid", 720, 30);
     }
 }

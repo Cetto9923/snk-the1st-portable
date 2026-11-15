@@ -160,6 +160,8 @@ static const ffrs_tex *texture_get(const void *guest_texture, ffrs_tex *out, int
     memset(&value, 0, sizeof(value));
     value.magic = FFRS_NVN_MAGIC('T', 'E', 'X', 0);
     value.d = info.d;
+    value.set_swz = info.set_swz;
+    value.swz = info.swz;
     value.serial = info.serial;
     pool = nvn_bridge_pool(info.memory_pool);
     if (pool) {
@@ -206,14 +208,18 @@ const ffrs_prog *nvn_bridge_program(const void *guest_program) {
     ffrs_prog *prog;
     bridge_entry *entry;
     if (!guest_program) return NULL;
-    if (!nvn_program_info_of(guest_program, &info)) return NULL;
+    const ffrs_prog *cached = NULL;
+    uint64_t serial = 0;
     pthread_mutex_lock(&s_lock);
     entry = entry_find(&s_programs, guest_program, 0);
-    if (entry && entry->object && entry->serial == info.serial) {
-        pthread_mutex_unlock(&s_lock);
-        return (const ffrs_prog *)entry->object;
+    if (entry && entry->object) {
+        cached = entry->object;
+        serial = entry->serial;
     }
     pthread_mutex_unlock(&s_lock);
+    int changed = nvn_program_info_if_changed(guest_program, serial, &info);
+    if (changed < 0) return NULL;
+    if (!changed) return cached;
 
     prog = (ffrs_prog *)calloc(1, sizeof(*prog)+sizeof(info.control));
     if (!prog) return NULL;

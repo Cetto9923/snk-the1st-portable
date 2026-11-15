@@ -155,6 +155,8 @@ _Static_assert(offsetof(ffrs_dpool, n) == 16, "the pool count moved");
 /* What a texture is: its description and where its storage is. */
 typedef struct nvn_texture_info {
     ffrs_texdesc d;
+    uint16_t swz; /* four original NVN component selectors, three bits each */
+    uint8_t set_swz;
     const void *memory_pool; /* the guest's memory pool that holds the storage */
     int64_t memory_offset;   /* where in that pool the storage starts */
     uint64_t serial;         /* the generation of the texture object */
@@ -188,6 +190,9 @@ typedef struct nvn_pool_info {
 
 int nvn_texture_info_of(const void *texture, nvn_texture_info *out);
 int nvn_program_info_of(const void *program, nvn_program_info *out);
+/* Returns -1 for invalid, 0 for unchanged, 1 for a copied new snapshot.
+ * The unchanged and invalid cases leave out untouched. */
+int nvn_program_info_if_changed(const void *program, uint64_t serial, nvn_program_info *out);
 int nvn_memory_pool_info_of(const void *pool, nvn_memory_pool_info *out);
 int nvn_texture_pool_info_of(const void *pool, nvn_pool_info *out);
 int nvn_sampler_pool_info_of(const void *pool, nvn_pool_info *out);

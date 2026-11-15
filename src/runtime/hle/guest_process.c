@@ -412,16 +412,6 @@ static void guest_process_text_filter(void *text, size_t bytes, void *opaque) {
     if(report.patched > 0) {
         fprintf(stderr,"[guest-tp] patched %zu MRS TPIDR_EL0 sites in text\n",report.patched);
     }
-    /* Falcom SNK 3D engine: patch 0x945a0 to return 1.0f directly to bypass
-     * uninitialized/invalid atmosphere scatter struct crash when entering 3D scenes. */
-    if(bytes > 0x945b0) {
-        uint32_t *insns = (uint32_t *)text;
-        if(insns[0x945a0 / 4] == 0xd10183ff && insns[0x945a4 / 4] == 0xa9057bfd) {
-            fprintf(stderr, "[snk-patch] patching 0x945a0 (atmosphere/environment scale fallback to 1.0f)\n");
-            insns[0x945a0 / 4] = 0x1e2e1000; /* fmov s0, #1.0 */
-            insns[0x945a4 / 4] = 0xd65f03c0; /* ret */
-        }
-    }
     /* Falcom allocator block insertion safety: patch cbz to tbz #36 so non-pointer / corrupted indices
      * (< 4GB) do not get dereferenced as pointers during sorted tree / free-list traversal.
      * The guard tests bit 32, not bit 36: the guest heap lives at 0x6ff8_xxxxxxxx, whose
@@ -1226,17 +1216,23 @@ int guest_process_interposed_aligned_alloc(size_t alignment,size_t bytes,void **
     if(r!=NB_OK){fprintf(stderr,"[allocator-interpose] boundary=%d; refusing foreign heap fallback\n",r);return -1;}
     *out=(void*)(uintptr_t)packet.x[0];return 1;
 }
-int guest_process_interposed_free(void *pointer) {
+static int interposed_deallocate(void *pointer, const char *name) {
     guest_process *p=current_process;
     if(!p || !p->module)return 0;
     if(!pointer)return 1;
-    uint32_t symbol=nso_find_symbol(p->module,"free");
+    uint32_t symbol=nso_find_symbol(p->module,name);
     uint64_t offset=symbol?nso_symbol_value(p->module,symbol):0,address=0;
     if(!offset || nso_entry_address(p->module,offset,&address).status!=NSO_OK)return -1;
     nb_registers packet={.x={(uintptr_t)pointer}};
     nb_status r=nb_call_from_host(&p->boundary,(void(*)(void))(uintptr_t)address,&packet);
-    if(r!=NB_OK){fprintf(stderr,"[allocator-interpose] free boundary=%d; refusing foreign heap fallback\n",r);return -1;}
+    if(r!=NB_OK){fprintf(stderr,"[allocator-interpose] %s boundary=%d; refusing foreign heap fallback\n",name,r);return -1;}
     return 1;
+}
+int guest_process_interposed_free(void *pointer) {
+    return interposed_deallocate(pointer, "free");
+}
+int guest_process_interposed_delete(void *pointer, bool array) {
+    return interposed_deallocate(pointer, array ? "_ZdaPv" : "_ZdlPv");
 }
 /* Called after nb_call_child returns and before unbinding either TLS domain. */
 int guest_process_invoke_thread_exit(void (*destructor)(void *),void *value) {

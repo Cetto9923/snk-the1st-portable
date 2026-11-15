@@ -15,6 +15,27 @@ inline bool xbg_wb_contains(uint64_t outer,uint64_t outer_bytes,uint64_t inner,u
 inline bool xbg_wb_overlaps(uint64_t a,uint64_t a_bytes,uint64_t b,uint64_t b_bytes) {
     return xbg_wb_range_valid(a,a_bytes) && xbg_wb_range_valid(b,b_bytes) && a<b+b_bytes && b<a+a_bytes;
 }
+// The GPU view can include padding its audited producer never modifies.
+// A CPU overwrite covering every modified byte supersedes that whole result.
+inline bool xbg_wb_overwritten(uint64_t address,uint64_t bytes,
+    uint64_t pending_address,uint64_t pending_bytes,uint64_t modified_bytes=0){
+    if(modified_bytes>pending_bytes)return false;
+    return xbg_wb_contains(address,bytes,pending_address,modified_bytes?modified_bytes:pending_bytes);
+}
+// The caller has waited for every eligible producer's fence. A later complete
+// result covering the old destination supplies the final bytes by itself.
+// Slot retirement may only consider writes completed by that same fence.
+template<class Pending>
+bool xbg_wb_completed_superseded(const Pending &pending,size_t index,bool same_slot){
+    if(index>=pending.size() || pending[index].modified_bytes)return false;
+    const auto &old=pending[index];
+    for(size_t i=index+1;i<pending.size();++i){
+        const auto &newer=pending[i];
+        if(newer.modified_bytes || (same_slot && newer.slot!=old.slot))continue;
+        if(xbg_wb_contains(newer.addr,newer.bytes,old.addr,old.bytes))return true;
+    }
+    return false;
+}
 // pending_view chooses the newest overlapping writeback. If it only covers
 // part of a requested storage texel, the host must merge on the CPU before
 // acquiring a command slot or any resources that slot retirement can release.

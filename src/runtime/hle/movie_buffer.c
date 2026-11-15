@@ -10,6 +10,7 @@
 #include <string.h>
 #include <stddef.h>
 #include <stdatomic.h>
+#include <stdio.h>
 /* Registration applies to movie workers, not the game thread making this call.
  * No claim that the platform MediaCodec's private driver threads inherit it. */
 static _Atomic uint64_t core_mask=7;
@@ -55,6 +56,8 @@ static void *base(const movie_buffer *b) {return b->base;}
  * path is not the console path, and the guest allocator needs a live
  * boundary scope that a constructor cannot promise. */
 static void construct_sized(movie_buffer *b,uint64_t size) {
+    static atomic_uint logs;
+    if(atomic_fetch_add(&logs,1)<6)fprintf(stderr,"[movie] Buffer sized constructor self=%p bytes=%llu\n",b,(unsigned long long)size);
     construct(b);
     if(!size)return;
     void *memory=malloc((size_t)size);
@@ -64,7 +67,7 @@ static void construct_sized(movie_buffer *b,uint64_t size) {
     b->size=(int32_t)size;
     b->udata32=1; /* host allocation, released by destroy */
 }
-static void *data(const movie_buffer *b) {return b->base;}
+static void *data(const movie_buffer *b) {return (void*)((uintptr_t)b->base+(uintptr_t)(intptr_t)b->offset);}
 static uint64_t capacity(const movie_buffer *b) {return b->capacity;}
 static int32_t size(const movie_buffer *b) {return b->size;}
 static int32_t offset(const movie_buffer *b) {return b->offset;}

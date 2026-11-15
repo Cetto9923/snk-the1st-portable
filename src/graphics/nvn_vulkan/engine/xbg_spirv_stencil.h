@@ -5,6 +5,100 @@
 #include <unordered_map>
 #include <unordered_set>
 
+// The Falcom culling kernel already has an atomic increment per invocation
+// for divergent destination rows. Use that path for uniform rows as well.
+// The subgroup aggregation path dropped visible instances on the Honor GPU.
+// Match the audited result and scope, and accept earlier specialized bundles.
+inline bool xbg_snk_scalar_instance_counter(std::vector<uint32_t> &words,
+    uint32_t result=6985,uint32_t predicate=6984){
+    if(words.size()<5 || words[0]!=0x07230203u)return false;
+    uint32_t bool_type=0,false_value=0,subgroup_scope=0;
+    size_t target=words.size();
+    unsigned all_count=0;
+    for(size_t i=5;i<words.size();){
+        const uint32_t count=words[i]>>16,op=words[i]&65535u;
+        if(!count || count>words.size()-i)return false;
+        if(op==20 && count==2)bool_type=words[i+1];
+        if(op==42 && count==3 && words[i+1]==bool_type)false_value=words[i+2];
+        if(op==43 && count==4 && words[i+3]==3)subgroup_scope=words[i+2];
+        if(op==334){
+            ++all_count;
+            if(count==5 && words[i+1]==bool_type && words[i+2]==result &&
+               words[i+3]==subgroup_scope && words[i+4]==predicate)target=i;
+        }
+        i+=count;
+    }
+    if(!false_value || all_count!=1 || target==words.size())return false;
+    words[target]=(4u<<16)|83u; // OpCopyObject bool result false
+    words[target+3]=false_value;
+    words.erase(words.begin()+target+4);
+    return true;
+}
+
+// The measured Falcom luminance histogram gained millions of counts in its
+// shared/warp aggregation path. Keep its original pixel-to-bin calculation,
+// add one directly to the global bin for each sampled pixel, then return at
+// the existing workgroup barrier. The original 400x225 sample has 90000 counts.
+// Accept the original and earlier scalar-counter bundles, with exact sites.
+inline bool xbg_snk_global_histogram(std::vector<uint32_t> &words){
+    if(words.size()<5 || words[0]!=0x07230203u || words.back()!=((1u<<16)|56u) ||
+       words[3]<=617 || words[3]==UINT32_MAX)return false;
+    uint32_t false_value=0;size_t first_function=words.size();
+    size_t votes[2]={words.size(),words.size()},pointer=words.size(),exit=words.size();
+    bool boolean=false,scope=false,true_value=false,global_pointer=false;
+    unsigned all_count=0,raw_votes=0;
+    for(size_t i=5;i<words.size();){
+        const uint32_t n=words[i]>>16,op=words[i]&65535u;
+        if(!n || n>words.size()-i)return false;
+        if(op==20 && n==2 && words[i+1]==83)boolean=true;
+        if(op==42 && n==3 && words[i+1]==83)false_value=words[i+2];
+        if(op==41 && n==3 && words[i+1]==83 && words[i+2]==465)true_value=true;
+        if(op==43 && n==4 && words[i+1]==1 && words[i+2]==464 && words[i+3]==3)scope=true;
+        if(op==32 && n==4 && words[i+1]==589 && words[i+2]==2 && words[i+3]==1)global_pointer=true;
+        if(op==54 && first_function==words.size())first_function=i;
+        if(op==334)++all_count;
+        if((op==334 || op==83) && n>=3 && (words[i+2]==502 || words[i+2]==617)){
+            const unsigned which=words[i+2]==502?0:1;
+            if(votes[which]!=words.size() || words[i+1]!=83)return false;
+            if(op==334){
+                if(n!=5 || words[i+3]!=464 || words[i+4]!=(which?616u:501u))return false;
+                ++raw_votes;
+            }else if(n!=4 || !false_value || words[i+3]!=false_value)return false;
+            votes[which]=i;
+        }
+        if(op==65 && n>=3 && words[i+2]==511){
+            const uint32_t local[]={413,511,31,510},global[]={589,511,26,314,510};
+            if(pointer!=words.size() || !((n==5 && !std::memcmp(words.data()+i+1,local,sizeof(local))) ||
+               (n==6 && !std::memcmp(words.data()+i+1,global,sizeof(global)))))return false;
+            pointer=i;
+        }
+        if((op==168 || op==83) && n>=3 && words[i+2]==543){
+            if(exit!=words.size() || n!=4 || words[i+1]!=83 ||
+               (op==168?words[i+3]!=542:words[i+3]!=465))return false;
+            exit=i;
+        }
+        i+=n;
+    }
+    if(!boolean || !scope || !true_value || !global_pointer || all_count!=raw_votes ||
+       votes[0]==words.size() || votes[1]==words.size() || pointer==words.size() ||
+       exit==words.size() || first_function==words.size())return false;
+    if(!raw_votes && (words[pointer]>>16)==6 && (words[exit]&65535u)==83)return false;
+    const bool add_false=!false_value;
+    if(add_false)false_value=words[3];
+    std::vector<uint32_t> out(words.begin(),words.begin()+5);out.reserve(words.size()+4);
+    if(add_false)++out[3];
+    for(size_t i=5;i<words.size();){
+        const uint32_t n=words[i]>>16;
+        if(i==first_function && add_false)out.insert(out.end(),{(3u<<16)|42u,83,false_value});
+        if(i==votes[0] || i==votes[1])out.insert(out.end(),{(4u<<16)|83u,83,words[i+2],false_value});
+        else if(i==pointer)out.insert(out.end(),{(6u<<16)|65u,589,511,26,314,510});
+        else if(i==exit)out.insert(out.end(),{(4u<<16)|83u,83,543,465});
+        else out.insert(out.end(),words.begin()+i,words.begin()+i+n);
+        i+=n;
+    }
+    words.swap(out);return true;
+}
+
 // The exact FFRS histogram kernel scans workgroup memory. On Adreno 735 its
 // memory-only barrier omitted 64 entries in measured frames; workgroup execution
 // barriers before and after the shared load preserve all lanes. Match the
@@ -64,7 +158,17 @@ inline constexpr XbgFfrsIntegerFact xbg_ffrs_integer_facts[]={
     {"b0284572b5f180f2",18,1,false},
     {"8b27994fdc0e32c9",12,1,false}
 };
+// Falcom's deferred lighting reads three packed UINT G-buffers. Honor C8
+// TONE_METADATA_IMAGE confirms RGBA8_UINT / RGBA8_UINT / RG16_UINT views;
+// each live fetched component immediately recovers its integer register bits.
+inline constexpr XbgFfrsIntegerFact xbg_snk_deferred_integer_facts[]={
+    {"183334461b277951",10,1,false},
+    {"183334461b277951",16,1,false},
+    {"183334461b277951",22,1,false}
+};
 inline uint32_t xbg_ffrs_integer_fact(uint32_t stage,const char *key,uint32_t binding){
+    if(stage==4 && key)for(const auto &f:xbg_snk_deferred_integer_facts)
+        if(binding==f.binding && !std::strcmp(key,f.key))return f.scalar;
     if((stage==5 || stage==0) && key)for(const auto &f:xbg_ffrs_integer_facts)
         if(binding==f.binding && !std::strcmp(key,f.key))return f.scalar;
     return 0;
@@ -225,7 +329,42 @@ inline int xbg_spirv_uint_store(std::vector<uint32_t> &w,uint32_t binding){
 // every original operation by fetching uvec4 and bitcasting its bits to the old
 // vec4 result. This exact bundle is proven by runtime STENCIL+RRRR bindings.
 // Return 0 for other modules, 1 for the repair, -1 for an unexpected bundle.
+// Inspect a sampled descriptor before specializing it. Updated APKs also load
+// already-specialized shader bundles delivered by earlier diagnostic runs.
+inline int xbg_spirv_sampled_scalar(const std::vector<uint32_t> &words,uint32_t binding){
+    if(words.size()<5 || words[0]!=0x07230203u)return -1;
+    std::unordered_map<uint32_t,size_t> definitions;uint32_t variable=0;
+    for(size_t i=5;i<words.size();){uint32_t n=words[i]>>16,op=words[i]&65535u;if(!n || i+n>words.size())return -1;
+        if(op>=19 && op<=33 && n>=2)definitions[words[i+1]]=i;
+        if(op==59 && n>=4)definitions[words[i+2]]=i;
+        if(op==71 && n==4 && words[i+2]==33 && words[i+3]==binding){if(variable)return -1;variable=words[i+1];}
+        i+=n;
+    }
+    auto definition=[&](uint32_t id,uint32_t opcode,uint32_t minimum)->size_t{
+        auto found=definitions.find(id);if(found==definitions.end() || (words[found->second]&65535u)!=opcode || (words[found->second]>>16)<minimum)return 0;return found->second;
+    };
+    size_t vi=definition(variable,59,4);if(!vi)return -1;
+    size_t pi=definition(words[vi+1],32,4);if(!pi)return -1;
+    size_t si=definition(words[pi+3],27,3);if(!si)return -1;
+    size_t ii=definition(words[si+2],25,9);if(!ii)return -1;
+    auto scalar=definitions.find(words[ii+2]);if(scalar==definitions.end())return -1;
+    size_t ti=scalar->second;uint32_t op=words[ti]&65535u;
+    if((words[ti]>>16)<3 || words[ti+2]!=32)return -1;
+    if(op==22)return 0;
+    if(op==21 && (words[ti]>>16)>=4 && words[ti+3]<=1)return words[ti+3]?2:1;
+    return -1;
+}
 inline int xbg_spirv_ffrs_stencil(std::vector<uint32_t> &words,uint32_t stage,const char *key){
+    if(stage==4 && key && !std::strcmp(key,"183334461b277951")){
+        int changed=0;
+        for(const auto &fact:xbg_snk_deferred_integer_facts){
+            int scalar=xbg_spirv_sampled_scalar(words,fact.binding);
+            if(scalar==1)continue;
+            if(scalar!=0)return -1;
+            int fetched=xbg_spirv_integer_fetch(words,fact.binding,1);if(fetched!=1)return -1;changed+=fetched;
+        }
+        return changed;
+    }
     if((stage==5 || stage==0) && key){
         int changed=0;
         for(const auto &f:xbg_ffrs_integer_facts)if(!std::strcmp(key,f.key)){

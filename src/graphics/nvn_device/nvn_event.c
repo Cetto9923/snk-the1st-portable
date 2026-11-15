@@ -9,8 +9,9 @@
  *
  * CPU and GPU access the same uint32_t in the guest's pool, as in the
  * reference host (hle_nvn.c:649-654). Initialization retains its existing
- * value. CPU accesses and lifecycle changes first resolve pending GPU writes
- * through mtl_event_read, without holding the object-table lock.
+ * value. CPU writes and lifecycle changes resolve pending GPU writes through
+ * mtl_event_read. GetValue polls their completion through mtl_event_poll.
+ * Both hooks run without holding the object-table lock.
  *
  * The evidence for the values:
  *
@@ -207,6 +208,12 @@ __attribute__((weak)) void mtl_event_read(const volatile uint32_t *address) {
 
 static void complete_value(uint64_t address) {
     mtl_event_read((const volatile uint32_t *)(uintptr_t)address);
+}
+
+/* Backends with asynchronous publication provide a nonblocking poll. Keep
+ * completion-only backends working through their existing integration. */
+__attribute__((weak)) void mtl_event_poll(const volatile uint32_t *address) {
+    mtl_event_read(address);
 }
 
 /* Never retain an interior object-table pointer across an unlock: another
@@ -487,7 +494,7 @@ void nvnEventSignal(void *event, int mode, uint32_t value) {
 uint32_t nvnEventGetValue(const void *event) {
     nvn_event_state snapshot; uint64_t address = 0; uint32_t value = 0;
     int valid = event_snapshot(event, &snapshot) && storage_address(&snapshot, &address);
-    if (valid) complete_value(address);
+    if (valid) mtl_event_poll((const volatile uint32_t *)(uintptr_t)address);
     pthread_mutex_lock(&s_event_lock);
     s_stats.calls++; s_stats.gets++;
     if (valid && event_current_locked(&snapshot)) value = __atomic_load_n((uint32_t *)(uintptr_t)address, __ATOMIC_SEQ_CST);

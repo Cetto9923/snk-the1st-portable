@@ -68,7 +68,7 @@ uint64_t snk_opus_sample_rate(const void *owner);
 uint64_t snk_opus_channel_count(const void *owner);
 uint64_t snk_opus_reset(void *owner);
 uint64_t snk_opus_decode(void *owner, size_t *consumed, int *frames, short *output,
-                          size_t output_samples, const void *input, size_t input_size);
+                          size_t output_capacity, const void *input, size_t input_size);
 
 uint64_t snk_png_decoder_ctor(void *self);
 uint64_t snk_png_decoder_dtor(void *self);
@@ -77,7 +77,7 @@ uint64_t snk_png_decoder_initialize(void *self, void *allocator, void *allocator
 uint64_t snk_png_decoder_set_image_data(void *self, const void *data, size_t size);
 uint64_t snk_png_decoder_set_pixel_format(void *self, int format);
 uint64_t snk_png_decoder_analyze(void *self);
-uint64_t snk_png_decoder_decode(void *self, void *output, size_t stride, size_t size);
+uint64_t snk_png_decoder_decode(void *self, void *output, size_t size, size_t stride);
 uint64_t snk_png_decoder_dimension(const void *self);
 uint64_t snk_png_decoder_row_stride(const void *self);
 uint64_t snk_png_encoder_ctor(void *self);

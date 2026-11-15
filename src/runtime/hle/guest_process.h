@@ -1,5 +1,6 @@
 #ifndef NSO_GUEST_PROCESS_H
 #define NSO_GUEST_PROCESS_H
+#include <stdbool.h>
 #include "../nso/nso_loader.h"
 #include "module_tls.h"
 #ifdef __cplusplus
@@ -137,9 +138,10 @@ uint32_t guest_process_nnmusl_init_dso(
 uint64_t guest_process_resolve(uint32_t,const char *);
 struct nb_scope;
 struct nb_scope *guest_process_current_boundary(void);
-/* Deleting destructor for an object allocated from main's interposed heap.
- * Active module only; 1 completed actual free,0 no process,-1 refused. */
+/* Active module's C allocator. 1 completed, 0 no process, -1 refused. */
 int guest_process_interposed_free(void *pointer);
+/* Match sized C++ deletion to the module's corresponding unsized operator. */
+int guest_process_interposed_delete(void *pointer, bool array);
 struct guest_tp_template;
 int guest_process_current_tls_template(struct guest_tp_template *out);
 void guest_process_bind_child_thread(void);

@@ -546,9 +546,52 @@ void nvn_queue_reset_memory_usage_counts(void *queue) {
 /* ------------------------------------------------------------------ */
 /* The submission seam                                                  */
 /* ------------------------------------------------------------------ */
+typedef struct submit_package_owner {
+    int count;
+    nvn_command_package_lease leases[NVN_QUEUE_MAX_SUBMIT_HANDLES];
+} submit_package_owner;
+
+static void package_event_references(const nvn_command_package_lease *lease,int retain) {
+    for(size_t i=0;i<nvn_command_buffer_package_lease_count(lease);i++){
+        nvn_command_package package;
+        if(!nvn_command_buffer_package_lease_at(lease,i,&package))abort();
+        for(size_t offset=0;offset<package.bytes;){
+            nvn_cb_op_hdr header;
+            if(package.bytes-offset<sizeof(header))abort();
+            memcpy(&header,package.records+offset,sizeof(header));
+            if(header.size<sizeof(header) || header.size>package.bytes-offset)abort();
+            if(header.op==NVN_CB_OP_SIGNAL_EVENT){
+                uint64_t address;
+                if(header.size<sizeof(header)+16)abort();
+                memcpy(&address,package.records+offset+sizeof(header),sizeof(address));
+                nvn_engine_event_reference(address,retain);
+            }
+            offset+=header.size;
+        }
+    }
+}
+static void release_package_batch(void *data) {
+    submit_package_owner *owner=data;
+    for(int i=0;i<owner->count;i++){
+        package_event_references(&owner->leases[i],0);
+        nvn_command_buffer_package_release(&owner->leases[i]);
+    }
+    free(owner);
+}
 static void submit_package_batch(uint64_t *handles,int count,nvn_command_package_lease *leases){
-    if(count&&!nvn_engine_submit(handles,count))fprintf(stderr,"[nvn] queue engine refused %d command packages\n",count);
-    for(int i=0;i<count;i++)nvn_command_buffer_package_release(&leases[i]);
+    if(!count)return;
+    submit_package_owner *owner=calloc(1,sizeof(*owner));
+    if(!owner){
+        fprintf(stderr,"[nvn] queue refused %d command packages: ownership allocation failed\n",count);
+        for(int i=0;i<count;i++)nvn_command_buffer_package_release(&leases[i]);
+        return;
+    }
+    owner->count=count;
+    memcpy(owner->leases,leases,(size_t)count*sizeof(*leases));
+    memset(leases,0,(size_t)count*sizeof(*leases));
+    for(int i=0;i<count;i++)package_event_references(&owner->leases[i],1);
+    if(!nvn_engine_submit_with_release(handles,count,release_package_batch,owner))
+        fprintf(stderr,"[nvn] queue engine refused %d command packages\n",count);
 }
 
 void nvn_queue_submit_commands(void *queue, int count, const uint64_t *handles) {

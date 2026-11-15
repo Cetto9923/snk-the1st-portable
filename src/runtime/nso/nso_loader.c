@@ -17,6 +17,9 @@
 #include <sys/ucontext.h>
 #else
 #include <ucontext.h>
+#if defined(__aarch64__)
+#include <asm/sigcontext.h>
+#endif
 #endif
 #include <unistd.h>
 
@@ -529,8 +532,27 @@ static size_t safe_read_mem(uintptr_t addr, void *dst, size_t n) {
     return 0;
 #endif
 }
+extern int xbg_evguard_fault(void *address, int is_write, void *context) __attribute__((weak));
+
 static void fault_handler(int sig,siginfo_t *si,void *context) {
     ucontext_t *u=context;
+#if defined(__linux__) && defined(__aarch64__)
+    if(sig==SIGSEGV && si && u && xbg_evguard_fault){
+        int is_write=0;
+        const unsigned char *record=u->uc_mcontext.__reserved;
+        size_t remaining=sizeof(u->uc_mcontext.__reserved);
+        while(remaining>=sizeof(struct _aarch64_ctx)){
+            const struct _aarch64_ctx *header=(const struct _aarch64_ctx *)record;
+            if(header->size<sizeof(*header) || header->size>remaining)break;
+            if(header->magic==ESR_MAGIC && header->size>=sizeof(struct esr_context)){
+                is_write=(int)((((const struct esr_context *)record)->esr>>6)&1u);
+                break;
+            }
+            record+=header->size;remaining-=header->size;
+        }
+        if(xbg_evguard_fault(si->si_addr,is_write,context))return;
+    }
+#endif
     uint64_t pc=0,lr=0,fp=0,sp=0,fa=si?(uintptr_t)si->si_addr:0,regs[29]={0};
 #if defined(__APPLE__)
     pc=u->uc_mcontext->__ss.__pc;lr=u->uc_mcontext->__ss.__lr;fp=u->uc_mcontext->__ss.__fp;sp=u->uc_mcontext->__ss.__sp;

@@ -14,6 +14,7 @@ extern int ffrs_multiwait_event_waiting(void *) __attribute__((weak));
 #include "../nso/native_boundary.h"
 #include "../nso/nso_loader.h"
 #include "../../graphics/nvn_device/nvn_device.h"
+extern void xbg_wtrack_prepare(void *, size_t) __attribute__((weak));
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdbool.h>
@@ -646,20 +647,28 @@ uint64_t nso_host_get_thread_available_core_mask(void) {
 }
 
 void *nso_host_get_current_thread(void) {
+    static _Thread_local void *last_logged_thread;
+    static _Thread_local bool primary_logged;
     pthread_t self = pthread_self();
     pthread_mutex_lock(&s_threads_mutex);
     for (int i = 0; i < MAX_HOST_THREADS; i++) {
         if (s_host_threads[i].active && pthread_equal(s_host_threads[i].host_thread, self)) {
             void *t = s_host_threads[i].guest_thread_type;
             pthread_mutex_unlock(&s_threads_mutex);
-            fprintf(stderr, "[hle] nn::os::GetCurrentThread: registered ThreadType=%p\n", t);
+            if (last_logged_thread != t) {
+                last_logged_thread = t;
+                fprintf(stderr, "[hle] nn::os::GetCurrentThread: registered ThreadType=%p\n", t);
+            }
             return t;
         }
     }
     pthread_mutex_unlock(&s_threads_mutex);
     static bool s_main_inited = false;
-    fprintf(stderr, "[hle] nn::os::GetCurrentThread: no registered host thread; primary ThreadType=%p\n",
-            (void *)s_main_thread_storage);
+    if (!primary_logged) {
+        primary_logged = true;
+        fprintf(stderr, "[hle] nn::os::GetCurrentThread: no registered host thread; primary ThreadType=%p\n",
+                (void *)s_main_thread_storage);
+    }
     if (!s_main_inited) {
         s_main_inited = true;
         *(uint8_t *)(s_main_thread_storage + NN_THREAD_STATE_OFFSET) = 2; /* Started */
@@ -1315,6 +1324,8 @@ int32_t nso_host_fs_read_file(size_t *out_bytes_read, nn_fs_file_handle handle, 
     int fd = entry->fd;
     pthread_mutex_unlock(&s_fs_file_mutex);
 
+    // Kernel writes return EFAULT on tracked read-only pages instead of faulting.
+    if (size && xbg_wtrack_prepare) xbg_wtrack_prepare(buffer, size);
     ssize_t n = pread(fd, buffer, size, (off_t)offset);
     if (n < 0) {
         fprintf(stderr, "[hle] nn::fs::ReadFile: pread failed fd=%d offset=%lld size=%zu errno=%d (%s)\n",
@@ -2483,6 +2494,7 @@ bool nso_host_hid_mouse_initialized(void) {
 
 static uint32_t s_oe_focus_state = 0;
 static pthread_mutex_t s_oe_notification_lock = PTHREAD_MUTEX_INITIALIZER;
+static pthread_cond_t s_oe_notification_cond = PTHREAD_COND_INITIALIZER;
 static bool s_oe_focus_notification_pending;
 static bool s_oe_performance_mode_notification = false;
 static bool s_oe_operation_mode_notification = false;
@@ -2548,8 +2560,10 @@ void nso_host_oe_set_host_focus(uint32_t state) {
             s_oe_active_running=active;
         }
         s_oe_focus_state = state;
-        if (s_oe_focus_handling_mode == 1 || s_oe_focus_handling_mode == 2)
+        if (s_oe_focus_handling_mode == 1 || s_oe_focus_handling_mode == 2) {
             s_oe_focus_notification_pending = true;
+            pthread_cond_broadcast(&s_oe_notification_cond);
+        }
     }
     pthread_mutex_unlock(&s_oe_notification_lock);
 }
@@ -2564,6 +2578,15 @@ bool nso_host_oe_try_pop_notification_message(uint32_t *out) {
     }
     pthread_mutex_unlock(&s_oe_notification_lock);
     return available;
+}
+
+uint32_t nso_host_oe_pop_notification_message(void) {
+    pthread_mutex_lock(&s_oe_notification_lock);
+    while (!s_oe_focus_notification_pending)
+        pthread_cond_wait(&s_oe_notification_cond, &s_oe_notification_lock);
+    s_oe_focus_notification_pending = false;
+    pthread_mutex_unlock(&s_oe_notification_lock);
+    return 15;
 }
 
 void nso_host_oe_set_performance_mode_changed_notification_enabled(bool enabled) {

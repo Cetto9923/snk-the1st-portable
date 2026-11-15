@@ -433,7 +433,7 @@ typedef struct nvn_command_package {
 /* Borrowed diagnostic snapshot, valid only while caller excludes recorder
  * mutation or holds a translation lease. The handle is never dereferenced. */
 int nvn_command_buffer_get_package(uint64_t handle, nvn_command_package *out);
-/* A synchronous translation lease owns all root and nested CALL packages.
+/* A translation lease owns all root and nested CALL packages.
  * Source reuse may retire their public handles while existing lease snapshots
  * remain readable. Release after the engine has consumed all command bytes. */
 typedef struct nvn_command_package_lease { void *owner; } nvn_command_package_lease;

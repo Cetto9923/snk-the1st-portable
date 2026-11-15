@@ -126,6 +126,9 @@ typedef struct {
 static pthread_mutex_t s_rs_lock = PTHREAD_MUTEX_INITIALIZER;
 static nvn_object_table s_states = { NULL, 0, 0, sizeof(nvn_rs_value) };
 static nvn_render_state_stats s_stats;
+/* Indices survive object-table growth. Revalidate the object and family
+ * under s_rs_lock, and unpack the current guest bytes on every hit. */
+static size_t s_state_lookup[1024];
 
 static void unpack_value(nvn_rs_value *v) {
     switch(v->family) {
@@ -213,11 +216,24 @@ static nvn_rs_value *state_find(const void *object, int family, int create) {
     size_t i;
     nvn_rs_value *free_slot = NULL;
     if (!object) return NULL;
+    uintptr_t key = (uintptr_t)object;
+    size_t bucket = ((key >> 4) ^ (key >> 13) ^ (uint32_t)family) & 1023u;
+    size_t cached_index = s_state_lookup[bucket];
+    nvn_rs_value *cached = cached_index ?
+        (nvn_rs_value *)nvn_object_table_at(&s_states, cached_index - 1u) : NULL;
+    if (cached && cached->in_use && cached->object == object && cached->family == family) {
+        unpack_value(cached);
+        return cached;
+    }
     for (i = 0; i < s_states.count; i++) {
         nvn_rs_value *entry = (nvn_rs_value *)nvn_object_table_at(&s_states, i);
         if (!entry) continue;
         if (entry->in_use) {
-            if (entry->object == object && entry->family == family) {unpack_value(entry);return entry;}
+            if (entry->object == object && entry->family == family) {
+                s_state_lookup[bucket] = i + 1u;
+                unpack_value(entry);
+                return entry;
+            }
         } else if (!free_slot) {
             free_slot = entry;
         }
@@ -232,6 +248,8 @@ static nvn_rs_value *state_find(const void *object, int family, int create) {
     apply_defaults(free_slot, family);
     free_slot->in_use = 1;
     unpack_value(free_slot);
+    s_state_lookup[bucket] = ((char *)free_slot - (char *)s_states.slots) /
+        sizeof(*free_slot) + 1u;
     return free_slot;
 }
 

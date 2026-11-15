@@ -26,12 +26,16 @@ int main(void){
  unsigned char data[16];memset(data,0x47,sizeof data);
  void(*set)(void*,void*,uint64_t)=(void*)ffrs_movie_buffer_lookup("_ZN5movie6Buffer18SetDataAndCapacityEPvm",0,0);
  void*(*base)(void*)=(void*)ffrs_movie_buffer_lookup("_ZNK5movie6Buffer4BaseEv",0,0);
+ void*(*current_data)(void*)=(void*)ffrs_movie_buffer_lookup("_ZNK5movie6Buffer4DataEv",0,0);
  uint64_t(*cap)(void*)=(void*)ffrs_movie_buffer_lookup("_ZNK5movie6Buffer8CapacityEv",0,0);
  void(*range)(void*,int,int)=(void*)ffrs_movie_buffer_lookup("_ZN5movie6Buffer8SetRangeEii",0,0);
  int(*size)(void*)=(void*)ffrs_movie_buffer_lookup("_ZNK5movie6Buffer4SizeEv",0,0);
  int(*off)(void*)=(void*)ffrs_movie_buffer_lookup("_ZNK5movie6Buffer6OffsetEv",0,0);
  void(*dtor)(void*)=(void*)ffrs_movie_buffer_lookup("_ZN5movie6BufferD1Ev",0,0);
  set(a.b,data,16);range(a.b,3,9);CHECK(base(a.b)==data&&cap(a.b)==16&&off(a.b)==3&&size(a.b)==9);
+ CHECK(current_data(a.b)==data+3);
+ range(a.b,0,16);CHECK(current_data(a.b)==data);
+ range(a.b,3,9);
  dtor(a.b);CHECK(!frees&&base(a.b)==data&&data[0]==0x47);
  /* Owned-object ABI path must use the registered game callback and context. */
  a.b[16]=1;set(a.b,data+4,12);CHECK(frees==1&&last==data&&a.b[16]==0&&base(a.b)==data+4);

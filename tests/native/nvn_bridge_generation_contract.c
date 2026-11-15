@@ -34,6 +34,7 @@ void nvn_command_buffer_retire_source_memory(void *p,size_t n) { REQUIRE(p&&n); 
 int nvn_engine_register_texture(const void *p,int i,const void *t,const void *v) {(void)p;(void)i;(void)t;(void)v;return 0;}
 int nvn_engine_register_sampler(const void *p,int i,const void *s) {(void)p;(void)i;(void)s;return 0;}
 int nvn_program_info_of(const void *p,nvn_program_info *o) {(void)p;(void)o;return 0;}
+int nvn_program_info_if_changed(const void *p,uint64_t s,nvn_program_info *o) {(void)p;(void)s;(void)o;return -1;}
 int nvn_sampler_info_of(const void *p,ffrs_samp_par *o,uint64_t *s) {(void)p;(void)o;(void)s;return 0;}
 int nvn_texture_view_info_of(const void *p,ffrs_view *o,uint64_t *s) {(void)p;(void)o;(void)s;return 0;}
 /* Family entry lookup uses production tables, including actual builder/texture. */
@@ -82,6 +83,27 @@ int main(void) {
     EXPECT(ot->pool==old&&ot->off==256&&ot->n==16);EXPECT(os->pool==old&&os->off==1024&&os->n==8);
     make_texture(tex,tb,pool);const ffrs_tex *oldtex=nvn_bridge_texture(tex);REQUIRE(oldtex);
     EXPECT(oldtex->pool==old&&oldtex->mem==a+128);
+    EXPECT(oldtex->set_swz && oldtex->swz==(2u|(3u<<3)|(4u<<6)|(5u<<9)));
+    /* The actual builder/texture/bridge entry points preserve component maps.
+     * A retained descriptor stays immutable when the guest address is reused. */
+    unsigned char swizzle_texture[128],swizzle_builder[128];
+    make_texture(swizzle_texture,swizzle_builder,pool);
+    const ffrs_tex *identity=nvn_bridge_texture(swizzle_texture);REQUIRE(identity);
+    void (*set_swizzle)(void*,int,int,int,int)=builder_fn("nvnTextureBuilderSetSwizzle");
+    void (*set_format)(void*,int)=builder_fn("nvnTextureBuilderSetFormat");
+    int (*initialize_texture)(void*,const void*)=texture_fn("nvnTextureInitialize");
+    REQUIRE(set_swizzle&&set_format&&initialize_texture);
+    set_format(swizzle_builder,0x49);set_swizzle(swizzle_builder,2,2,2,1);
+    REQUIRE(initialize_texture(swizzle_texture,swizzle_builder));
+    ffrs_tex gray;REQUIRE(nvn_bridge_texture_copy(swizzle_texture,&gray));
+    EXPECT(gray.d.format==0x49 && gray.set_swz && gray.swz==(2u|(2u<<3)|(2u<<6)|(1u<<9)));
+    EXPECT(identity->set_swz && identity->swz==(2u|(3u<<3)|(4u<<6)|(5u<<9)));
+    set_swizzle(swizzle_builder,4,3,2,0);
+    ffrs_tex unchanged;REQUIRE(nvn_bridge_texture_copy(swizzle_texture,&unchanged));
+    EXPECT(unchanged.swz==gray.swz && unchanged.serial==gray.serial);
+    REQUIRE(initialize_texture(swizzle_texture,swizzle_builder));
+    REQUIRE(nvn_bridge_texture_copy(swizzle_texture,&unchanged));
+    EXPECT(unchanged.serial!=gray.serial && unchanged.swz==(4u|(3u<<3)|(2u<<6)));
     ffrs_pool old_value=*old;ffrs_dpool ot_value=*ot,os_value=*os;ffrs_tex oldtex_value=*oldtex;
     nvn_texture_pool_finalize(tp);nvn_sampler_pool_finalize(sp);nvn_memory_pool_finalize(pool);
     EXPECT(!nvn_bridge_pool(pool));EXPECT(!nvn_bridge_texture_pool(tp));EXPECT(!nvn_bridge_sampler_pool(sp));

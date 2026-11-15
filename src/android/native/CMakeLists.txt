@@ -142,7 +142,7 @@ if(ANDROID)
     target_include_directories(ffrs_opus PRIVATE
         "${FFRS_OPUS_DIR}/include" "${FFRS_OPUS_DIR}/celt"
         "${FFRS_OPUS_DIR}/silk" "${FFRS_OPUS_DIR}/src")
-    target_compile_definitions(ffrs_opus PRIVATE FIXED_POINT=1 OPUS_BUILD=1)
+    target_compile_definitions(ffrs_opus PRIVATE FIXED_POINT=1 OPUS_BUILD=1 VAR_ARRAYS=1)
     add_library(ffrs_guest_runtime STATIC
         "${FFRS_GUEST_NSO_DIR}/nso_loader.c"
         "${FFRS_GUEST_NSO_DIR}/nso_boot.c"
@@ -259,7 +259,7 @@ if(ANDROID)
         target_link_libraries(ffrs_nvn_vulkan_engine PUBLIC dm_spirv_opt)
     endif()
     target_link_libraries(ffrs_nvn_vulkan_engine PUBLIC vulkan)
-    target_link_libraries(ffrs_guest_runtime PUBLIC dl m log vulkan aaudio mediandk ffrs_nvn_vulkan_engine)
+    target_link_libraries(ffrs_guest_runtime PUBLIC dl m log z vulkan aaudio mediandk ffrs_nvn_vulkan_engine)
     add_library(ffrs_game_window SHARED game_window_jni.cpp game_vulkan_probe.cpp guest_boot_jni.cpp)
     set_target_properties(ffrs_game_window PROPERTIES C_STANDARD 11 C_STANDARD_REQUIRED YES C_EXTENSIONS NO)
     target_include_directories(ffrs_game_window PRIVATE "${FFRS_NATIVE_WINDOW_HLE_DIR}" "${FFRS_GUEST_NSO_DIR}")

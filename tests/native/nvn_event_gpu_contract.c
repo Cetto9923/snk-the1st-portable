@@ -7,7 +7,8 @@
 #include <stdio.h>
 #include <string.h>
 
-static unsigned errors,drains,reentrant_queries;
+static unsigned errors,drains,reentrant_queries,polls;
+static int gpu_ready=1;
 #define CHECK(c) do { if(!(c)){fprintf(stderr,"FAIL line=%d %s\n",__LINE__,#c);++errors;} } while(0)
 struct Pool {uint8_t *mem;uint64_t size;int live;};
 static _Alignas(16) uint8_t memory[128];
@@ -33,6 +34,10 @@ void mtl_event_read(const volatile uint32_t *address) {
         else ++i;
     }
 }
+void mtl_event_poll(const volatile uint32_t *address) {
+    ++polls;
+    if(gpu_ready)mtl_event_read(address);
+}
 static void *entry(const char *name) {
     for(size_t i=0;i<nvn_event_family_count();++i){const nvn_event_family_entry *e=nvn_event_family_entry_at(i);if(!strcmp(e->name,name))return e->fn;}
     fprintf(stderr,"missing production event entry %s\n",name);return NULL;
@@ -55,7 +60,9 @@ int main(void) {
     defaults(builder);storage(builder,&pool,16);
     unsigned before=drains;CHECK(initialize(event,builder)==1);CHECK(drains==before+1);CHECK(*first==0x31415926u);
     uint64_t address=0;CHECK(nvn_event_value_address_of(event,&address));CHECK(address==(uintptr_t)first);
-    defer(first,99);CHECK(get(event)==99);CHECK(!pending_count);
+    defer(first,99);gpu_ready=0;before=drains;
+    CHECK(get(event)==0x31415926u);CHECK(pending_count==1&&drains==before);
+    gpu_ready=1;CHECK(get(event)==99);CHECK(!pending_count);
     defer(first,100);signal(event,1,7);CHECK(*first==107);CHECK(get(event)==107);CHECK(!pending_count);
     defer(first,300);signal(event,0,12);CHECK(*first==12);CHECK(!pending_count);
     CHECK(initialize(alias,builder)==1);signal(alias,1,8);CHECK(get(event)==20);
@@ -72,7 +79,7 @@ int main(void) {
     invalid=(struct Pool){memory,3,1};storage(builder,&invalid,0);CHECK(!initialize(unknown,builder));
     storage(builder,&pool,16);CHECK(initialize(event,builder));pool.live=0;before=drains;CHECK(get(event)==0);signal(event,0,42);CHECK(drains==before);CHECK(*first==111);pool.live=1;finalize(event);
     CHECK(canaries());for(size_t i=0;i<sizeof event;i++)CHECK(event[i]==0xaa&&alias[i]==0xaa&&unknown[i]==0xaa&&builder[i]==0xaa);
-    CHECK(drains==reentrant_queries&&drains>10);
+    CHECK(drains==reentrant_queries&&drains>10&&polls>0);
     printf("nvn_event_gpu_contract errors=%u completion_drains=%u reentrant_queries=%u real_GPU_executed=0\n",errors,drains,reentrant_queries);
     return errors!=0;
 }

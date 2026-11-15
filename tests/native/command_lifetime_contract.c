@@ -11,6 +11,7 @@
 static unsigned char memory[4096];static int pool_key;static unsigned removed;
 static int queue_check,queue_errors;static unsigned queue_seen,queue_batches,registered;
 int nvn_trace_enabled(void){return 0;}
+void nvn_engine_event_reference(uint64_t address,int retain){(void)address;(void)retain;}
 int nvn_memory_pool_info_of(const void *pool,nvn_memory_pool_info *out){
     if(pool!=&pool_key)return 0;*out=(nvn_memory_pool_info){memory,sizeof(memory),0,1};return 1;
 }
@@ -25,6 +26,12 @@ int nvn_engine_submit(const uint64_t *handles,int count){
     for(int i=0;i<count;i++){uint32_t value;memcpy(&value,(const void*)(uintptr_t)(handles[i]+20),4);
         if(value!=queue_seen)queue_errors++;queue_seen++;}
     queue_batches++;return 1;
+}
+int nvn_engine_submit_with_release(const uint64_t *handles,int count,
+                                  void (*release)(void *),void *owner){
+    int accepted=nvn_engine_submit(handles,count);
+    if(release)release(owner);
+    return accepted;
 }
 void nvn_command_replay_get_stats(nvn_replay_stats *out){memset(out,0,sizeof(*out));}
 int nvn_command_replay_run(uint64_t handle){(void)handle;return 1;}

@@ -55,6 +55,13 @@ void nvn_engine_set_enabled(int enabled);
  * The handles are the addresses of the first record of each package, in the
  * order the guest gave them. */
 int nvn_engine_submit(const uint64_t *handles, int count);
+/* Balance references to event writes in immutable command packages. */
+void nvn_engine_event_reference(uint64_t address,int retain);
+/* Transfer CPU command ownership until translation completes. release is called
+ * exactly once, including when the engine refuses this submission. GPU fences
+ * continue to govern resource/data reuse separately. */
+int nvn_engine_submit_with_release(const uint64_t *handles, int count,
+                                  void (*release)(void *), void *owner);
 
 /* Tell the engine about a memory pool of the guest, so that the addresses
  * the guest uses can be resolved. */

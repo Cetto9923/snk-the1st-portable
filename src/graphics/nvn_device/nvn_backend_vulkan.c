@@ -315,7 +315,10 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         requested12.shaderOutputViewportIndex=VK_TRUE;
     }
     /* Extension names remain alive through vkCreateDevice. */
-    const char *device_extensions[1];
+    const char *device_extensions[2];
+    VkBool32 fault_extension_supported = VK_FALSE;
+    VkPhysicalDeviceFaultFeaturesEXT fault_features = {0};
+    fault_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
     uint32_t extension_count = 0;
     VkExtensionProperties *available = NULL;
     VkResult extension_result = vkEnumerateDeviceExtensionProperties(st->physical, NULL, &extension_count, NULL);
@@ -323,12 +326,27 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         available = (VkExtensionProperties *)calloc(extension_count, sizeof(*available));
         if (available) {
             extension_result = vkEnumerateDeviceExtensionProperties(st->physical, NULL, &extension_count, available);
-            if (extension_result == VK_SUCCESS) for (uint32_t e=0;e<extension_count;e++)
+            if (extension_result == VK_SUCCESS) for (uint32_t e=0;e<extension_count;e++) {
                 if (!strcmp(available[e].extensionName,VK_KHR_SWAPCHAIN_EXTENSION_NAME)) st->swapchain_supported=1;
+                if (!strcmp(available[e].extensionName,VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) fault_extension_supported=VK_TRUE;
+            }
             free(available);
         }
     }
     if (st->swapchain_supported) device_extensions[device_info.enabledExtensionCount++]=VK_KHR_SWAPCHAIN_EXTENSION_NAME;
+    if (fault_extension_supported) {
+        VkPhysicalDeviceFeatures2 fault_supported = {0};
+        fault_supported.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2;
+        fault_supported.pNext = &fault_features;
+        vkGetPhysicalDeviceFeatures2(st->physical, &fault_supported);
+        fault_features.deviceFaultVendorBinary = VK_FALSE;
+        if (fault_features.deviceFault) {
+            fault_features.pNext = (void *)device_info.pNext;
+            device_info.pNext = &fault_features;
+            device_extensions[device_info.enabledExtensionCount++]=VK_EXT_DEVICE_FAULT_EXTENSION_NAME;
+        }
+    }
+    fprintf(stderr,"[nvn] vulkan: device fault extension=%u reporting=%u\n",fault_extension_supported,fault_features.deviceFault);
     device_info.ppEnabledExtensionNames=device_info.enabledExtensionCount?device_extensions:NULL;
     fprintf(stderr,"[nvn] vulkan: swapchain supported=%u requested=%u; Vulkan12 route=%u outputLayer supported=%u requested=%u outputViewportIndex supported=%u requested=%u\n",
         st->swapchain_supported,st->swapchain_supported,core12_route,supported12.shaderOutputLayer,requested12.shaderOutputLayer,
@@ -929,8 +947,9 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
     }
 
     fprintf(stderr, "[nvn] vulkan: created a surface and a swapchain for the platform window: "
-                    "%ux%u, format %u, %u images, present mode %d\n",
-            width, height, (unsigned)format.format, image_count, (int)present_mode);
+                    "%ux%u, format %u, colorSpace %u, %u images, present mode %d\n",
+            width, height, (unsigned)format.format, (unsigned)format.colorSpace,
+            image_count, (int)present_mode);
     if (out_width) *out_width = width;
     if (out_height) *out_height = height;
     *out_surface = (void *)(uintptr_t)surface;

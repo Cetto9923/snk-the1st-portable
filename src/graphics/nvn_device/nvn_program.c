@@ -80,16 +80,28 @@ static pthread_mutex_t s_program_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t s_program_serial;
 static nvn_object_table s_programs = { NULL, 0, 0, sizeof(nvn_program_state) };
 static nvn_program_stats s_stats;
+/* Store indices because growing the object table can relocate its block.
+ * Every hit still checks the live object under s_program_lock. */
+static size_t s_program_lookup[256];
 
 static nvn_program_state *program_find(void *program, int create) {
     size_t i;
     nvn_program_state *free_slot = NULL;
     if (!program) return NULL;
+    uintptr_t key = (uintptr_t)program;
+    size_t bucket = ((key >> 4) ^ (key >> 13)) & 255u;
+    size_t cached_index = s_program_lookup[bucket];
+    nvn_program_state *cached = cached_index ?
+        (nvn_program_state *)nvn_object_table_at(&s_programs, cached_index - 1u) : NULL;
+    if (cached && cached->in_use && cached->program == program) return cached;
     for (i = 0; i < s_programs.count; i++) {
         nvn_program_state *entry = (nvn_program_state *)nvn_object_table_at(&s_programs, i);
         if (!entry) continue;
         if (entry->in_use) {
-            if (entry->program == program) return entry;
+            if (entry->program == program) {
+                s_program_lookup[bucket] = i + 1u;
+                return entry;
+            }
         } else if (!free_slot) {
             free_slot = entry;
         }
@@ -102,6 +114,8 @@ static nvn_program_state *program_find(void *program, int create) {
     memset(free_slot, 0, sizeof(*free_slot));
     free_slot->program = program;
     free_slot->in_use = 1;
+    s_program_lookup[bucket] = ((char *)free_slot - (char *)s_programs.slots) /
+        sizeof(*free_slot) + 1u;
     return free_slot;
 }
 
@@ -373,13 +387,17 @@ int nvn_program_get_subtile_size(void *program) {
  * section says that it is shorter: the name of a shader is the hash of the
  * first 0x880 bytes of the control section, so the bytes after the shorter
  * length are part of the name. */
-int nvn_program_info_of(const void *program, nvn_program_info *out) {
+int nvn_program_info_if_changed(const void *program, uint64_t serial, nvn_program_info *out) {
     nvn_program_state *p;
     int i;
-    if (!program || !out) return 0;
+    if (!program || !out) return -1;
     pthread_mutex_lock(&s_program_lock);
     p = program_find((void *)(uintptr_t)program, 0);
     if (!p || !p->in_use) {
+        pthread_mutex_unlock(&s_program_lock);
+        return -1;
+    }
+    if (serial && p->serial == serial) {
         pthread_mutex_unlock(&s_program_lock);
         return 0;
     }
@@ -393,6 +411,10 @@ int nvn_program_info_of(const void *program, nvn_program_info *out) {
     }
     pthread_mutex_unlock(&s_program_lock);
     return 1;
+}
+
+int nvn_program_info_of(const void *program, nvn_program_info *out) {
+    return nvn_program_info_if_changed(program, 0, out) == 1;
 }
 
 /* The names                                                           */

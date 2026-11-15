@@ -351,6 +351,7 @@ uint32_t nso_host_oe_get_current_focus_state(void);
 int64_t nso_host_oe_get_program_total_active_time(void);
 void nso_host_oe_set_host_focus(uint32_t state);
 bool nso_host_oe_try_pop_notification_message(uint32_t *out);
+uint32_t nso_host_oe_pop_notification_message(void);
 void nso_host_oe_set_performance_mode_changed_notification_enabled(bool enabled);
 void nso_host_oe_set_operation_mode_changed_notification_enabled(bool enabled);
 void nso_host_oe_set_focus_handling_mode(int32_t mode);

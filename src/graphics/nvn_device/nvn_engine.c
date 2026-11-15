@@ -241,6 +241,20 @@ int nvn_engine_submit(const uint64_t *handles, int count) {
     return 1;
 }
 
+void nvn_engine_event_reference(uint64_t address,int retain) {
+    xbg_event_reference(address,retain);
+}
+
+int nvn_engine_submit_with_release(const uint64_t *handles, int count,
+                                  void (*release)(void *), void *owner) {
+    if (!nvn_engine_ready() || !handles || count <= 0) {
+        if (release) release(owner);
+        return 0;
+    }
+    xbg_submit_with_release(count, handles, release, owner);
+    return 1;
+}
+
 void nvn_engine_pool_add(void *memory, size_t bytes) {
     if (!nvn_engine_ready() || !memory || !bytes) return;
     xbg_legacy_pool_add(memory, bytes);

@@ -198,6 +198,7 @@ void mtl_sub_fill(uint64_t dst, uint64_t n, uint32_t value) {
 
 /* The deferred events are published before the guest reads them (the engine's gfx-defer-events). */
 void mtl_event_read(const volatile uint32_t *val) { xbg_game_event_read((const void *)val); }
+void mtl_event_poll(const volatile uint32_t *val) { xbg_game_event_poll((const void *)val); }
 
 void mtl_sub_event(volatile uint32_t *val, uint32_t mode, uint32_t v) {
     struct { uint64_t a; uint32_t m, v; } p = {(uintptr_t)val, mode, v};

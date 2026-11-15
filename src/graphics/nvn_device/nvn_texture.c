@@ -1302,6 +1302,11 @@ int nvn_texture_info_of(const void *texture, nvn_texture_info *out) {
     /* The packaged layout is the automatic one: the guest never names the
      * block height of the packed textures it hands over. */
     out->d.pkg_block_h = slot->packaged_block_height;
+    out->set_swz = 1;
+    out->swz = (uint16_t)((unsigned)slot->swizzle[0] |
+                         (unsigned)slot->swizzle[1] << 3 |
+                         (unsigned)slot->swizzle[2] << 6 |
+                         (unsigned)slot->swizzle[3] << 9);
     out->memory_pool = slot->memory_pool;
     out->memory_offset = slot->memory_offset;
     out->serial = slot->serial;

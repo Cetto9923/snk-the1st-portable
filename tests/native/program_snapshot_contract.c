@@ -15,8 +15,13 @@ int main(void){int errors=0;nvn_object_table table={0,0,0,8};
  struct{uint64_t data;void *control;} sd={123,control};uint64_t keys[140]={0};
  if(!nvn_program_initialize(&keys[0],(void*)1)||!nvn_program_set_shaders(&keys[0],1,&sd))return 3;
  const ffrs_prog *snapshot=nvn_bridge_program(&keys[0]);if(!snapshot)return 4;uint64_t serial=snapshot->serial;
+ nvn_program_info info,unchanged;memset(&info,0x79,sizeof info);unchanged=info;
+ if(nvn_program_info_if_changed(&keys[0],serial,&info)!=0||memcmp(&info,&unchanged,sizeof info))errors++;
+ if(nvn_program_info_if_changed(NULL,serial,&info)!=-1||memcmp(&info,&unchanged,sizeof info))errors++;
+ for(unsigned i=0;i<1000;i++)if(nvn_bridge_program(&keys[0])!=snapshot)errors++;
  for(int i=1;i<140;i++)if(!nvn_program_initialize(&keys[i],(void*)1))return 5;
  if(((const unsigned char*)snapshot->sd[0].control)[0]!=0x31||snapshot->serial!=serial)errors++;
  control[0]=0x57;nvn_program_set_shaders(&keys[0],1,&sd);const ffrs_prog *next=nvn_bridge_program(&keys[0]);
+ if(nvn_program_info_if_changed(&keys[0],serial,&info)!=1||info.serial==serial||info.control[0][0]!=0x57)errors++;
  if(!next||next==snapshot||next->serial==serial||((const unsigned char*)next->sd[0].control)[0]!=0x57||((const unsigned char*)snapshot->sd[0].control)[0]!=0x31)errors++;
  printf("program_snapshot_contract errors=%d table_growth=64/128/256 old_shader_preserved=1\n",errors);return errors!=0;}

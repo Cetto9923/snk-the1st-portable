@@ -1,5 +1,40 @@
 #include "xbg_vertex.h"
 #include <string.h>
+int xbg_vertex_max_index(const void *indices,size_t bytes,int index_type,
+    int32_t base_vertex,uint64_t *out){
+    if(!indices || !out || !bytes || index_type<0 || index_type>2)return -1;
+    const size_t element_bytes=(size_t)1<<index_type;
+    if(bytes%element_bytes)return -1;
+    uint32_t maximum=0;
+    const unsigned char *source=indices;
+    /* Constant-width loads keep Android's fortified memcpy out of the loop.
+     * NVN and the supported ARM64 hosts use little-endian indices. */
+    if(index_type==0){
+        for(size_t offset=0;offset<bytes;++offset)
+            if(source[offset]>maximum)maximum=source[offset];
+    }else if(index_type==1){
+        for(size_t offset=0;offset<bytes;offset+=2){
+            uint16_t index;memcpy(&index,source+offset,2);
+            if(index>maximum)maximum=index;
+        }
+    }else{
+        for(size_t offset=0;offset<bytes;offset+=4){
+            uint32_t index;memcpy(&index,source+offset,4);
+            if(index>maximum)maximum=index;
+        }
+    }
+    const int64_t adjusted=(int64_t)maximum+base_vertex;
+    if(adjusted<0)return -1;
+    *out=(uint64_t)adjusted;
+    return 0;
+}
+uint64_t xbg_vertex_prefix_bytes(uint64_t bound_bytes,uint32_t stride,
+    uint32_t attribute_end,uint64_t maximum_element){
+    if(!attribute_end || attribute_end>bound_bytes)return bound_bytes;
+    if(stride && maximum_element>(UINT64_MAX-attribute_end)/stride)return bound_bytes;
+    const uint64_t needed=maximum_element*stride+attribute_end;
+    return needed<bound_bytes?needed:bound_bytes;
+}
 int xbg_vertex_attributes_replace(uint32_t state[16],const uint32_t *a,int n){
     if(!state || n<0 || n>16 || (n && !a))return -1;
     uint32_t replacement[16]={0};if(n)memcpy(replacement,a,(size_t)n*4);

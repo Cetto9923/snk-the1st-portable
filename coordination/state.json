@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-11T13:10:00+08:00",
-  "phase": "Full 3D In-Game Rendering, 12568 Textures & 453 Shaders (Map Transition Crash Fixed) Verified on RG477M & Honor GT Pro",
-  "coordinator": "Antigravity",
-  "integration_branch": "work/snk-the1st-honor-gtpro",
+  "updated_at": "2026-11-15T17:51:26.584170+08:00",
+  "phase": "社区预览版发布与 RG477M 真机验证进行中，荣耀真机操作已暂停",
+  "coordinator": "Codex",
+  "integration_branch": "task/T58-community-release",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -20,7 +20,21 @@
     "device_serial": "A42BBB5109000333"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T58",
+      "paths": [
+        "src/",
+        "scripts/",
+        "tests/",
+        "docs/release/",
+        "NOTICE.md",
+        "AGENTS.md",
+        "coordination/"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -37,7 +51,9 @@
       "id": "T01",
       "role": "CORE",
       "status": "passed",
-      "dependencies": ["T00"],
+      "dependencies": [
+        "T00"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -48,7 +64,9 @@
       "id": "T02",
       "role": "CORE",
       "status": "passed",
-      "dependencies": ["T01"],
+      "dependencies": [
+        "T01"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -59,7 +77,9 @@
       "id": "T03",
       "role": "GRAPHICS",
       "status": "passed",
-      "dependencies": ["T01"],
+      "dependencies": [
+        "T01"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -70,7 +90,9 @@
       "id": "T04",
       "role": "ANDROID",
       "status": "passed",
-      "dependencies": ["T01"],
+      "dependencies": [
+        "T01"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -81,7 +103,9 @@
       "id": "T05",
       "role": "ANDROID",
       "status": "passed",
-      "dependencies": ["T03"],
+      "dependencies": [
+        "T03"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -93,7 +117,9 @@
       "id": "T06",
       "role": "QA",
       "status": "passed",
-      "dependencies": ["T04"],
+      "dependencies": [
+        "T04"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
@@ -105,17 +131,67 @@
       "id": "T07",
       "role": "RESOURCE",
       "status": "passed",
-      "dependencies": ["T00"],
+      "dependencies": [
+        "T00"
+      ],
       "pass_gates": [],
       "owner": "Antigravity",
       "branch": "work/snk-the1st-honor-gtpro",
       "checkpoint": "T07-all-romfs-38971-packaged",
       "objective": "resolve RomFS physical metadata mapping and produce the full file inventory",
       "evidence": "release/data-manifest.json; SNK-data.zip (13.76 GiB, 71,641 files, 453 shaders, SHA-256 bd573678f52c63260c7cd736017070242012cd1e3f7ac0cbee6245004b60f304)"
+    },
+    {
+      "id": "T58",
+      "role": "RELEASE_ANDROID",
+      "status": "in_progress",
+      "dependencies": [],
+      "pass_gates": [],
+      "owner": "Codex",
+      "branch": "task/T58-community-release",
+      "objective": "迁移 C1-C62 修复、同步触屏布局、RG477M/天玑配置、打包并发布当前预览版",
+      "inputs": [
+        "cab771a7 source",
+        "takeover-20261114 tracked source diff and 25 new source/test files",
+        "FFRS current TouchPad read-only reference"
+      ],
+      "outputs": [
+        "APK and community ZIP",
+        "source tag and GitHub prerelease",
+        "RG477M real-scene evidence"
+      ],
+      "write_scope": [
+        "src",
+        "scripts",
+        "tests",
+        "docs/release",
+        "NOTICE.md",
+        "AGENTS.md",
+        "coordination"
+      ],
+      "acceptance": [
+        "source/APK exact provenance",
+        "public artifacts exclude game data and credentials",
+        "RG477M install and actual-game evidence"
+      ],
+      "recovery": "保留 takeover-20261114，独立 clone 社区版源仓，不修改共享 origin"
     }
   ],
   "blockers": [],
   "verified": [
+    "已核对独立 SNK GitHub 仓库与 RG477M MT6897 / Android 14 设备身份。",
+    "社区预览候选 b5837d53 在 RG477M 覆盖安装成功，原签名 SHA256 0203b980… 一致。",
+    "RG477M 触屏菜单、编辑面板与显示切换已截图验证。6611 个着色器设备 SHA256 一致。",
+    "混音器默认关闭导致新装无声，已修复默认开关。用户已确认“有声音了”。",
+    "58 项图形测试通过 57 项，缺少本地私有 UINT 输入而跳过 1 项。6 项运行时测试通过。"
+  ],
+  "unverified": [
+    "RG477M 人物模型拉伸、缺失，待完整数据同点复测。",
+    "RG477M 真实场景性能尚未验收，旧数据开场候选约 10-12 FPS。",
+    "其他天玑机型尚无实机验收。",
+    "当前完整数据视图正在逐文件校验，发布与标签尚未创建。"
+  ],
+  "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",
     "C++14 sized deallocation (_ZdaPvm) guest 互通释放网关，解决 Scudo 堆校验崩溃",
     "Android MediaCodec/MediaExtractor 硬件加速视频解码与 A 键无缝跳过",
@@ -127,10 +203,5 @@
     "RG477M (天玑 8300 / Mali-G615) 与荣耀平板 GT Pro (骁龙 8s Gen 3 / Adreno 735) 双端过图加载实测全通",
     "SNK-data.zip 便携数据包打包与全量 71,641 资产校验 (13.76 GiB, SHA-256 bd573678f52c63260c7cd736017070242012cd1e3f7ac0cbee6245004b60f304)",
     "release/ 目录完整发布产物就绪 (snk-the1st-game-window-debug.apk + SNK-data.zip + README-HONOR.md)"
-  ],
-  "unverified": [
-    "序章实际战斗场景图形与特效表现",
-    "长时间真机深度游戏发热与热节流情况",
-    "游戏存档保存与持久化跨会话重载"
   ]
 }

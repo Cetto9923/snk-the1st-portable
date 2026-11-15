@@ -599,6 +599,7 @@ struct snk_sync {
     enum snk_sync_kind kind;
     pthread_mutex_t mutex;
     pthread_cond_t cond;
+    clockid_t clock_id;
     bool signaled;
     bool initialized;
     uint8_t clear_mode;
@@ -636,8 +637,28 @@ static struct snk_sync *sync_borrow(void *object, enum snk_sync_kind kind, bool 
     if (!create) return NULL;
     entry = calloc(1, sizeof(*entry));
     if (!entry) return NULL;
-    pthread_mutex_init(&entry->mutex, NULL);
-    pthread_cond_init(&entry->cond, NULL);
+    if (pthread_mutex_init(&entry->mutex, NULL) != 0) {
+        free(entry);
+        return NULL;
+    }
+    pthread_condattr_t attributes;
+    if (pthread_condattr_init(&attributes) != 0) {
+        pthread_mutex_destroy(&entry->mutex);
+        free(entry);
+        return NULL;
+    }
+    entry->clock_id = CLOCK_REALTIME;
+#if defined(__linux__)
+    if (pthread_condattr_setclock(&attributes, CLOCK_MONOTONIC) == 0)
+        entry->clock_id = CLOCK_MONOTONIC;
+#endif
+    int condition_error = pthread_cond_init(&entry->cond, &attributes);
+    pthread_condattr_destroy(&attributes);
+    if (condition_error != 0) {
+        pthread_mutex_destroy(&entry->mutex);
+        free(entry);
+        return NULL;
+    }
     entry->object = object;
     entry->kind = kind;
     entry->initialized = true;
@@ -714,7 +735,7 @@ static uint64_t snk_wait_light_event(void *object, int64_t nanoseconds, bool tim
     if (!entry) return false;
     struct timespec deadline;
     if (timed) {
-        clock_gettime(CLOCK_MONOTONIC, &deadline);
+        clock_gettime(entry->clock_id, &deadline);
         if (nanoseconds > 0) {
             deadline.tv_sec += nanoseconds / 1000000000;
             deadline.tv_nsec += nanoseconds % 1000000000;
@@ -849,12 +870,10 @@ static uint64_t snk_receive_message_queue(uint64_t *out, void *object) {
 /* Remaining nn:: entry points the title reaches before the first frame   */
 /* ====================================================================== */
 
-/* nn::oe::PopNotificationMessage()
- * The applet message queue does not exist on this host. A title that
- * never received a message gets the console answer "no message". */
+/* SDK20 VA4048b0 waits on the message SystemEvent before popping a nonzero
+ * notification. Share the Android focus queue with TryPopNotificationMessage. */
 static int32_t snk_pop_notification_message(void) {
-    return 0;
-    return 0;
+    return (int32_t)nso_host_oe_pop_notification_message();
 }
 
 /* nn::init::Start(uint64_t, uint64_t, void(*)(), void(*)(), void(*)())

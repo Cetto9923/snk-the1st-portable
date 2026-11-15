@@ -110,6 +110,16 @@ step d8 "${FFRS_BUILD_TOOLS}/d8" --min-api 28 --lib "${FFRS_ANDROID_JAR}" \
     --output "${FFRS_PACKAGE_DIR}/dex" "${FFRS_PACKAGE_DIR}/classes.jar"
 step aapt2-compile "${FFRS_BUILD_TOOLS}/aapt2" compile --dir "${FFRS_APP_RES}" \
     -o "${FFRS_PACKAGE_DIR}/res/resources.zip"
+FFRS_RUNTIME_ASSETS="${FFRS_PACKAGE_DIR}/runtime-assets"
+mkdir -p "${FFRS_RUNTIME_ASSETS}/licenses"
+if [[ -n "${FFRS_APP_ASSETS:-}" ]]; then
+    cp -R "${FFRS_APP_ASSETS}/." "${FFRS_RUNTIME_ASSETS}/"
+fi
+cp "${FFRS_ROOT}/NOTICE.md" "${FFRS_RUNTIME_ASSETS}/licenses/NOTICE.md"
+cp "${FFRS_ROOT}/third_party/opus/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/opus.txt"
+cp "${FFRS_ROOT}/third_party/lasrecomp/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/lasrecomp.txt"
+cp "${FFRS_ROOT}/src/graphics/nvn_vulkan/engine/third_party/bcdec/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/bcdec.txt"
+FFRS_APP_ASSETS="${FFRS_RUNTIME_ASSETS}"
 # An optimizer-enabled APK must carry its dependency notices even when the
 # caller did not supply an assets directory. Merge only into package staging.
 if [[ -n "${FFRS_SPIRV_TOOLS_SOURCE:-}" ]]; then

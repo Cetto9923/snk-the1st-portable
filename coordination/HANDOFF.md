@@ -433,3 +433,20 @@
 
 
 
+
+
+## T58 社区发布检查点 2026-11-15
+
+- 用户要求暂停荣耀真机操作，发布独立空轨社区应用，参照 FFRS 触屏布局，后续金手指另行加入，并转到 RG477M 调试。
+- 当前独立 clone，分支 task/T58-community-release，正确 origin 为 Cetto9923/snk-the1st-portable。基线 cab771a7，已迁入 takeover 工作区 C1-C62 的源代码与回归用例。原共享工作区与 FFRS 原仓保持原状。
+- 版本选择 1.0.1-preview / versionCode 2。公开包为 APK、自有矢量图标、说明与第三方许可。游戏与其衍生着色器由使用者准备，私有补全包只在本地。
+- 构建命令为 FFRS_SPIRV_TOOLS_SOURCE=<父项目>/.local/third-party/d2r-mobile-f1e4b08/dm/third_party/spirv-tools FFRS_BUILD_JOBS=6 bash scripts/android/build_game_window_apk.sh。原始构建和测试输出保存于 .local/publication/。
+- 候选 b5837d53588e8553e97c6fc0e6ec4eba5dea3c0aaf15c0b5f9c69546ba39cbb3，Android 安装退出 0。签名与 RG477M 旧版相同。安装前 APK 与存档已备份在 .local/publication/device-backup/。
+- 58 项 graphics 测试中 57 通过、1 项缺私有 UINT 输入跳过。runtime 6 项通过，DeviceProfile 合约通过。均为本机组件检查。
+- 触屏对齐参考仓的当前 TouchPad，菜单提供布局和显隐，长按 PAD 编辑，保留实体键与摇杆。已打开菜单和编辑器截图，证据 rg-menu.png、rg-touch-editor.png。
+- 新安装音频无声来自 snk-audio-mix 缺省关闭。改成默认启用，0 标记可诊断回退。用户已确认有声音。新装缺省与显式关闭的主机用例已加入。
+- RG477M MT6897 / Mali-G615 MC6 的 subgroup 固定为 16（min/max 16）。只据运行时查询记录，不把 Vulkan 允许的 subgroup-size control 当成设备支持 32。
+- 用户仍反馈人物缺失和拉伸。旧数据条件 async1 有明显人物长条，尚无根因结论。async0 对照在加载时发生 strncpy 访存故障，日志 rg-sync-load-crash.log，不能称该对照通过。
+- RG477M 原目录与 v1.0.7 合并资源有差异。存储卡复制受小文件开销影响，已终止本会话两个复制进程。改在 app 私有 files/community-v107 建目录，70004 个未变化文件链接到原 SNK/romfs，2356 个更新文件单独导入，4 个 NSO 链接到原目录。全清单 72360 项 SHA256 校验进行中。派生目录与旧输入分开，存档继续使用原 app 外部文件目录。
+- 当前 shader 已全量校验 6611 项一致，原 shaders 已改名为 shaders-before-1.0.1 留作恢复。
+- 下一步先等待 .local/publication/rg-merged-validation.json，修复任何缺失或差异，配置 game-directory 到上述私有合并目录，再测人物、音频与真实游戏操作。完成代码修正后重新构建与安装，打包 release、push SNK 独立仓、建立标签与预览 Release，并回下载核 SHA。

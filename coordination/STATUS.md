@@ -1,8 +1,8 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-11T13:10:00+08:00
-阶段：Full 3D In-Game Rendering, 12568 Textures & 453 Shaders (Map Transition Crash Fixed) Verified on RG477M & Honor GT Pro
-总控：Antigravity
+状态事件时间：2026-11-15T17:51:26.584170+08:00
+阶段：社区预览版发布与 RG477M 真机验证进行中，荣耀真机操作已暂停
+总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
 | 任务 | 角色 | 状态 | 实际负责人 | 启动依赖 | 验收门禁 | 分支 |
@@ -15,10 +15,11 @@
 | T05 | ANDROID | passed | Antigravity | T03 | 无额外门禁 | work/snk-the1st-honor-gtpro |
 | T06 | QA | passed | Antigravity | T04 | 无额外门禁 | work/snk-the1st-honor-gtpro |
 | T07 | RESOURCE | passed | Antigravity | T00 | 无额外门禁 | work/snk-the1st-honor-gtpro |
+| T58 | RELEASE_ANDROID | in_progress | Codex | 无 | 无额外门禁 | task/T58-community-release |
 
 ## 独占写入
 
-- 无
+- {"owner": "Codex", "task": "T58", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -26,22 +27,17 @@
 
 ## 已验证
 
-- v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)
-- C++14 sized deallocation (_ZdaPvm) guest 互通释放网关，解决 Scudo 堆校验崩溃
-- Android MediaCodec/MediaExtractor 硬件加速视频解码与 A 键无缝跳过
-- Vulkan 原生渲染管线在 Adreno 735 上稳定锁定 60.00 FPS (16.67ms 帧间隔)
-- 成功进入主标题界面 (艾丝蒂尔 & 约修亚全彩立绘、Title 菜单、虚拟触控)
-- 推进至 New Game 繁体中文难度选择菜单，字库排版与文本渲染 100% 正常
-- 全量提取 12,568 个 3D 贴图 (*.xtx) 与场景特效，彻底解决'有字幕无画面'与纯色渲染故障
-- 453 个 Maxwell SPIR-V 着色器 100% 离线编译打包 (含过图着色器 9afc8fa419c53b1b)，彻底根除过图 FATAL 闪退
-- RG477M (天玑 8300 / Mali-G615) 与荣耀平板 GT Pro (骁龙 8s Gen 3 / Adreno 735) 双端过图加载实测全通
-- SNK-data.zip 便携数据包打包与全量 71,641 资产校验 (13.76 GiB, SHA-256 bd573678f52c63260c7cd736017070242012cd1e3f7ac0cbee6245004b60f304)
-- release/ 目录完整发布产物就绪 (snk-the1st-game-window-debug.apk + SNK-data.zip + README-HONOR.md)
+- 已核对独立 SNK GitHub 仓库与 RG477M MT6897 / Android 14 设备身份。
+- 社区预览候选 b5837d53 在 RG477M 覆盖安装成功，原签名 SHA256 0203b980… 一致。
+- RG477M 触屏菜单、编辑面板与显示切换已截图验证。6611 个着色器设备 SHA256 一致。
+- 混音器默认关闭导致新装无声，已修复默认开关。用户已确认“有声音了”。
+- 58 项图形测试通过 57 项，缺少本地私有 UINT 输入而跳过 1 项。6 项运行时测试通过。
 
 ## 未验证
 
-- 序章实际战斗场景图形与特效表现
-- 长时间真机深度游戏发热与热节流情况
-- 游戏存档保存与持久化跨会话重载
+- RG477M 人物模型拉伸、缺失，待完整数据同点复测。
+- RG477M 真实场景性能尚未验收，旧数据开场候选约 10-12 FPS。
+- 其他天玑机型尚无实机验收。
+- 当前完整数据视图正在逐文件校验，发布与标签尚未创建。
 
 具体恢复命令与未完成修改见 HANDOFF.md。

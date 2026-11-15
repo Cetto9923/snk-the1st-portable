@@ -27,19 +27,6 @@
  * nn::codec one packet at a time. */
 #include "../../../third_party/opus/include/opus.h"
 
-/* libopus exposes the self-delimited framing only internally; this wrapper,
- * added next to it, selects that framing without duplicating decode logic. */
-extern int opus_decode_self_delimited(OpusDecoder *st, const unsigned char *data,
-                                      int len, short *pcm, int frame_size,
-                                      int *packet_offset);
-
-/* Packet framing parser; declared non-static in libopus and used here to learn
- * a packet's length even when the caller's buffer is too small to decode it. */
-extern int opus_packet_parse_impl(const unsigned char *data, int len, int self_delimited,
-                                  unsigned char *out_toc, const unsigned char *frames[48],
-                                  short size[48], int *payload_offset, int *packet_offset,
-                                  const unsigned char **padding, int *padding_len);
-
 #include "sdk_component.h"
 #include "audio_bridge.h"
 
@@ -54,6 +41,9 @@ void snk_audio_mixer_update(void);
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <errno.h>
+#include <math.h>
+#include <zlib.h>
 
 /* ====================================================================== */
 /* nn::audio                                                               */
@@ -239,130 +229,68 @@ uint64_t snk_audio_close_renderer(void *renderer, void *state_object) {
  * an earlier round mistake a handle mismatch for silence. */
 static unsigned s_mix_mixed_peak;   /* peak of the PCM actually mixed since the last report */
 
-/* ---------------------------------------------------------------- decode tap
- * Measured behaviour of this title: the BGM thread decodes exactly one voice
- * buffer's worth of PCM (480 + 960 frames = 1440 frames = 5760 bytes, matching
- * the wave buffer it appends next), then appends a buffer that is still all
- * zero and immediately flushes it. Nothing ever writes the decoded PCM into the
- * buffer the voice was given, so the voice has nothing to play, the streaming
- * loop never sees played-sample progress, and decoding stops after two packets.
- *
- * The decoded PCM itself is sound (peak 5855 on the second packet), so it is
- * captured here and poured into the voice's own buffer when the title hands one
- * over empty. The voice, its volume, its loop flag and its release handshake
- * stay the title's; only the bytes it failed to place are supplied. */
-#define SNK_OPUS_RING_FRAMES 49152u
-static int16_t s_opus_ring[SNK_OPUS_RING_FRAMES * 2];
-static uint64_t s_opus_ring_written, s_opus_ring_read;
-static pthread_mutex_t s_opus_ring_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static void snk_opus_ring_push(const int16_t *pcm, unsigned frames, unsigned channels) {
-    if (!pcm || !frames) return;
-    pthread_mutex_lock(&s_opus_ring_lock);
-    if (frames > SNK_OPUS_RING_FRAMES) {
-        pcm += (frames - SNK_OPUS_RING_FRAMES) * channels;
-        frames = SNK_OPUS_RING_FRAMES;
-    }
-    /* A full ring means nobody is consuming; drop the oldest audio rather than
-     * the newest, so a late start still hears the current moment. */
-    if (s_opus_ring_written - s_opus_ring_read > SNK_OPUS_RING_FRAMES)
-        s_opus_ring_read = s_opus_ring_written - SNK_OPUS_RING_FRAMES;
-    for (unsigned f = 0; f < frames; ++f) {
-        size_t slot = (size_t)((s_opus_ring_written + f) % SNK_OPUS_RING_FRAMES);
-        s_opus_ring[slot * 2]     = pcm[f * channels];
-        s_opus_ring[slot * 2 + 1] = channels > 1 ? pcm[f * channels + 1] : pcm[f * channels];
-    }
-    s_opus_ring_written += frames;
-    pthread_mutex_unlock(&s_opus_ring_lock);
-}
-
-/* Adds the decoded stream straight into the mix block, returns frames used.
- * This is the path that actually carries sound: the title's voice queue is left
- * alone, but nothing it does ever moves the decoded PCM into a playable buffer,
- * so the sample the decoder produced is mixed here at the output rate. */
-static unsigned snk_opus_ring_mix_into(float *dst, uint32_t frames, uint32_t channels) {
-    if (!dst || !frames) return 0;
-    unsigned used = 0, peak = 0;
-    pthread_mutex_lock(&s_opus_ring_lock);
-    uint64_t avail = s_opus_ring_written - s_opus_ring_read;
-    if (avail > frames) avail = frames;
-    for (uint64_t f = 0; f < avail; ++f) {
-        size_t slot = (size_t)((s_opus_ring_read + f) % SNK_OPUS_RING_FRAMES);
-        float l = (float)s_opus_ring[slot * 2] * (1.0f / 32768.0f);
-        float r = (float)s_opus_ring[slot * 2 + 1] * (1.0f / 32768.0f);
-        unsigned mag = (unsigned)(s_opus_ring[slot * 2] < 0 ? -s_opus_ring[slot * 2] : s_opus_ring[slot * 2]);
-        if (mag > peak) peak = mag;
-        if (channels == 1u) dst[f] += 0.5f * (l + r);
-        else { dst[f * channels] += l; dst[f * channels + 1] += r; }
-    }
-    s_opus_ring_read += avail;
-    used = (unsigned)avail;
-    pthread_mutex_unlock(&s_opus_ring_lock);
-    if (peak > s_mix_mixed_peak) s_mix_mixed_peak = peak;
-    return used;
-}
-
-/* Copies up to `frames` stereo frames into a guest buffer, returns how many. */
-static unsigned snk_opus_ring_take(int16_t *dst, unsigned frames) {
-    if (!dst || !frames) return 0;
-    pthread_mutex_lock(&s_opus_ring_lock);
-    uint64_t avail = s_opus_ring_written - s_opus_ring_read;
-    if (avail > frames) avail = frames;
-    for (uint64_t f = 0; f < avail; ++f) {
-        size_t slot = (size_t)((s_opus_ring_read + f) % SNK_OPUS_RING_FRAMES);
-        dst[f * 2]     = s_opus_ring[slot * 2];
-        dst[f * 2 + 1] = s_opus_ring[slot * 2 + 1];
-    }
-    s_opus_ring_read += avail;
-    pthread_mutex_unlock(&s_opus_ring_lock);
-    return (unsigned)avail;
-}
-
 static unsigned s_audio_evt;
 static int snk_audio_event(unsigned limit) {
     unsigned n = __atomic_add_fetch(&s_audio_evt, 1u, __ATOMIC_RELAXED);
     return n <= limit || n % 500u == 0;
 }
 
+/* SDK AppendWaveBuffer (0x227460) copies this 0x30-byte public layout.
+ * Start/end offsets count interleaved frames, and the end is exclusive. */
+struct snk_audio_wave_buffer {
+    const int16_t *data;
+    uint64_t bytes;
+    uint32_t start;
+    uint32_t end;
+    uint8_t looping;
+    uint8_t end_of_stream;
+    uint8_t padding[6];
+    const void *context;
+    uint64_t context_bytes;
+};
+
+#define SNK_AUDIO_WAVE_SLOTS 4u
+#define SNK_AUDIO_SOURCE_CHANNELS 6u
+#define SNK_AUDIO_MIX_BUFFERS 24u
+struct snk_audio_wave {
+    const void *object;
+    struct snk_audio_wave_buffer buffer;
+};
+
 struct snk_audio_voice {
     uint64_t magic;
-    const void *key;           /* the title's own VoiceType address, the real handle */
-    uint32_t state;            /* 0 free, 1 acquired */
-    uint32_t channel;
+    const void *key;
     uint32_t sample_format;
-    uint32_t reserved;
-    uint64_t wave_buffer;
-    uint64_t wave_buffer_size;
-    /* Mixer state. The title only ever holds the pointer this slot handed back,
-     * so everything the audren mixer needs can live here: the wave data it
-     * registered plus the play head and the parameters it set. */
-    const uint8_t *mix_data;
-    uint64_t mix_bytes;
-    uint64_t mix_pos;          /* byte offset into mix_data */
-    uint32_t mix_rate;         /* source sample rate, 0 = renderer rate */
-    int32_t mix_samples;       /* frames played since the wave buffer was added */
+    uint32_t mix_rate;
+    uint32_t mix_src_channels;
+    uint32_t play_state;       /* SDK enum: 0 play, 1 stop, 2 pause */
     float mix_volume;
     float mix_pitch;
-    int32_t mix_playing;
-    int32_t mix_loop;
-    int32_t mix_loops_done;
-    const void *mix_wave_obj;  /* the title's WaveBuffer, handed back when it is done */
-    uint32_t mix_src_channels; /* channels in the decoded wave data */
-    int32_t mix_wait_data;     /* appended buffer was still silent; hold the play head */
-    uint32_t mix_wait_blocks;  /* how many updates it has been waiting */
+    float mix_matrix[SNK_AUDIO_SOURCE_CHANNELS][SNK_AUDIO_MIX_BUFFERS];
+    int mix_matrix_set;
+    unsigned diagnostic_id;
+    unsigned diagnostic_appends;
+    uint32_t diagnostic_matrix_seen[SNK_AUDIO_SOURCE_CHANNELS];
+    uint32_t diagnostic_matrix_nonzero[SNK_AUDIO_SOURCE_CHANNELS];
+    unsigned diagnostic_blocks;
+    unsigned diagnostic_destinations;
+    const void *mix_destination;
+    int diagnostic_nonzero;
+    double mix_position;      /* source-frame offset within the current wave */
+    double mix_samples;       /* consumed source frames, unchanged by append */
+    struct snk_audio_wave waves[SNK_AUDIO_WAVE_SLOTS];
+    uint64_t wave_read;        /* returned to the title */
+    uint64_t wave_play;        /* processed, eligible for GetReleased */
+    uint64_t wave_write;       /* accepted by AppendWaveBuffer */
 };
 
 #define SNK_AUDIO_VOICE_MAGIC 0x534e4b4155564f58ull
-/* The host side has no ReleaseVoiceSlot entry, so a slot handed out here stays
- * taken for the lifetime of the process. The pool used to hold 64 entries and
- * the shipping title exhausted it (105 "no free voice slot" failures in one
- * session), after which every further AcquireVoiceSlot failed and the title
- * could not build its voice graph. The size only bounds how many voices may be
- * alive at once; raising it keeps every previously returned pointer valid and
- * changes no other behaviour. */
+/* Slots stay at fixed addresses while acquired. ReleaseVoiceSlot makes the
+ * same entry available for a subsequent voice. */
 #define SNK_AUDIO_VOICE_SLOT_COUNT 1024
 
 static struct snk_audio_voice s_audio_voices[SNK_AUDIO_VOICE_SLOT_COUNT];
+static unsigned s_audio_voice_serial;
 
 /* The title owns the VoiceType object: AcquireVoiceSlot is handed its address
  * and every later call passes that same address back. Writing a pointer of our
@@ -390,24 +318,22 @@ uint64_t snk_audio_acquire_voice_slot(void *config, void *voice_out,
     (void)mixer_index;
     (void)sample_count;
     (void)behavior_options;
-    struct snk_audio_voice *voice = snk_voice_find(voice_out);
+    if (!voice_out || channel <= 0 || mixer_index <= 0 ||
+        mixer_index > (int)SNK_AUDIO_SOURCE_CHANNELS) return 0;
     pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_out);
     for (size_t i = 0; voice == NULL && i < SNK_AUDIO_VOICE_SLOT_COUNT; i++) {
         if (s_audio_voices[i].magic != SNK_AUDIO_VOICE_MAGIC) {
             memset(&s_audio_voices[i], 0, sizeof(s_audio_voices[i]));
             s_audio_voices[i].magic = SNK_AUDIO_VOICE_MAGIC;
-            s_audio_voices[i].state = 1u;
             s_audio_voices[i].key = voice_out;
-            s_audio_voices[i].channel = (uint32_t)mixer_index;
+            s_audio_voices[i].diagnostic_id = ++s_audio_voice_serial;
             s_audio_voices[i].sample_format = (uint32_t)sample_format;
             s_audio_voices[i].mix_rate = (uint32_t)channel;
             s_audio_voices[i].mix_src_channels = mixer_index > 0 ? (uint32_t)mixer_index : 1u;
-            s_audio_voices[i].wave_buffer = (uint64_t)(uintptr_t)wave_buffer;
-            s_audio_voices[i].wave_buffer_size = (uint64_t)wave_buffer_size;
             s_audio_voices[i].mix_volume = 1.0f;
             s_audio_voices[i].mix_pitch = 1.0f;
-            s_audio_voices[i].mix_data = (const uint8_t *)wave_buffer;
-            s_audio_voices[i].mix_bytes = (uint64_t)wave_buffer_size;
+            s_audio_voices[i].play_state = 1u;
             voice = &s_audio_voices[i];
             break;
         }
@@ -417,8 +343,8 @@ uint64_t snk_audio_acquire_voice_slot(void *config, void *voice_out,
         fprintf(stderr, "[snk-media] AcquireVoiceSlot: no free voice slot\n");
         return 0;
     }
-    { static unsigned n; if (n < 12) { ++n; fprintf(stderr, "[audio] AcquireVoiceSlot #%u key=%p rate=%d channels=%d format=%d wave=%p bytes=%zu\n",
-        n, voice_out, channel, mixer_index, sample_format, wave_buffer, wave_buffer_size); } }
+    fprintf(stderr, "[audio-voice] acquire id=%u key=%p rate=%d channels=%d format=%d\n",
+            voice->diagnostic_id, voice_out, channel, mixer_index, sample_format);
     /* The title's object is left exactly as it was: it is the handle, not a
      * place to store ours. */
     return 1;
@@ -437,7 +363,7 @@ uint64_t snk_audio_request_update_renderer(void *renderer, void *state_object,
 }
 
 /* ====================================================================== */
-/* audren mixer (opt-in: marker snk-audio-mix in the app files directory)  */
+/* audren mixer (enabled by default; snk-audio-mix=0 disables it)  */
 /* ====================================================================== */
 /* The title builds its audio graph through nn::audio::AudioRenderer. The
  * renderer service is what mixes; this port has never had one, so every voice
@@ -445,22 +371,24 @@ uint64_t snk_audio_request_update_renderer(void *renderer, void *state_object,
  * from the voice objects this HLE hands out: the title never looks inside them,
  * it only passes the pointer back, so the play head can live in the slot.
  *
- * Default off. With the marker absent the whole path is skipped and behaviour
- * is exactly what it was before (silence). */
+ * Enabled for normal installs. An explicit snk-audio-mix=0 marker keeps
+ * the diagnostic native-SDK comparison path available. */
 #define SNK_MIX_RING 6
 static struct {
     int state;                 /* 0 unprobed, 1 on, -1 off */
     int opened;
     void *key;
     uint8_t buffer[64];
-    uint8_t *pcm;
+    float *pcm;
     uint32_t frames;
     uint32_t capacity_bytes;
     uint32_t rate;
     uint32_t channels;
     uint64_t updates;
+    int pending_output;
+    int pending_slot;
 } s_mix;
-/* s_mix_mixed_peak is declared above, next to the decode tap. */
+/* s_mix_mixed_peak is declared above with the voice handshake state. */
 static uint64_t (*s_mix_open)(void *, void *, const void *);
 static uint64_t (*s_mix_start)(void *);
 static uint64_t (*s_mix_append)(void *, void *);
@@ -473,117 +401,50 @@ static int s_mix_buffer_used[SNK_MIX_RING];
 static int snk_mix_probe(void);
 void snk_audio_mixer_update(void);
 
-static float snk_voice_volume(const struct snk_audio_voice *v) {
-    return v->mix_volume > 0.0f ? v->mix_volume : 1.0f;
-}
-/* The wave buffer is the title's own object. Its first two words are the data
- * pointer and the byte count in every nnSdk build this port has seen; the dump
- * printed once below records the real bytes so a different layout shows up
- * instead of silently mixing garbage. */
-static void snk_voice_take_wave(struct snk_audio_voice *v, const void *wave_buffer) {
-    if (!wave_buffer) return;
-    const uint8_t *p = (const uint8_t *)wave_buffer;
-    static unsigned dumps;
-    if (dumps < 4) {
-        ++dumps;
-        fprintf(stderr, "[audio] wave buffer raw=%p head=", wave_buffer);
-        for (unsigned i = 0; i < 48; ++i) fprintf(stderr, "%02x", p[i]);
-        fprintf(stderr, "\n");
-    }
-    /* The layout of the title's WaveBuffer has not been proven by a dump yet, so
-     * instead of trusting a fixed offset the data pointer and byte count are
-     * searched for among the plausible word pairs and accepted only when the
-     * pair is self-consistent: a pointer inside this port's guest heap followed
-     * by a byte count that is a multiple of one interleaved frame. The chosen
-     * offsets are printed, so the next dump confirms or corrects them. */
-    /* Measured guest pointers in this port live in the 0x6d..-0x73.. range
-     * (10 hex digits), e.g. 0x6d95c94000 for the wave data itself. The window
-     * is that range, not the 48-bit window assumed before, which rejected the
-     * real pointer. */
-    const uint64_t heap_lo = 0x6000000000ull, heap_hi = 0x7c00000000ull;
-    const uint32_t frame_bytes = 2u * (v->mix_src_channels ? v->mix_src_channels : 1u);
-    static const unsigned ptr_at[] = {0x00, 0x08, 0x10, 0x18};
-    uint64_t data = 0, bytes = 0;
-    unsigned chosen = ~0u;
-    for (unsigned i = 0; i < sizeof ptr_at / sizeof ptr_at[0]; ++i) {
-        uint64_t candidate = 0;
-        memcpy(&candidate, p + ptr_at[i], 8);
-        if (candidate < heap_lo || candidate >= heap_hi) continue;
-        uint64_t size64 = 0;
-        uint32_t size32 = 0;
-        memcpy(&size64, p + ptr_at[i] + 8, 8);
-        memcpy(&size32, p + ptr_at[i] + 4, 4);
-        /* a 32-bit count directly after a 32-bit pointer, or a 64-bit count */
-        uint64_t size = (size64 > 0 && size64 <= (16ull << 20)) ? size64 : (uint64_t)size32;
-        if (!size || size > (16ull << 20) || size % frame_bytes) continue;
-        data = candidate; bytes = size; chosen = ptr_at[i];
-        break;
-    }
-    if (chosen == ~0u) {
-        fprintf(stderr, "[audio] wave buffer: no plausible pointer/size pair in the first 0x30 bytes\n");
-        return;
-    }
-    /* Peak over the whole buffer, not just its head: a streaming chunk can
-     * legitimately begin with a gap, and only a whole-buffer peak tells a
-     * silent chunk from a wrong pointer. */
-    const int16_t *pcm = (const int16_t *)(uintptr_t)data;
-    const uint64_t samples = bytes / 2;
-    const uint64_t look = samples < 16384 ? samples : 16384;
-    unsigned peak = 0, nonzero = 0;
-    for (uint64_t i = 0; i < look; ++i) {
-        int v = pcm[i]; unsigned mag = (unsigned)(v < 0 ? -v : v);
-        if (mag) ++nonzero;
-        if (mag > peak) peak = mag;
-    }
-
-    /* The title hands this buffer over empty and then flushes it, so the PCM it
-     * decoded for it is poured in here instead (see the decode tap). A buffer
-     * that already carries data is left exactly as the title wrote it. */
-    unsigned filled = 0;
-    if (peak == 0 && bytes >= 4u) {
-        unsigned want = (unsigned)(samples / 2u);      /* stereo frames */
-        filled = snk_opus_ring_take((int16_t *)(uintptr_t)data, want);
-        if (filled) {
-            peak = 0;
-            for (uint64_t i = 0; i < (uint64_t)filled * 2u; ++i) {
-                int v = pcm[i]; unsigned mag = (unsigned)(v < 0 ? -v : v);
-                if (mag > peak) peak = mag;
-            }
-        }
-    }
-
-    static unsigned picks;
-    ++picks;
-    if (picks <= 20 || picks % 50u == 0)
-        fprintf(stderr, "[audio] wave buffer #%u accepted ptr@%#x data=%#llx bytes=%llu frames=%llu peak=%u nonzero=%u/%llu filled=%u\n",
-                picks, chosen, (unsigned long long)data, (unsigned long long)bytes,
-                (unsigned long long)(bytes / frame_bytes), peak, nonzero, (unsigned long long)look, filled);
-
-    v->mix_data = (const uint8_t *)(uintptr_t)data;
-    v->mix_bytes = bytes;
-    v->mix_pos = 0;
-    v->mix_samples = 0;
-    v->mix_wave_obj = wave_buffer;
-    /* A buffer handed to a voice is meant to play; leaving it parked until the
-     * title fills it is what stalled the stream, since the title never does. */
-    v->mix_wait_data = 0;
-    v->mix_wait_blocks = 0;
-    v->mix_playing = 1;
+/* v1.0.7 SDK CopyMemoryPoolData (0x225730) forwards dst/src/bytes to
+ * memcpy after checking the pool. Host audio pools use directly mapped PCM. */
+static void snk_audio_copy_pool_data(const void *pool, void *dst, const void *src,
+                                     size_t bytes) {
+    (void)pool;
+    if (bytes) memcpy(dst, src, bytes);
 }
 
 uint64_t snk_audio_v_append_wave(void *voice_obj, const void *wave_buffer) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) {
-        if (snk_audio_event(20))
-            fprintf(stderr, "[audio] AppendWaveBuffer unknown voice=%p wave=%p\n", voice_obj, wave_buffer);
+    if (!wave_buffer) return 0;
+    struct snk_audio_wave_buffer buffer;
+    memcpy(&buffer, wave_buffer, sizeof buffer);
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (!voice || voice->wave_write - voice->wave_read == SNK_AUDIO_WAVE_SLOTS) {
+        pthread_mutex_unlock(&s_audio_lock);
         return 0;
     }
-    snk_voice_take_wave(v, wave_buffer);
-    if (snk_audio_event(60))
-        fprintf(stderr, "[audio] AppendWaveBuffer key=%p wave=%p data=%p bytes=%llu playing=%d wait=%d\n",
-                voice_obj, wave_buffer, (const void *)v->mix_data,
-                (unsigned long long)v->mix_bytes, v->mix_playing, v->mix_wait_data);
-    return 0;
+    uint32_t channels = voice->mix_src_channels;
+    if (!buffer.data || !channels || buffer.start >= buffer.end ||
+        buffer.end > buffer.bytes / (sizeof(int16_t) * (uint64_t)channels)) {
+        pthread_mutex_unlock(&s_audio_lock);
+        return 0;
+    }
+    struct snk_audio_wave *wave = &voice->waves[voice->wave_write % SNK_AUDIO_WAVE_SLOTS];
+    *wave = (struct snk_audio_wave){.object = wave_buffer, .buffer = buffer};
+    if (voice->wave_play == voice->wave_write) voice->mix_position = buffer.start;
+    ++voice->wave_write;
+    if (voice->diagnostic_appends++ < 2u) {
+        uint64_t scan_frames = buffer.end - buffer.start;
+        if (scan_frames > 48000u) scan_frames = 48000u;
+        unsigned peak = 0;
+        for (uint64_t sample = 0; sample < scan_frames * channels; ++sample) {
+            int value = buffer.data[(uint64_t)buffer.start * channels + sample];
+            unsigned magnitude = (unsigned)(value < 0 ? -value : value);
+            if (magnitude > peak) peak = magnitude;
+        }
+        fprintf(stderr, "[audio-voice] append id=%u key=%p data=%p start=%u end=%u queued=%llu state=%u source_peak=%u scanned_frames=%llu\n",
+                voice->diagnostic_id, voice_obj, (const void *)buffer.data, buffer.start, buffer.end,
+                (unsigned long long)(voice->wave_write - voice->wave_play), voice->play_state,
+                peak, (unsigned long long)scan_frames);
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+    return 1;
 }
 
 int snk_audio_mixer_enabled(void) { return snk_mix_probe(); }
@@ -623,89 +484,155 @@ static uint64_t snk_audio_acquire_object(void *config, void **out, void *a, void
  * pays nothing. */
 static void *snk_audio_mixer_thread(void *unused) {
     (void)unused;
+    struct timespec deadline;
+    clock_gettime(CLOCK_MONOTONIC, &deadline);
     for (;;) {
         snk_audio_mixer_update();
         uint64_t period_ns = s_mix.rate ? (uint64_t)s_mix.frames * 1000000000ull / s_mix.rate : 16000000ull;
-        struct timespec ts = {(time_t)(period_ns / 1000000000ull), (long)(period_ns % 1000000000ull)};
-        nanosleep(&ts, NULL);
+        deadline.tv_nsec += (long)period_ns;
+        deadline.tv_sec += deadline.tv_nsec / 1000000000l;
+        deadline.tv_nsec %= 1000000000l;
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        int64_t wait_ns = (int64_t)(deadline.tv_sec - now.tv_sec) * 1000000000ll +
+                          deadline.tv_nsec - now.tv_nsec;
+        if (wait_ns > 0) {
+            struct timespec wait = {(time_t)(wait_ns / 1000000000ll), (long)(wait_ns % 1000000000ll)};
+            while (nanosleep(&wait, &wait) && errno == EINTR) {}
+        } else if (wait_ns < -(int64_t)(period_ns * SNK_MIX_RING)) {
+            deadline = now;
+        }
     }
     return NULL;
 }
+static int s_mix_thread_started;
 static void snk_audio_mixer_start_thread(void) {
-    static int started;
-    if (started) return;
-    started = 1;
-    pthread_t thread;
-    if (pthread_create(&thread, NULL, snk_audio_mixer_thread, NULL))
-        fprintf(stderr, "[audio] audren mixer thread could not start; staying silent\n");
-    else
-        fprintf(stderr, "[audio] audren mixer thread started\n");
+    pthread_mutex_lock(&s_audio_lock);
+    if (!s_mix_thread_started) {
+        pthread_t thread;
+        if (pthread_create(&thread, NULL, snk_audio_mixer_thread, NULL))
+            fprintf(stderr, "[audio] audren mixer thread could not start\n");
+        else {
+            s_mix_thread_started = 1;
+            pthread_detach(thread);
+            fprintf(stderr, "[audio] audren mixer thread started\n");
+        }
+    }
+    pthread_mutex_unlock(&s_audio_lock);
 }
 
 uint64_t snk_audio_v_play_state(void *voice_obj, uint32_t play_state) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (snk_audio_event(60))
-        fprintf(stderr, "[audio] PlayState key=%p known=%d state=%u data=%p bytes=%llu\n",
-                voice_obj, v != NULL, play_state,
-                v ? (const void *)v->mix_data : NULL,
-                (unsigned long long)(v ? v->mix_bytes : 0));
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
-    /* Only "stop" (0) is treated as stopped: the title was seen using both 1
-     * and 2 for a voice that is meant to be heard, and playing a paused voice
-     * is a smaller error than dropping a playing one. */
-    v->mix_playing = play_state != 0u;
-    if (play_state == 0u) { v->mix_pos = 0; v->mix_samples = 0; }
-    if (play_state != 0u) snk_audio_mixer_start_thread();
+    if (play_state > 2u) return 0;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) {
+        voice->play_state = play_state;
+        if (play_state == 1u) {
+            voice->mix_samples = 0;
+            voice->mix_position = 0;
+            voice->wave_play = voice->wave_write;
+        }
+        if (snk_audio_event(60))
+            fprintf(stderr, "[audio] PlayState key=%p state=%u queued=%llu\n", voice_obj, play_state,
+                    (unsigned long long)(voice->wave_write - voice->wave_play));
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+    if (voice && play_state == 0u) snk_audio_mixer_start_thread();
     return 0;
 }
 
 uint64_t snk_audio_v_flush(void *voice_obj) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (snk_audio_event(60))
-        fprintf(stderr, "[audio] FlushWaveBuffers key=%p known=%d data=%p bytes=%llu\n",
-                voice_obj, v != NULL, v ? (const void *)v->mix_data : NULL,
-                (unsigned long long)(v ? v->mix_bytes : 0));
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
-    /* Keeping an in-flight buffer here was tried and made things worse: the
-     * title then spins on InsufficientOpusBuffer instead of giving up, so the
-     * drain path is not what it is waiting for. Cleared, as before. */
-    v->mix_data = NULL;
-    v->mix_bytes = 0;
-    v->mix_pos = 0;
-    v->mix_samples = 0;
-    v->mix_wave_obj = NULL;
-    v->mix_wait_data = 0;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) {
+        /* Flushed entries remain owned until GetReleasedWaveBuffer returns
+         * them, just like processed entries in the SDK's four-slot queue. */
+        voice->wave_play = voice->wave_write;
+        voice->mix_position = 0;
+    }
+    pthread_mutex_unlock(&s_audio_lock);
     return 0;
+}
+
+static void snk_audio_release_voice(void *config, void *voice_obj) {
+    (void)config;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) memset(voice, 0, sizeof *voice);
+    pthread_mutex_unlock(&s_audio_lock);
 }
 
 uint64_t snk_audio_v_volume(void *voice_obj, float volume) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
     if (!(volume >= 0.0f && volume <= 8.0f)) return 0;
-    v->mix_volume = volume;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) voice->mix_volume = volume;
+    pthread_mutex_unlock(&s_audio_lock);
     return 0;
 }
 
+/* SDK 0x227170/0x227200 index a separate row for sourceChannel and a
+ * separate gain for destination mixBuffer. Off-diagonal zeros do not mute
+ * another channel's nonzero routing. The public float lives in v0. */
+static void snk_audio_v_mix_volume(void *voice_obj, const void *destination,
+                                   float gain, int source_channel, int mix_buffer) {
+    if (source_channel < 0 || source_channel >= (int)SNK_AUDIO_SOURCE_CHANNELS ||
+        mix_buffer < 0 || mix_buffer >= (int)SNK_AUDIO_MIX_BUFFERS ||
+        !(gain >= -8.0f && gain <= 8.0f)) return;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice && (unsigned)source_channel < voice->mix_src_channels) {
+        voice->mix_matrix_set = 1;
+        voice->mix_matrix[source_channel][mix_buffer] = gain;
+        uint32_t bit = UINT32_C(1) << mix_buffer;
+        int first = !(voice->diagnostic_matrix_seen[source_channel] & bit);
+        int first_nonzero = gain != 0.0f && !(voice->diagnostic_matrix_nonzero[source_channel] & bit);
+        if (first || first_nonzero)
+            fprintf(stderr, "[audio-voice] matrix id=%u key=%p destination=%p source=%d buffer=%d gain=%g\n",
+                    voice->diagnostic_id, voice_obj, destination, source_channel, mix_buffer, gain);
+        voice->diagnostic_matrix_seen[source_channel] |= bit;
+        if (gain != 0.0f) voice->diagnostic_matrix_nonzero[source_channel] |= bit;
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static uint64_t snk_audio_v_valid(const void *voice_obj) {
+    pthread_mutex_lock(&s_audio_lock);
+    int valid = snk_voice_find(voice_obj) != NULL;
+    pthread_mutex_unlock(&s_audio_lock);
+    return (uint64_t)valid;
+}
+
 uint64_t snk_audio_v_pitch(void *voice_obj, float pitch) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
     if (!(pitch > 0.0f && pitch <= 8.0f)) return 0;
-    v->mix_pitch = pitch;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) voice->mix_pitch = pitch;
+    pthread_mutex_unlock(&s_audio_lock);
     return 0;
 }
 
 uint64_t snk_audio_v_played(const void *voice_obj) {
-    const struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
-    return (uint64_t)(v->mix_samples < 0 ? 0 : v->mix_samples);
+    pthread_mutex_lock(&s_audio_lock);
+    const struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    uint64_t samples = voice ? (uint64_t)voice->mix_samples : 0;
+    pthread_mutex_unlock(&s_audio_lock);
+    return samples;
 }
 
 /* The graph helpers that only have to say "yes": the pointer they are handed is
  * already the object this module handed out. */
-uint64_t snk_audio_set_destination(void *config, void *voice, void *dest) {
-    static unsigned n;
-    if (n < 12) { ++n; fprintf(stderr, "[audio] SetVoiceDestination voice=%p dest=%p\n", voice, dest); }
+uint64_t snk_audio_set_destination(void *config, void *voice_obj, void *dest) {
     (void)config;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    if (voice) {
+        voice->mix_destination = dest;
+        if (voice->diagnostic_destinations++ < 4u)
+            fprintf(stderr, "[audio-voice] destination id=%u key=%p destination=%p\n",
+                    voice->diagnostic_id, voice_obj, dest);
+    }
+    pthread_mutex_unlock(&s_audio_lock);
     return 1;
 }
 
@@ -732,23 +659,648 @@ uint64_t snk_audio_result_ok(void *config, void **out, void *a, void *b) {
     return 0;
 }
 
-uint64_t snk_audio_v_wave_count(const void *voice_obj) {
-    const struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return 0;
-    return v->mix_data ? 1u : 0u;
+/* Graph diagnostics use the supplied SDK's public object addresses and ABI.
+ * Getters retain acquired metadata. PCM still uses the existing voice mixer. */
+#define SNK_GRAPH_TRACE_LIMIT 4096u
+#define SNK_GRAPH_TRACE_ROUTES 1024u
+#define SNK_GRAPH_TRACE_PARAMETERS 32u
+struct snk_audio_splitter_branch {
+    const void *destination;
+    float matrix[SNK_AUDIO_MIX_BUFFERS][SNK_AUDIO_MIX_BUFFERS];
+};
+struct snk_graph_trace_node {
+    const void *key;
+    const char *kind;
+    const void *destination;
+    unsigned id;
+    uint64_t acquired_order;
+    int sample_rate;
+    int buffers;
+    int branches;
+    int enabled;
+    float volume;
+    unsigned volume_logs;
+    unsigned destination_logs;
+    unsigned enabled_logs;
+    unsigned io_logs;
+    int io_count;
+    int8_t inputs[6], outputs[6];
+    float matrix[SNK_AUDIO_MIX_BUFFERS][SNK_AUDIO_MIX_BUFFERS];
+    struct snk_audio_splitter_branch *splitter_branches;
+    float *mix_pcm;
+    size_t mix_capacity;
+    struct ffrs_sdk_compressor_parameter compressor_parameter;
+    struct ffrs_sdk_compressor_state compressor_state;
+    int compressor_initialized;
+    unsigned compressor_blocks;
+    int compressor_nonzero;
+    unsigned compressor_input_peak, compressor_output_peak;
+    uint32_t parameters_set;
+    double parameters[SNK_GRAPH_TRACE_PARAMETERS];
+    unsigned parameter_logs[SNK_GRAPH_TRACE_PARAMETERS];
+    uint32_t matrix_seen[SNK_AUDIO_MIX_BUFFERS];
+    uint32_t matrix_nonzero[SNK_AUDIO_MIX_BUFFERS];
+};
+struct snk_graph_trace_route {
+    const void *source;
+    const void *destination;
+    int branch;
+    int source_buffer;
+    int destination_buffer;
+    float gain;
+    unsigned logs;
+};
+static struct snk_graph_trace_node s_graph_trace[SNK_AUDIO_OBJECT_SLOTS];
+static struct snk_graph_trace_route s_graph_trace_routes[SNK_GRAPH_TRACE_ROUTES];
+static unsigned s_graph_trace_nodes, s_graph_trace_lines;
+static unsigned s_graph_trace_route_count, s_graph_trace_snapshots;
+static uint64_t s_graph_acquired_order, s_graph_generation;
+static unsigned s_graph_device_volume_logs, s_graph_audio_out_volume_logs;
+static float s_graph_device_volume, s_graph_audio_out_volume;
+static const void *s_graph_audio_out_key;
+static char s_graph_device_name[65];
+
+enum snk_graph_parameter {
+    SNK_GRAPH_THRESHOLD, SNK_GRAPH_RATIO, SNK_GRAPH_ATTACK_NS, SNK_GRAPH_RELEASE_NS,
+    SNK_GRAPH_OUT_GAIN, SNK_GRAPH_PARAMETER_FLAG, SNK_GRAPH_DRY_GAIN,
+    SNK_GRAPH_IN_GAIN, SNK_GRAPH_FEEDBACK_GAIN, SNK_GRAPH_DELAY_NS,
+    SNK_GRAPH_ROOM_GAIN, SNK_GRAPH_ROOM_HF_GAIN, SNK_GRAPH_HF_REFERENCE,
+    SNK_GRAPH_DECAY_NS, SNK_GRAPH_DECAY_HF_RATIO, SNK_GRAPH_REFLECTIONS_GAIN,
+    SNK_GRAPH_REFLECTION_NS, SNK_GRAPH_REVERB_GAIN, SNK_GRAPH_REVERB_NS,
+    SNK_GRAPH_DIFFUSION, SNK_GRAPH_DENSITY,
+    SNK_GRAPH_B0, SNK_GRAPH_B1, SNK_GRAPH_B2, SNK_GRAPH_A1, SNK_GRAPH_A2
+};
+static const char *const s_graph_parameter_names[] = {
+    "threshold", "ratio", "attack_ns", "release_ns", "out_gain", "parameter_flag",
+    "dry_gain", "in_gain", "feedback_gain", "delay_ns", "room_gain", "room_hf_gain",
+    "hf_reference", "decay_ns", "decay_hf_ratio", "reflections_gain", "reflection_ns",
+    "reverb_gain", "reverb_ns", "diffusion", "density", "b0", "b1", "b2", "a1", "a2"
+};
+
+/* Caller holds s_audio_lock. */
+static struct snk_graph_trace_node *snk_graph_trace_find(const void *key) {
+    if (!key) return NULL;
+    for (unsigned i = 0; i < s_graph_trace_nodes; ++i)
+        if (s_graph_trace[i].key == key) return &s_graph_trace[i];
+    return NULL;
 }
 
-/* A finished wave buffer goes back to the title so a streaming voice can reuse
- * it. Only a buffer the mixer has played to its end is returned, once. */
+/* A branch of -1 describes a direct SubMix edge. Buffer indices of -1
+ * describe the branch destination, independently of its channel gains. */
+static struct snk_graph_trace_route *snk_graph_trace_route(const void *source,
+        int branch, int source_buffer, int destination_buffer) {
+    if (!source) return NULL;
+    for (unsigned i = 0; i < s_graph_trace_route_count; ++i) {
+        struct snk_graph_trace_route *route = &s_graph_trace_routes[i];
+        if (route->source == source && route->branch == branch &&
+            route->source_buffer == source_buffer && route->destination_buffer == destination_buffer)
+            return route;
+    }
+    if (s_graph_trace_route_count == SNK_GRAPH_TRACE_ROUTES) return NULL;
+    struct snk_graph_trace_route *route = &s_graph_trace_routes[s_graph_trace_route_count++];
+    route->source = source;
+    route->branch = branch;
+    route->source_buffer = source_buffer;
+    route->destination_buffer = destination_buffer;
+    return route;
+}
+
+/* Matrix setters ignore their destination wrapper in the original SDK.
+ * Resolve the current destination from the corresponding destination setter. */
+static const void *snk_graph_trace_route_destination(const struct snk_graph_trace_route *route) {
+    if (route->branch < 0) {
+        const struct snk_graph_trace_node *node = snk_graph_trace_find(route->source);
+        return node ? node->destination : NULL;
+    }
+    for (unsigned i = 0; i < s_graph_trace_route_count; ++i) {
+        const struct snk_graph_trace_route *destination = &s_graph_trace_routes[i];
+        if (destination->source == route->source && destination->branch == route->branch &&
+            destination->source_buffer == -1 && destination->destination_buffer == -1)
+            return destination->destination;
+    }
+    return NULL;
+}
+
+static int snk_graph_trace_line(void) {
+    if (s_graph_trace_lines >= SNK_GRAPH_TRACE_LIMIT) return 0;
+    ++s_graph_trace_lines;
+    if (s_graph_trace_lines == SNK_GRAPH_TRACE_LIMIT)
+        fprintf(stderr, "[audio-graph] trace limit reached lines=%u\n", s_graph_trace_lines);
+    return 1;
+}
+
+static void snk_graph_trace_acquired(const char *kind, const void *key, int rate, int buffers) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (!node) {
+        for (unsigned i = 0; i < s_graph_trace_nodes; ++i)
+            if (!s_graph_trace[i].key) { node = &s_graph_trace[i]; break; }
+    }
+    if (!node && s_graph_trace_nodes < SNK_AUDIO_OBJECT_SLOTS)
+        node = &s_graph_trace[s_graph_trace_nodes++];
+    if (node) {
+        unsigned id = (unsigned)(node - s_graph_trace) + 1u;
+        free(node->mix_pcm);
+        free(node->splitter_branches);
+        memset(node, 0, sizeof *node);
+        node->key = key; node->kind = kind; node->id = id; node->buffers = buffers;
+        node->sample_rate = rate;
+        node->acquired_order = ++s_graph_acquired_order;
+        ++s_graph_generation;
+        node->volume = 1.0f;
+        node->enabled = -1;
+        for (unsigned i = 0; i < s_graph_trace_route_count; ++i)
+            if (s_graph_trace_routes[i].source == key) {
+                s_graph_trace_routes[i].destination = NULL;
+                s_graph_trace_routes[i].gain = 0.0f;
+                s_graph_trace_routes[i].logs = 0;
+            }
+        if (snk_graph_trace_line())
+            fprintf(stderr, "[audio-graph] acquire kind=%s id=%u key=%p rate=%d buffers=%d\n",
+                    kind, id, key, rate, buffers);
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static uint64_t snk_audio_trace_submix_acquire(void *config, void *out, int rate, int buffers) {
+    uint64_t result = snk_audio_acquire_object(config, out, NULL, NULL);
+    if (result) snk_graph_trace_acquired("submix", out, rate, buffers);
+    return result;
+}
+
+static uint64_t snk_audio_trace_finalmix_acquire(void *config, void *out, int buffers) {
+    uint64_t result = snk_audio_acquire_object(config, out, NULL, NULL);
+    if (result) snk_graph_trace_acquired("finalmix", out, 0, buffers);
+    return result;
+}
+
+/* SDK GetSubMixBufferCount/ GetFinalMixBufferCount read the Acquire count
+ * at internal object +8. The public wrapper address remains the lookup key. */
+static uint64_t snk_audio_mix_buffer_count(const void *key) {
+    pthread_mutex_lock(&s_audio_lock);
+    const struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    uint64_t buffers = node ? (uint32_t)node->buffers : 0;
+    pthread_mutex_unlock(&s_audio_lock);
+    return buffers;
+}
+
+static void snk_audio_trace_mix_release(void *config, void *key) {
+    (void)config;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (node) {
+        if (snk_graph_trace_line())
+            fprintf(stderr, "[audio-graph] release kind=%s id=%u key=%p\n", node->kind, node->id, key);
+        node->key = NULL;
+        node->buffers = 0;
+        free(node->mix_pcm);
+        node->mix_pcm = NULL;
+        node->mix_capacity = 0;
+        free(node->splitter_branches);
+        node->splitter_branches = NULL;
+        ++s_graph_generation;
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_mix_volume(void *key, float volume) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (node) node->volume = volume;
+    if ((!node || node->volume_logs++ < 8u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] volume kind=%s id=%u key=%p gain=%g\n",
+                node ? node->kind : "unknown", node ? node->id : 0, key, volume);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_mix_destination(void *config, void *source, void *destination) {
+    (void)config;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *from = snk_graph_trace_find(source);
+    struct snk_graph_trace_node *to = snk_graph_trace_find(destination);
+    if (from) {
+        from->destination = destination;
+        ++s_graph_generation;
+    }
+    if ((!from || from->destination_logs++ < 4u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] destination source=%p source_kind=%s source_id=%u destination=%p destination_kind=%s destination_id=%u\n",
+                source, from ? from->kind : "unknown", from ? from->id : 0,
+                destination, to ? to->kind : "unknown", to ? to->id : 0);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_mix_clear(void *config, void *source) {
+    snk_audio_trace_mix_destination(config, source, NULL);
+}
+
+static void snk_audio_trace_mix_matrix(void *source, void *destination, float gain,
+                                      int source_buffer, int destination_buffer) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *from = snk_graph_trace_find(source);
+    struct snk_graph_trace_route *route = snk_graph_trace_route(source, -1, source_buffer, destination_buffer);
+    if (route) { route->destination = destination; route->gain = gain; }
+    int log = 1;
+    if (from && source_buffer >= 0 && source_buffer < (int)SNK_AUDIO_MIX_BUFFERS &&
+        destination_buffer >= 0 && destination_buffer < (int)SNK_AUDIO_MIX_BUFFERS) {
+        from->matrix[source_buffer][destination_buffer] = gain;
+        uint32_t bit = UINT32_C(1) << destination_buffer;
+        log = !(from->matrix_seen[source_buffer] & bit) ||
+              (gain != 0.0f && !(from->matrix_nonzero[source_buffer] & bit));
+        from->matrix_seen[source_buffer] |= bit;
+        if (gain != 0.0f) from->matrix_nonzero[source_buffer] |= bit;
+    }
+    if (log && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] matrix key=%p kind=%s id=%u destination=%p source=%d buffer=%d gain=%g\n",
+                source, from ? from->kind : "unknown", from ? from->id : 0,
+                destination, source_buffer, destination_buffer, gain);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static uint64_t snk_audio_trace_sink(void *config, void *out, void *finalmix,
+                                    const int8_t *channels, int count, const char *name) {
+    uint64_t result = snk_audio_result_ok(config, out, NULL, NULL);
+    if (!result && out) snk_graph_trace_acquired("device-sink", out, 0, count);
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(out);
+    if (node) {
+        node->destination = finalmix;
+        node->io_count = channels && count > 0 ? (count > 6 ? 6 : count) : 0;
+        for (int i = 0; i < node->io_count; ++i) {
+            node->inputs[i] = channels[i];
+            node->outputs[i] = (int8_t)i;
+        }
+        ++s_graph_generation;
+    }
+    if (snk_graph_trace_line()) {
+        fprintf(stderr, "[audio-graph] device-sink key=%p finalmix=%p count=%d device=%.*s inputs=",
+                out, finalmix, count, 64, name ? name : "(null)");
+        for (int i = 0; channels && i < count && i < 6; ++i)
+            fprintf(stderr, "%s%d", i ? "," : "", channels[i]);
+        fprintf(stderr, " result=%llu\n", (unsigned long long)result);
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+    return result;
+}
+
+static uint64_t snk_audio_trace_sink_remove(void *config, void *sink, void *finalmix) {
+    (void)finalmix;
+    snk_audio_trace_mix_release(config, sink);
+    return 0;
+}
+
+/* Preserve the existing output-volume stub result while capturing the
+ * requested scalars. The transport still receives the same PCM bytes. */
+static uint64_t snk_audio_trace_audio_out_volume(void *key, float gain) {
+    pthread_mutex_lock(&s_audio_lock);
+    s_graph_audio_out_key = key;
+    s_graph_audio_out_volume = gain;
+    if (s_graph_audio_out_volume_logs++ < 32u && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] output-volume api=AudioOut key=%p gain=%g\n", key, gain);
+    pthread_mutex_unlock(&s_audio_lock);
+    return 0;
+}
+
+static uint64_t snk_audio_trace_device_volume(const void *name, float gain) {
+    pthread_mutex_lock(&s_audio_lock);
+    snprintf(s_graph_device_name, sizeof s_graph_device_name, "%.*s", 64,
+             name ? (const char *)name : "(null)");
+    s_graph_device_volume = gain;
+    if (s_graph_device_volume_logs++ < 32u && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] output-volume api=AudioDevice name=%s gain=%g\n",
+                s_graph_device_name, gain);
+    pthread_mutex_unlock(&s_audio_lock);
+    return 0;
+}
+
+/* SDK 0x225b30 passes rate, channel count and destination count to
+ * SplitterInfoManager. A branch has its own destination and channel matrix. */
+static uint64_t snk_audio_trace_splitter_acquire(void *config, void *out,
+                                               int rate, int channels, int branches) {
+    uint64_t result = snk_audio_acquire_object(config, out, NULL, NULL);
+    if (!result) return result;
+    snk_graph_trace_acquired("splitter", out, rate, channels);
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(out);
+    if (node) {
+        node->branches = branches;
+        if (branches > 0 && (size_t)branches <= SIZE_MAX / sizeof *node->splitter_branches)
+            node->splitter_branches = calloc((size_t)branches, sizeof *node->splitter_branches);
+    }
+    if (snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] splitter key=%p rate=%d channels=%d branches=%d\n",
+                out, rate, channels, branches);
+    pthread_mutex_unlock(&s_audio_lock);
+    return result;
+}
+
+static void snk_audio_trace_splitter_destination(void *config, void *source,
+                                                int branch, void *destination) {
+    (void)config;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_route *route = snk_graph_trace_route(source, branch, -1, -1);
+    if (route) route->destination = destination;
+    struct snk_graph_trace_node *node = snk_graph_trace_find(source);
+    if (node && node->splitter_branches && branch >= 0 && branch < node->branches) {
+        node->splitter_branches[branch].destination = destination;
+        ++s_graph_generation;
+    }
+    if ((!route || route->logs++ < 8u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] splitter-destination key=%p branch=%d destination=%p\n",
+                source, branch, destination);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_splitter_clear(void *config, void *source, int branch) {
+    snk_audio_trace_splitter_destination(config, source, branch, NULL);
+}
+
+/* SDK 0x225dc0/0x225e50 uses x0, w1, s0, w3, w4. The destination
+ * wrapper in x2 identifies the API overload, while w1 selects the branch. */
+static void snk_audio_trace_splitter_matrix(void *source, int branch, void *destination,
+                                           float gain, int source_buffer, int destination_buffer) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_route *route = snk_graph_trace_route(source, branch, source_buffer, destination_buffer);
+    if (route) { route->destination = destination; route->gain = gain; }
+    struct snk_graph_trace_node *node = snk_graph_trace_find(source);
+    if (node && node->splitter_branches && branch >= 0 && branch < node->branches &&
+        source_buffer >= 0 && source_buffer < (int)SNK_AUDIO_MIX_BUFFERS &&
+        destination_buffer >= 0 && destination_buffer < (int)SNK_AUDIO_MIX_BUFFERS)
+        node->splitter_branches[branch].matrix[source_buffer][destination_buffer] = gain;
+    if ((!route || route->logs++ < 4u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] splitter-matrix key=%p branch=%d destination=%p source=%d buffer=%d gain=%g\n",
+                source, branch, destination, source_buffer, destination_buffer, gain);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_graph_trace_effect_added(const char *kind, void *key, void *mix, int channels) {
+    snk_graph_trace_acquired(kind, key, 0, channels);
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (node) {
+        node->destination = mix;
+        /* SDK AddCompressor 0x2214ec, AddBiquadFilter 0x220044,
+         * AddDelay 0x222220 and AddI3dl2Reverb 0x222e00 start enabled.
+         * IsCompressorEnabled 0x221b50 reads this flag. */
+        node->enabled = 1;
+        if (!strcmp(kind, "compressor")) node->io_count = channels > 6 ? 6 : (channels > 0 ? channels : 0);
+    }
+    if (snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] effect key=%p kind=%s mix=%p channels=%d\n", key, kind, mix, channels);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static uint64_t snk_audio_trace_compressor_add(void *config, void *out, void *mix, int channels) {
+    uint64_t result = snk_audio_result_ok(config, out, NULL, NULL);
+    if (!result && out) snk_graph_trace_effect_added("compressor", out, mix, channels);
+    return result;
+}
+
+static uint64_t snk_audio_trace_biquad_add(void *config, void *out, void *mix) {
+    uint64_t result = snk_audio_result_ok(config, out, NULL, NULL);
+    if (!result && out) snk_graph_trace_effect_added("biquad", out, mix, 0);
+    return result;
+}
+
+static uint64_t snk_audio_trace_reverb_add(void *config, void *out, void *work,
+                                         size_t bytes, void *mix, int channels) {
+    (void)work; (void)bytes;
+    uint64_t result = snk_audio_result_ok(config, out, NULL, NULL);
+    if (!result && out) snk_graph_trace_effect_added("i3dl2-reverb", out, mix, channels);
+    return result;
+}
+
+static uint64_t snk_audio_trace_delay_add(void *config, void *out, void *work,
+        size_t bytes, void *mix, int64_t maximum_delay_ns, int channels) {
+    (void)work; (void)bytes; (void)maximum_delay_ns;
+    uint64_t result = snk_audio_result_ok(config, out, NULL, NULL);
+    if (!result && out) snk_graph_trace_effect_added("delay", out, mix, channels);
+    return result;
+}
+
+static uint64_t snk_audio_trace_effect_remove(void *config, void *key, void *mix) {
+    (void)mix;
+    snk_audio_trace_mix_release(config, key);
+    return 0;
+}
+
+static void snk_audio_trace_effect_enabled(void *key, bool enabled) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (node) node->enabled = enabled;
+    if ((!node || node->enabled_logs++ < 8u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] enabled key=%p kind=%s value=%d\n",
+                key, node ? node->kind : "unknown", enabled);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static uint64_t snk_audio_trace_compressor_enabled(const void *key) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    uint64_t enabled = node && node->enabled == 1;
+    pthread_mutex_unlock(&s_audio_lock);
+    return enabled;
+}
+
+static void snk_audio_trace_effect_io(void *key, const int8_t *inputs, const int8_t *outputs, int count) {
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    int copied = count > 6 ? 6 : count;
+    if (copied < 0 || !inputs || !outputs) copied = 0;
+    if (node) {
+        node->io_count = copied;
+        if (copied) {
+            memcpy(node->inputs, inputs, (size_t)copied);
+            memcpy(node->outputs, outputs, (size_t)copied);
+        }
+    }
+    if ((!node || node->io_logs++ < 8u) && snk_graph_trace_line()) {
+        fprintf(stderr, "[audio-graph] effect-io key=%p kind=%s count=%d routes=", key,
+                node ? node->kind : "unknown", count);
+        for (int i = 0; i < copied; ++i)
+            fprintf(stderr, "%s%d>%d", i ? "," : "", inputs[i], outputs[i]);
+        fputc('\n', stderr);
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_parameter(void *key, unsigned parameter, double value) {
+    if (parameter >= sizeof s_graph_parameter_names / sizeof s_graph_parameter_names[0]) return;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_graph_trace_node *node = snk_graph_trace_find(key);
+    if (node) {
+        node->parameters[parameter] = value;
+        node->parameters_set |= UINT32_C(1) << parameter;
+    }
+    if ((!node || node->parameter_logs[parameter]++ < 4u) && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] parameter key=%p kind=%s name=%s value=%.9g\n",
+                key, node ? node->kind : "unknown", s_graph_parameter_names[parameter], value);
+    pthread_mutex_unlock(&s_audio_lock);
+}
+
+static void snk_audio_trace_threshold(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_THRESHOLD, value);
+}
+static void snk_audio_trace_ratio(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_RATIO, value);
+}
+static void snk_audio_trace_attack(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_ATTACK_NS, (double)value);
+}
+static void snk_audio_trace_release(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_RELEASE_NS, (double)value);
+}
+static void snk_audio_trace_out_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_OUT_GAIN, value);
+}
+static void snk_audio_trace_dry_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DRY_GAIN, value);
+}
+static void snk_audio_trace_in_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_IN_GAIN, value);
+}
+static void snk_audio_trace_feedback_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_FEEDBACK_GAIN, value);
+}
+static void snk_audio_trace_delay_time(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DELAY_NS, (double)value);
+}
+static void snk_audio_trace_room_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_ROOM_GAIN, value);
+}
+static void snk_audio_trace_room_hf_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_ROOM_HF_GAIN, value);
+}
+static void snk_audio_trace_hf_reference(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_HF_REFERENCE, value);
+}
+static void snk_audio_trace_decay_time(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DECAY_NS, (double)value);
+}
+static void snk_audio_trace_decay_hf_ratio(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DECAY_HF_RATIO, value);
+}
+static void snk_audio_trace_reflections_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_REFLECTIONS_GAIN, value);
+}
+static void snk_audio_trace_reflection_time(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_REFLECTION_NS, (double)value);
+}
+static void snk_audio_trace_reverb_gain(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_REVERB_GAIN, value);
+}
+static void snk_audio_trace_reverb_time(void *key, int64_t value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_REVERB_NS, (double)value);
+}
+static void snk_audio_trace_diffusion(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DIFFUSION, value);
+}
+static void snk_audio_trace_density(void *key, float value) {
+    snk_audio_trace_parameter(key, SNK_GRAPH_DENSITY, value);
+}
+
+/* SDK 0x221c80 reads floats at 0/4/24, TimeSpan at 8/16, and a flag at 28. */
+static void snk_audio_trace_compressor_parameters(void *key, const void *parameters) {
+    if (!parameters) return;
+    const unsigned char *bytes = parameters;
+    float threshold, ratio, gain;
+    int64_t attack, release;
+    memcpy(&threshold, bytes, sizeof threshold);
+    memcpy(&ratio, bytes + 4, sizeof ratio);
+    memcpy(&attack, bytes + 8, sizeof attack);
+    memcpy(&release, bytes + 16, sizeof release);
+    memcpy(&gain, bytes + 24, sizeof gain);
+    snk_audio_trace_threshold(key, threshold);
+    snk_audio_trace_ratio(key, ratio);
+    snk_audio_trace_attack(key, attack);
+    snk_audio_trace_release(key, release);
+    snk_audio_trace_out_gain(key, gain);
+    snk_audio_trace_parameter(key, SNK_GRAPH_PARAMETER_FLAG, bytes[28]);
+}
+
+/* SDK 0x220420 converts the five signed Q14 coefficients at +2..+10. */
+static void snk_audio_trace_biquad_parameters(void *key, const void *parameters) {
+    if (!parameters) return;
+    const unsigned char *bytes = parameters;
+    snk_audio_trace_effect_enabled(key, (bytes[0] & 1u) != 0);
+    for (unsigned i = 0; i < 5; ++i) {
+        int16_t coefficient;
+        memcpy(&coefficient, bytes + 2 + i * 2, sizeof coefficient);
+        snk_audio_trace_parameter(key, SNK_GRAPH_B0 + i, coefficient / 16384.0);
+    }
+}
+
+/* Caller holds s_audio_lock. Current values keep updating after their initial
+ * per-coordinate logs stop. At most sixteen snapshots are emitted. */
+static void snk_graph_trace_snapshot(void) {
+    if (s_graph_trace_snapshots >= 16u || s_graph_trace_lines >= SNK_GRAPH_TRACE_LIMIT) return;
+    ++s_graph_trace_snapshots;
+    if (snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] snapshot number=%u update=%llu\n",
+                s_graph_trace_snapshots, (unsigned long long)s_mix.updates);
+    if (s_graph_device_volume_logs && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] current-output-volume api=AudioDevice name=%s gain=%g\n",
+                s_graph_device_name, s_graph_device_volume);
+    if (s_graph_audio_out_volume_logs && snk_graph_trace_line())
+        fprintf(stderr, "[audio-graph] current-output-volume api=AudioOut key=%p gain=%g\n",
+                s_graph_audio_out_key, s_graph_audio_out_volume);
+    for (unsigned i = 0; i < s_graph_trace_nodes; ++i) {
+        const struct snk_graph_trace_node *node = &s_graph_trace[i];
+        if (!node->key || !snk_graph_trace_line()) continue;
+        fprintf(stderr, "[audio-graph] current key=%p kind=%s buffers=%d branches=%d destination=%p volume=%g enabled=%d parameters=",
+                node->key, node->kind, node->buffers, node->branches, node->destination, node->volume, node->enabled);
+        for (unsigned p = 0; p < sizeof s_graph_parameter_names / sizeof s_graph_parameter_names[0]; ++p)
+            if (node->parameters_set & (UINT32_C(1) << p))
+                fprintf(stderr, "%s=%.9g,", s_graph_parameter_names[p], node->parameters[p]);
+        fprintf(stderr, " io=");
+        for (int c = 0; c < node->io_count; ++c)
+            fprintf(stderr, "%d>%d,", node->inputs[c], node->outputs[c]);
+        fputc('\n', stderr);
+    }
+    for (unsigned i = 0; i < s_graph_trace_route_count; ++i) {
+        const struct snk_graph_trace_route *route = &s_graph_trace_routes[i];
+        const void *destination = snk_graph_trace_route_destination(route);
+        if (!snk_graph_trace_find(route->source) ||
+            (route->source_buffer >= 0 && !destination) ||
+            (route->source_buffer >= 0 && route->gain == 0.0f) || !snk_graph_trace_line()) continue;
+        fprintf(stderr, "[audio-graph] current-route key=%p branch=%d destination=%p source=%d buffer=%d gain=%g\n",
+                route->source, route->branch, destination,
+                route->source_buffer, route->destination_buffer, route->gain);
+    }
+    for (unsigned i = 0; i < SNK_AUDIO_VOICE_SLOT_COUNT; ++i) {
+        const struct snk_audio_voice *voice = &s_audio_voices[i];
+        if (voice->magic != SNK_AUDIO_VOICE_MAGIC || voice->play_state != 0u ||
+            voice->wave_play == voice->wave_write || !snk_graph_trace_line()) continue;
+        fprintf(stderr, "[audio-graph] current-voice id=%u key=%p destination=%p channels=%u volume=%g routes=",
+                voice->diagnostic_id, voice->key, voice->mix_destination,
+                voice->mix_src_channels, voice->mix_volume);
+        for (unsigned source = 0; source < voice->mix_src_channels; ++source)
+            for (unsigned buffer = 0; buffer < SNK_AUDIO_MIX_BUFFERS; ++buffer)
+                if (voice->mix_matrix[source][buffer] != 0.0f)
+                    fprintf(stderr, "%u>%u:%g,", source, buffer, voice->mix_matrix[source][buffer]);
+        fputc('\n', stderr);
+    }
+}
+
+uint64_t snk_audio_v_wave_count(const void *voice_obj) {
+    pthread_mutex_lock(&s_audio_lock);
+    const struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    uint64_t pending = voice ? voice->wave_write - voice->wave_play : 0;
+    pthread_mutex_unlock(&s_audio_lock);
+    return pending;
+}
+
 void *snk_audio_v_released(void *voice_obj) {
-    struct snk_audio_voice *v = snk_voice_find(voice_obj);
-    if (!v || v->magic != SNK_AUDIO_VOICE_MAGIC) return NULL;
-    if (!v->mix_wave_obj || v->mix_data) return NULL;
-    void *wave = (void *)v->mix_wave_obj;
-    v->mix_wave_obj = NULL;
-    if (snk_audio_event(60))
-        fprintf(stderr, "[audio] Released key=%p -> wave=%p\n", voice_obj, wave);
-    return wave;
+    pthread_mutex_lock(&s_audio_lock);
+    struct snk_audio_voice *voice = snk_voice_find(voice_obj);
+    void *object = NULL;
+    if (voice && voice->wave_read < voice->wave_play) {
+        struct snk_audio_wave *wave = &voice->waves[voice->wave_read % SNK_AUDIO_WAVE_SLOTS];
+        object = (void *)wave->object;
+        memset(wave, 0, sizeof *wave);
+        ++voice->wave_read;
+    }
+    pthread_mutex_unlock(&s_audio_lock);
+    return object;
 }
 
 static int snk_mix_probe(void) {
@@ -757,7 +1309,7 @@ static int snk_mix_probe(void) {
     char path[PATH_MAX];
     int n = dir ? snprintf(path, sizeof path, "%s/snk-audio-mix", dir) : -1;
     FILE *f = (n > 0 && (size_t)n < sizeof path) ? fopen(path, "rb") : NULL;
-    s_mix.state = f ? 1 : -1;
+    s_mix.state = f && fgetc(f) == '0' ? -1 : 1;
     if (f) fclose(f);
     fprintf(stderr, "[audio] audren mixer=%d (marker snk-audio-mix)%s\n", s_mix.state > 0,
             s_mix.state > 0 ? "" : "; voice calls remain no-ops");
@@ -815,129 +1367,102 @@ void snk_audio_mixer_update(void) {
     if (!s_mix.opened && !snk_mix_open_output()) return;
     if (!s_mix.pcm) return;
     const uint32_t frames = s_mix.frames, channels = s_mix.channels;
+    if (s_mix.pending_output) {
+        int pending = s_mix.pending_slot;
+        if (s_mix_append(s_mix.key, &s_mix_buffers[pending])) {
+            s_mix_buffer_used[pending] = 1;
+            s_mix.pending_output = 0;
+            ++s_mix.updates;
+        }
+        return;
+    }
+    int slot = -1;
+    for (int i = 0; i < SNK_MIX_RING; ++i) if (!s_mix_buffer_used[i]) { slot = i; break; }
+    if (slot < 0 && s_mix_released) {
+        void *back = s_mix_released(s_mix.key);
+        if (back) for (int i = 0; i < SNK_MIX_RING; ++i)
+            if (&s_mix_buffers[i] == back) { s_mix_buffer_used[i] = 0; slot = i; break; }
+    }
+    if (slot < 0) return;
     memset(s_mix.pcm, 0, (size_t)frames * channels * sizeof(float));
     unsigned audible = 0;
     pthread_mutex_lock(&s_audio_lock);
     for (size_t i = 0; i < SNK_AUDIO_VOICE_SLOT_COUNT; ++i) {
-        struct snk_audio_voice *v = &s_audio_voices[i];
-        if (v->magic != SNK_AUDIO_VOICE_MAGIC || !v->mix_data) {
-            if (v->magic == SNK_AUDIO_VOICE_MAGIC && v->mix_bytes) {
-                static unsigned why_logs;
-                if (why_logs++ < 4)
-                    fprintf(stderr, "[mix] voice has bytes=%llu but mix_data is null\n",
-                            (unsigned long long)v->mix_bytes);
-            }
+        struct snk_audio_voice *voice = &s_audio_voices[i];
+        if (voice->magic != SNK_AUDIO_VOICE_MAGIC || voice->play_state != 0u ||
+            voice->wave_play == voice->wave_write) continue;
+        if (voice->sample_format != 2u) {
+            static unsigned format_logs;
+            if (format_logs++ < 4)
+                fprintf(stderr, "[audio] unsupported voice format=%u\n", voice->sample_format);
             continue;
         }
-        if (v->mix_wait_data) {
-            const int16_t *pcm = (const int16_t *)v->mix_data;
-            uint64_t look = v->mix_bytes / 2 < 512 ? v->mix_bytes / 2 : 512;
-            unsigned peak = 0;
-            for (uint64_t i = 0; i < look; ++i) { int x = pcm[i]; unsigned m = (unsigned)(x < 0 ? -x : x); if (m > peak) peak = m; }
-            ++v->mix_wait_blocks;
-            if (peak) {
-                v->mix_wait_data = 0; v->mix_playing = 1;
-                fprintf(stderr, "[audio] voice data appeared after %u updates peak=%u\n", v->mix_wait_blocks, peak);
-            } else if (v->mix_wait_blocks == 600) {
-                fprintf(stderr, "[audio] voice still silent after 10 s at data=%p bytes=%llu; source never filled it\n",
-                        (const void *)v->mix_data, (unsigned long long)v->mix_bytes);
+        uint32_t source_channels = voice->mix_src_channels;
+        double step = (double)voice->mix_pitch * voice->mix_rate / s_mix.rate;
+        unsigned voice_source_peak = 0, voice_mixed_peak = 0, voice_frames = 0;
+        for (uint32_t frame = 0; frame < frames && voice->wave_play < voice->wave_write; ++frame) {
+            struct snk_audio_wave *wave = &voice->waves[voice->wave_play % SNK_AUDIO_WAVE_SLOTS];
+            uint64_t index = (uint64_t)voice->mix_position;
+            ++voice_frames;
+            for (uint32_t channel = 0; channel < channels; ++channel) {
+                float sample = 0.0f;
+                for (uint32_t source_channel = 0; source_channel < source_channels; ++source_channel) {
+                    int16_t raw = wave->buffer.data[index * source_channels + source_channel];
+                    unsigned magnitude = (unsigned)(raw < 0 ? -raw : raw);
+                    if (magnitude > voice_source_peak) voice_source_peak = magnitude;
+                    float gain = voice->mix_matrix_set ? voice->mix_matrix[source_channel][channel] :
+                                 (source_channels == 1u || source_channel == channel ? 1.0f : 0.0f);
+                    sample += raw * (1.0f / 32768.0f) * gain;
+                }
+                sample *= voice->mix_volume;
+                unsigned magnitude = (unsigned)((sample < 0.0f ? -sample : sample) * 32768.0f);
+                if (magnitude > voice_mixed_peak) voice_mixed_peak = magnitude;
+                s_mix.pcm[frame * channels + channel] += sample;
             }
-            if (v->mix_wait_data) continue;
-        }
-        if (!v->mix_playing && !v->mix_data) continue;
-        /* The played-sample clock advances at the output rate even when the
-         * voice has no buffer in hand. The title's streaming thread waits on
-         * this counter before decoding the next packet, so a clock that only
-         * moves while data is present stops the stream dead -- measured: two
-         * packets decoded, then nothing for the rest of the session. */
-        if (v->mix_playing) v->mix_samples += frames;
-        if (!v->mix_data) continue;
-        /* Only PCM16 is mixed. Anything else is reported once instead of being
-         * played as noise: the format enum is the title's, not a guess. */
-        if (v->sample_format != 2u) {
-            static unsigned fmt_logs;
-            if (fmt_logs++ < 4)
-                fprintf(stderr, "[audio] voice format=%u not mixed (PCM16 only in this build)\n", v->sample_format);
-            continue;
-        }
-        const int16_t *src = (const int16_t *)v->mix_data;
-        const uint32_t src_ch = v->mix_src_channels ? v->mix_src_channels : 1u;
-        const uint64_t src_frames = v->mix_bytes / (2ull * src_ch);
-        if (!src_frames) {
-            static unsigned why_logs3;
-            if (why_logs3++ < 4)
-                fprintf(stderr, "[mix] voice src_frames=0 bytes=%llu src_ch=%u fmt=%u\n",
-                        (unsigned long long)v->mix_bytes, src_ch, v->sample_format);
-            continue;
-        }
-        float volume = snk_voice_volume(v);
-        double step = v->mix_pitch > 0.01f ? (double)v->mix_pitch : 1.0;
-        if (v->mix_rate && v->mix_rate != s_mix.rate) step *= (double)v->mix_rate / (double)s_mix.rate;
-        double at = (double)v->mix_pos;
-        int drained = 0;
-        for (uint32_t f = 0; f < frames; ++f) {
-            uint64_t index = (uint64_t)at;
-            if (index >= src_frames) {
-                if (v->mix_loop) { at = 0.0; index = 0; v->mix_loops_done++; }
-                else { drained = 1; break; }
-            }
-            if (src_ch == 1u) {
-                float sample = (float)src[index] * (1.0f / 32768.0f) * volume;
-                unsigned mag = (unsigned)(src[index] < 0 ? -src[index] : src[index]);
-                if (mag > s_mix_mixed_peak) s_mix_mixed_peak = mag;
-                for (uint32_t c = 0; c < channels; ++c) s_mix.pcm[f * channels + c] += sample;
-            } else {
-                for (uint32_t c = 0; c < channels && c < src_ch; ++c) {
-                    int16_t raw = src[index * src_ch + c];
-                    unsigned mag = (unsigned)(raw < 0 ? -raw : raw);
-                    if (mag > s_mix_mixed_peak) s_mix_mixed_peak = mag;
-                    s_mix.pcm[f * channels + c] += (float)raw * (1.0f / 32768.0f) * volume;
+            double advance = step;
+            while (advance > 0.0 && voice->wave_play < voice->wave_write) {
+                wave = &voice->waves[voice->wave_play % SNK_AUDIO_WAVE_SLOTS];
+                double remaining = wave->buffer.end - voice->mix_position;
+                double consumed = advance < remaining ? advance : remaining;
+                voice->mix_position += consumed;
+                voice->mix_samples += consumed;
+                advance -= consumed;
+                if (voice->mix_position >= wave->buffer.end) {
+                    if (wave->buffer.looping) voice->mix_position = wave->buffer.start;
+                    else {
+                        if (wave->buffer.end_of_stream) voice->mix_samples = 0;
+                        ++voice->wave_play;
+                        if (voice->wave_play < voice->wave_write)
+                            voice->mix_position = voice->waves[voice->wave_play % SNK_AUDIO_WAVE_SLOTS].buffer.start;
+                    }
                 }
             }
-            at += step;
         }
-        if (drained) {
-            /* Hand the buffer back the moment it is used up: the streaming loop
-             * will not decode again until GetReleasedWaveBuffer collects it. */
-            v->mix_data = NULL;
-            v->mix_bytes = 0;
-            v->mix_pos = 0;
-        } else {
-            v->mix_pos = (uint64_t)at;
+        if (voice_mixed_peak > s_mix_mixed_peak) s_mix_mixed_peak = voice_mixed_peak;
+        if (voice->diagnostic_blocks++ < 2u || (voice_source_peak && !voice->diagnostic_nonzero)) {
+            fprintf(stderr, "[audio-voice] mix id=%u key=%p rate=%u channels=%u format=%u frames=%u source_peak=%u post_gain_peak=%u volume=%g matrix=%d pending=%llu\n",
+                    voice->diagnostic_id, voice->key, voice->mix_rate, source_channels,
+                    voice->sample_format, voice_frames, voice_source_peak, voice_mixed_peak,
+                    voice->mix_volume, voice->mix_matrix_set,
+                    (unsigned long long)(voice->wave_write - voice->wave_play));
+            if (voice_source_peak) voice->diagnostic_nonzero = 1;
         }
         ++audible;
     }
     pthread_mutex_unlock(&s_audio_lock);
 
-    /* The decoded stream goes in whether or not any voice is audible: it is the
-     * only source of real samples in this build (see snk_opus_ring_mix_into). */
-    {
-        static unsigned tap_logs;
-        unsigned used = snk_opus_ring_mix_into(s_mix.pcm, frames, channels);
-        if (used && tap_logs < 6) { ++tap_logs;
-            fprintf(stderr, "[mix] decode tap fed %u/%u frames, peak=%u\n",
-                    used, frames, s_mix_mixed_peak); }
-        if (!used && s_mix.updates % 300u == 1u) {
-            static unsigned starve;
-            if (starve++ < 6) fprintf(stderr, "[mix] decode tap starved (ring empty)\n");
-        }
-    }
-
-    int slot = -1;
-    for (int i = 0; i < SNK_MIX_RING; ++i) if (!s_mix_buffer_used[i]) { slot = i; break; }
-    if (slot < 0 && s_mix_released) {
-        void *back = s_mix_released(s_mix.key);
-        if (back) for (int i = 0; i < SNK_MIX_RING; ++i) if (&s_mix_buffers[i] == back) { s_mix_buffer_used[i] = 0; slot = i; break; }
-    }
-    if (slot < 0) return;                            /* the transport is still reading them */
     int16_t *out = (int16_t *)s_mix_buffers[slot].data;
     for (size_t i = 0; i < (size_t)frames * channels; ++i) {
         float s = s_mix.pcm[i];
         if (s > 1.0f) s = 1.0f; else if (s < -1.0f) s = -1.0f;
         out[i] = (int16_t)(s * 32767.0f);
     }
+    if (!s_mix_append(s_mix.key, &s_mix_buffers[slot])) {
+        s_mix.pending_slot = slot;
+        s_mix.pending_output = 1;
+        return;
+    }
     s_mix_buffer_used[slot] = 1;
-    s_mix_append(s_mix.key, &s_mix_buffers[slot]);
     ++s_mix.updates;
     if (s_mix.updates % 300u == 1u) {
         unsigned with_data = 0, playing = 0;
@@ -945,9 +1470,10 @@ void snk_audio_mixer_update(void) {
         for (size_t i = 0; i < SNK_AUDIO_VOICE_SLOT_COUNT; ++i) {
             struct snk_audio_voice *v = &s_audio_voices[i];
             if (v->magic != SNK_AUDIO_VOICE_MAGIC) continue;
-            if (v->mix_bytes) ++with_data;
-            if (v->mix_playing) ++playing;
+            if (v->wave_play < v->wave_write) ++with_data;
+            if (v->play_state == 0u) ++playing;
         }
+        if (s_mix.updates % 600u == 1u) snk_graph_trace_snapshot();
         pthread_mutex_unlock(&s_audio_lock);
         fprintf(stderr, "[audio] audren mixer updates=%llu mixed=%u with_data=%u playing=%u mixed_peak=%u\n",
                 (unsigned long long)s_mix.updates, audible, with_data, playing, s_mix_mixed_peak);
@@ -1127,90 +1653,62 @@ uint64_t snk_opus_reset(void *owner) {
     return 0;
 }
 
+/* The supplied v1.0.7 SDK's DecodeOpusInterleavedImpl (0x2bc680) accepts
+ * an eight-byte big-endian packet header followed by one ordinary Opus packet.
+ * The first word is the payload size. Capacity is PCM bytes, consumed includes
+ * the header, and decoded frames are per channel (0x2bc718-0x2bc788). */
 uint64_t snk_opus_decode(void *owner, size_t *consumed, int *frames, short *output,
-                                 size_t output_samples, const void *input, size_t input_size) {
-    if (consumed) *consumed = input_size;
+                         size_t output_capacity, const void *input, size_t input_size) {
+    enum { INVALID_DATA = 4, INTERNAL_ERROR = 5, INSUFFICIENT_INPUT = 6,
+           INSUFFICIENT_OUTPUT = 7, INVALID_STATE = 8, INVALID_PACKET = 9 };
+    if (consumed) *consumed = 0;
     if (frames) *frames = 0;
-    if (!owner) return 0;
-
-    static unsigned calls;
-    ++calls;
-
-    if (calls <= 3) {
-        const uint8_t *raw = (const uint8_t *)input;
-        fprintf(stderr, "[opus] call #%u owner=%p consumed_ptr=%p frames_ptr=%p out=%p cap=%zu in=%p in_size=%zu head=",
-                calls, owner, (void *)consumed, (void *)frames, (void *)output, output_samples,
-                input, input_size);
-        if (raw) for (unsigned i = 0; i < 32; ++i) fprintf(stderr, "%02x", raw[i]);
-        fprintf(stderr, "\n");
-    }
+    if (!input || input_size < 8u) return INSUFFICIENT_INPUT;
+    const uint8_t *bytes = input;
+    uint32_t packet_size = ((uint32_t)bytes[0] << 24) | ((uint32_t)bytes[1] << 16) |
+                           ((uint32_t)bytes[2] << 8) | bytes[3];
+    if ((size_t)packet_size > input_size - 8u) return INSUFFICIENT_INPUT;
+    if (!packet_size || packet_size > INT_MAX) return INVALID_DATA;
 
     pthread_mutex_lock(&s_opus_lock);
     struct snk_opus_state *state = snk_opus_slot(owner, false);
     if (!state || !state->decoder) {
         pthread_mutex_unlock(&s_opus_lock);
-        if (calls <= 4)
-            fprintf(stderr, "[opus] decode #%u owner=%p has no decoder; dropped %zu bytes\n",
-                    calls, owner, input_size);
-        return 0;
+        return INVALID_STATE;
     }
-
-    const int channels = state->channels == 1 ? 1 : 2;
-    /* nn::codec hands over a stream chunk, not one packet: measured 11899 bytes
-     * against a 1920x1080 BGM file whose largest legal Opus packet is 1276.
-     * The framing is therefore self-delimited, which is also the only reading
-     * of the API that gives pOutConsumed a meaning -- the decoder reports how
-     * much of the chunk the first packet used up.
-     *
-     * The capacity is read as a frame count divided by the channel count, the
-     * stricter of the two possible readings (frames vs interleaved shorts), so
-     * a caller that meant shorts can never be overrun. Decoding happens into
-     * our own buffer first and is copied out afterwards for the same reason. */
-    uint64_t capacity = output_samples / (uint64_t)channels;
-    if (capacity == 0 || capacity > 5760u) capacity = 5760u;
-
-    opus_int32 used = 0;
-    int decoded = opus_decode_self_delimited(state->decoder, (const unsigned char *)input,
-                                             (opus_int32)input_size, state->pcm,
-                                             (int)capacity, &used);
-    if (decoded < 0) {
-        /* Reporting a failure here makes the title retry the same packet in a
-         * tight loop (measured: ~700 retries/s, 85k lines) instead of moving on,
-         * so the packet is consumed and dropped instead. The self-delimited
-         * framing still yields its length, so the stream keeps advancing even
-         * when the caller's remaining capacity is too small for this packet. */
-        unsigned char toc = 0;
-        opus_int16 sizes[48];
-        opus_int32 packet_offset = 0;
-        int parsed = opus_packet_parse_impl((const unsigned char *)input, (opus_int32)input_size, 1,
-                                            &toc, NULL, sizes, NULL, &packet_offset, NULL, NULL);
+    const int channels = state->channels;
+    int packet_frames = opus_packet_get_nb_samples(bytes + 8u, (opus_int32)packet_size,
+                                                   state->sample_rate);
+    if (packet_frames <= 0 || packet_frames > 5760) {
         pthread_mutex_unlock(&s_opus_lock);
-        if (snk_audio_event(40))
-            fprintf(stderr, "[opus] decode #%u in=%zu dropped (%s), consumed=%d\n",
-                    calls, input_size, opus_strerror(decoded),
-                    parsed == OPUS_OK && packet_offset > 0 ? (int)packet_offset : (int)input_size);
-        if (consumed) *consumed = (parsed == OPUS_OK && packet_offset > 0) ? (size_t)packet_offset : input_size;
-        return 0;
+        return INVALID_DATA;
     }
-
-    uint64_t shorts = (uint64_t)decoded * (uint64_t)channels;
-    if (output && output_samples && shorts > output_samples)
-        shorts = output_samples - (output_samples % (uint64_t)channels);
-    if (output && shorts) memcpy(output, state->pcm, (size_t)shorts * sizeof(short));
+    size_t required_bytes = (size_t)packet_frames * (size_t)channels * sizeof(short);
+    if (!output || output_capacity < required_bytes) {
+        pthread_mutex_unlock(&s_opus_lock);
+        return INSUFFICIENT_OUTPUT;
+    }
+    int decoded = opus_decode(state->decoder, bytes + 8u, (opus_int32)packet_size,
+                               state->pcm, packet_frames, 0);
+    if (decoded < 0) {
+        pthread_mutex_unlock(&s_opus_lock);
+        return decoded == OPUS_INTERNAL_ERROR ? INVALID_PACKET :
+               decoded == OPUS_UNIMPLEMENTED ? INTERNAL_ERROR : INVALID_DATA;
+    }
+    size_t sample_count = (size_t)decoded * (size_t)channels;
+    memcpy(output, state->pcm, sample_count * sizeof(short));
     unsigned peak = 0;
-    for (uint64_t i = 0; i < shorts; ++i) {
-        int v = state->pcm[i];
-        unsigned mag = (unsigned)(v < 0 ? -v : v);
-        if (mag > peak) peak = mag;
+    for (size_t i = 0; i < sample_count; ++i) {
+        int sample = state->pcm[i];
+        unsigned magnitude = (unsigned)(sample < 0 ? -sample : sample);
+        if (magnitude > peak) peak = magnitude;
     }
     pthread_mutex_unlock(&s_opus_lock);
-
-    snk_opus_ring_push(state->pcm, (unsigned)(decoded > 0 ? decoded : 0), (unsigned)channels);
-    if (consumed) *consumed = used > 0 ? (size_t)used : input_size;
+    if (consumed) *consumed = 8u + (size_t)packet_size;
     if (frames) *frames = decoded;
     if (snk_audio_event(40))
-        fprintf(stderr, "[opus] decode #%u in=%zu consumed=%d decoded=%d peak=%u cap=%zu ch=%d\n",
-                calls, input_size, (int)used, decoded, peak, output_samples, channels);
+        fprintf(stderr, "[opus] framed packet payload=%u consumed=%zu decoded=%d peak=%u capacity_bytes=%zu ch=%d\n",
+                packet_size, 8u + (size_t)packet_size, decoded, peak, output_capacity, channels);
     return 0;
 }
 
@@ -1225,6 +1723,8 @@ struct snk_png_state {
     uint32_t width;
     uint32_t height;
     int analyzed;
+    int format;
+    size_t stride;
 };
 
 static pthread_mutex_t s_png_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -1295,18 +1795,20 @@ uint64_t snk_png_decoder_set_image_data(void *self, const void *data, size_t siz
 }
 
 uint64_t snk_png_decoder_set_pixel_format(void *self, int format) {
-    (void)format;
     snk_png_find(self, true);
+    fprintf(stderr, "[snk-media] PngDecoder::SetOutputPixelFormat: %d\n", format);
     return 0;
 }
 
+/* SDK 1.0.7 Analyze returns zero on success. Decode uses x2 for the
+ * output capacity and x3 for row stride (sdk offsets 0x80b90/0x80e70). */
 uint64_t snk_png_decoder_analyze(void *self) {
     struct snk_png_state *state = snk_png_find(self, true);
-    if (!state || !state->data || state->size < 24u) return 0;
+    if (!state || !state->data || state->size < 24u) return 1;
     static const unsigned char signature[8] = {0x89, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
     const unsigned char *data = (const unsigned char *)state->data;
-    if (memcmp(data, signature, sizeof(signature))) return 0;
-    if (memcmp(data + 12, "IHDR", 4)) return 0;
+    if (memcmp(data, signature, sizeof(signature))) return 1;
+    if (memcmp(data + 12, "IHDR", 4)) return 1;
     uint32_t width = ((uint32_t)data[16] << 24) | ((uint32_t)data[17] << 16) |
                      ((uint32_t)data[18] << 8) | (uint32_t)data[19];
     uint32_t height = ((uint32_t)data[20] << 24) | ((uint32_t)data[21] << 16) |
@@ -1317,10 +1819,10 @@ uint64_t snk_png_decoder_analyze(void *self) {
     state->analyzed = 1;
     pthread_mutex_unlock(&s_png_lock);
     fprintf(stderr, "[snk-media] PngDecoder::Analyze: %ux%u\n", width, height);
-    return 1;
+    return 0;
 }
 
-uint64_t snk_png_decoder_decode(void *self, void *output, size_t stride, size_t size) {
+uint64_t snk_png_decoder_decode(void *self, void *output, size_t size, size_t stride) {
     struct snk_png_state *state = snk_png_find(self, false);
     if (!state || !state->data || state->size == 0 || !output) return 2; /* nn::Result error */
 
@@ -1387,48 +1889,145 @@ uint64_t snk_png_decoder_row_stride(const void *self) {
 }
 
 uint64_t snk_png_encoder_ctor(void *self) {
-    (void)self;
-    return 0;
+    return snk_png_decoder_ctor(self);
 }
 
 uint64_t snk_png_encoder_dtor(void *self) {
-    (void)self;
-    return 0;
+    return snk_png_decoder_dtor(self);
 }
 
 uint64_t snk_png_encoder_initialize(void *self, void *allocator, void *allocator_context,
                                            void *deallocator, void *deallocator_context) {
-    (void)self;
-    (void)allocator;
-    (void)allocator_context;
-    (void)deallocator;
-    (void)deallocator_context;
-    return 0;
+    return snk_png_decoder_initialize(self, allocator, allocator_context,
+                                     deallocator, deallocator_context);
 }
 
 uint64_t snk_png_encoder_set_pixel_data(void *self, const void *data, size_t size,
                                                 int format, uint64_t dimension, size_t stride) {
-    (void)self;
-    (void)data;
-    (void)size;
-    (void)format;
-    (void)dimension;
-    (void)stride;
+    struct snk_png_state *state = snk_png_find(self, true);
+    if (!state) return 0;
+    pthread_mutex_lock(&s_png_lock);
+    state->data = data;
+    state->size = size;
+    state->format = format;
+    state->width = (uint32_t)dimension;
+    state->height = (uint32_t)(dimension >> 32);
+    state->stride = stride;
+    pthread_mutex_unlock(&s_png_lock);
     return 0;
+}
+
+/* PixelFormat tables from SDK 1.0.7 GetBitDepth/GetChannelCount at
+ * 0x81730/0x81760 and GetPngColorType at 0x80790. Formats 1..4 require
+ * palette information, which SetPixelData does not supply. */
+static bool snk_png_encoder_layout(const struct snk_png_state *state,
+                                   size_t *row_bytes, size_t *stride, size_t *raw_size) {
+    static const unsigned bits[] = {1, 2, 4, 8, 16, 8, 16, 8, 16, 8, 16};
+    static const unsigned channels[] = {1, 1, 1, 1, 1, 3, 3, 2, 2, 4, 4};
+    if (!state->data || !state->width || !state->height ||
+        state->width > INT_MAX || state->height > INT_MAX ||
+        state->format < 5 || state->format > 15) return false;
+    unsigned index = (unsigned)state->format - 5u;
+    uint64_t row_bits = (uint64_t)state->width * bits[index] * channels[index];
+    *row_bytes = (size_t)((row_bits + 7u) / 8u);
+    *stride = state->stride ? state->stride : *row_bytes;
+    if (*stride < *row_bytes ||
+        (size_t)(state->height - 1u) > (SIZE_MAX - *row_bytes) / *stride ||
+        state->size < (size_t)(state->height - 1u) * *stride + *row_bytes ||
+        *row_bytes >= UINT_MAX || state->height > UINT_MAX / (*row_bytes + 1u)) return false;
+    *raw_size = (*row_bytes + 1u) * state->height;
+    return true;
+}
+
+static void snk_png_write_u32(unsigned char *output, uint32_t value) {
+    output[0] = (unsigned char)(value >> 24);
+    output[1] = (unsigned char)(value >> 16);
+    output[2] = (unsigned char)(value >> 8);
+    output[3] = (unsigned char)value;
+}
+
+static size_t snk_png_write_chunk(unsigned char *output, const char *type,
+                                   const unsigned char *data, uint32_t size) {
+    snk_png_write_u32(output, size);
+    memcpy(output + 4u, type, 4u);
+    if (size) memcpy(output + 8u, data, size);
+    uLong crc = crc32(0, (const Bytef *)type, 4u);
+    if (size) crc = crc32(crc, data, size);
+    snk_png_write_u32(output + 8u + size, (uint32_t)crc);
+    return (size_t)size + 12u;
 }
 
 uint64_t snk_png_encoder_encode(void *self, size_t *size_out, void *output,
                                        size_t capacity) {
-    (void)self;
-    (void)output;
-    (void)capacity;
     if (size_out) *size_out = 0u;
+    if (!size_out || !output) return 1;
+    struct snk_png_state *state = snk_png_find(self, false);
+    if (!state) return 1;
+    pthread_mutex_lock(&s_png_lock);
+    struct snk_png_state input = *state;
+    pthread_mutex_unlock(&s_png_lock);
+    size_t row_bytes, stride, raw_size;
+    if (!snk_png_encoder_layout(&input, &row_bytes, &stride, &raw_size)) return 1;
+    uLong bound = compressBound((uLong)raw_size);
+    if (bound > UINT_MAX || bound > SIZE_MAX - 57u) return 1;
+    unsigned char *raw = malloc(raw_size);
+    unsigned char *compressed = malloc((size_t)bound);
+    if (!raw || !compressed) {
+        free(raw);
+        free(compressed);
+        return 2;
+    }
+    for (uint32_t y = 0; y < input.height; ++y) {
+        unsigned char *row = raw + (size_t)y * (row_bytes + 1u);
+        const unsigned char *source = (const unsigned char *)input.data + (size_t)y * stride;
+        row[0] = 0; /* PNG filter None. */
+        memcpy(row + 1u, source, row_bytes);
+        /* The SDK requests PNG_TRANSFORM_SWAP_ENDIAN for 16-bit samples. */
+        if (input.format == 9 || input.format == 11 || input.format == 13 || input.format == 15) {
+            for (size_t x = 0; x < row_bytes; x += 2u) {
+                row[x + 1u] = source[x + 1u];
+                row[x + 2u] = source[x];
+            }
+        }
+    }
+    uLongf compressed_size = bound;
+    int result = compress2(compressed, &compressed_size, raw, (uLong)raw_size, Z_DEFAULT_COMPRESSION);
+    free(raw);
+    if (result != Z_OK || capacity < (size_t)compressed_size + 57u) {
+        free(compressed);
+        return result == Z_MEM_ERROR ? 2 : 1;
+    }
+    static const unsigned char signature[] = {0x89, 'P', 'N', 'G', 13, 10, 26, 10};
+    static const unsigned char depths[] = {1, 2, 4, 8, 16, 8, 16, 8, 16, 8, 16};
+    static const unsigned char colors[] = {0, 0, 0, 0, 0, 2, 2, 4, 4, 6, 6};
+    unsigned char header[13] = {0};
+    snk_png_write_u32(header, input.width);
+    snk_png_write_u32(header + 4u, input.height);
+    header[8] = depths[input.format - 5];
+    header[9] = colors[input.format - 5];
+    unsigned char *destination = output;
+    memcpy(destination, signature, sizeof(signature));
+    size_t written = sizeof(signature);
+    written += snk_png_write_chunk(destination + written, "IHDR", header, sizeof(header));
+    written += snk_png_write_chunk(destination + written, "IDAT", compressed, (uint32_t)compressed_size);
+    written += snk_png_write_chunk(destination + written, "IEND", NULL, 0);
+    free(compressed);
+    *size_out = written;
+    fprintf(stderr, "[snk-media] PngEncoder::Encode: %ux%u format=%d bytes=%zu\n",
+            input.width, input.height, input.format, written);
     return 0;
 }
 
 uint64_t snk_png_encoder_size_max(const void *self) {
-    (void)self;
-    return 0x10000u;
+    struct snk_png_state *state = snk_png_find((void *)self, false);
+    if (!state) return 0;
+    pthread_mutex_lock(&s_png_lock);
+    struct snk_png_state input = *state;
+    pthread_mutex_unlock(&s_png_lock);
+    size_t row_bytes, stride, raw_size;
+    if (!snk_png_encoder_layout(&input, &row_bytes, &stride, &raw_size)) return 0;
+    uLong bound = compressBound((uLong)raw_size);
+    return bound <= UINT_MAX && bound <= SIZE_MAX - 57u ? (uint64_t)bound + 57u : 0;
 }
 
 /* ====================================================================== */
@@ -1463,8 +2062,8 @@ uint64_t snk_hle_media_lookup(const char *name, unsigned *gp_arguments,
     if (native_audio < 0) {
         const char *value = getenv("SNK_NATIVE_AUDIO");
         native_audio = value && value[0] == '1';
-        /* The host-side mixer needs the voice calls to reach it. When its
-         * marker is present the native SDK audio path is not used, because the
+        /* The host-side mixer needs the voice calls to reach it. When it
+         * is enabled the native SDK audio path is not used, because the
          * SDK client keeps its own voice objects and this port has no audren
          * service for it to talk to (its AcquireSubMix never succeeds). */
         if (native_audio && snk_audio_mixer_enabled()) native_audio = 0;
@@ -1496,25 +2095,87 @@ uint64_t snk_hle_media_lookup(const char *name, unsigned *gp_arguments,
     /* audren mixer overrides, ahead of the generated table.
      *
      * The generated table is not edited by hand, and its voice entries all
-     * answer with the generic stub. When the opt-in marker is present these
+     * answer with the generic stub. With the mixer enabled these
      * names resolve here instead, so the mixer sees the wave buffers, the play
-     * state and the block updates. Without the marker nothing changes. */
+     * state and the block updates. */
     if (snk_audio_mixer_enabled()) {
         static const struct { const char *name; void *fn; unsigned gp, fp, gr; } voice[] = {
+            {"_ZN2nn5audio18CopyMemoryPoolDataEPKNS0_14MemoryPoolTypeEPvPKvm", (void *)snk_audio_copy_pool_data, 4, 0, 0},
             /* Renderer graph. Every one of these answered false before, and the
              * title stops building its graph at the first false, so the voice
              * calls below were never reached at all. */
             {"_ZN2nn5audio17AcquireMemoryPoolEPNS0_19AudioRendererConfigEPNS0_14MemoryPoolTypeEPvm", (void *)snk_audio_acquire_object, 4, 0, 1},
-            {"_ZN2nn5audio13AcquireSubMixEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEii", (void *)snk_audio_acquire_object, 4, 0, 1},
-            {"_ZN2nn5audio15AcquireFinalMixEPNS0_19AudioRendererConfigEPNS0_12FinalMixTypeEi", (void *)snk_audio_acquire_object, 3, 0, 1},
-            {"_ZN2nn5audio15AcquireSplitterEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeEiii", (void *)snk_audio_acquire_object, 5, 0, 1},
-            {"_ZN2nn5audio13AddDeviceSinkEPNS0_19AudioRendererConfigEPNS0_14DeviceSinkTypeEPNS0_12FinalMixTypeEPKaiPKc", (void *)snk_audio_result_ok, 6, 0, 1},
-            {"_ZN2nn5audio8AddDelayEPNS0_19AudioRendererConfigEPNS0_9DelayTypeEPvmPNS0_10SubMixTypeENS_8TimeSpanEi", (void *)snk_audio_result_ok, 7, 0, 1},
-            {"_ZN2nn5audio15AddBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_10SubMixTypeE", (void *)snk_audio_result_ok, 3, 0, 1},
-            {"_ZN2nn5audio15AddBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_result_ok, 3, 0, 1},
-            {"_ZN2nn5audio13AddCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_10SubMixTypeEi", (void *)snk_audio_result_ok, 4, 0, 1},
-            {"_ZN2nn5audio13AddCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_12FinalMixTypeEi", (void *)snk_audio_result_ok, 4, 0, 1},
-            {"_ZN2nn5audio14AddI3dl2ReverbEPNS0_19AudioRendererConfigEPNS0_15I3dl2ReverbTypeEPvmPNS0_10SubMixTypeEi", (void *)snk_audio_result_ok, 6, 0, 1},
+            {"_ZN2nn5audio13AcquireSubMixEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEii", (void *)snk_audio_trace_submix_acquire, 4, 0, 1},
+            {"_ZN2nn5audio15AcquireFinalMixEPNS0_19AudioRendererConfigEPNS0_12FinalMixTypeEi", (void *)snk_audio_trace_finalmix_acquire, 3, 0, 1},
+            {"_ZN2nn5audio15AcquireSplitterEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeEiii", (void *)snk_audio_trace_splitter_acquire, 5, 0, 1},
+            {"_ZN2nn5audio15ReleaseSplitterEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeE", (void *)snk_audio_trace_mix_release, 2, 0, 0},
+            {"_ZN2nn5audio22SetSplitterDestinationEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeEiPNS0_10SubMixTypeE", (void *)snk_audio_trace_splitter_destination, 4, 0, 0},
+            {"_ZN2nn5audio22SetSplitterDestinationEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeEiPNS0_12FinalMixTypeE", (void *)snk_audio_trace_splitter_destination, 4, 0, 0},
+            {"_ZN2nn5audio24ClearSplitterDestinationEPNS0_19AudioRendererConfigEPNS0_12SplitterTypeEi", (void *)snk_audio_trace_splitter_clear, 3, 0, 0},
+            {"_ZN2nn5audio20SetSplitterMixVolumeEPNS0_12SplitterTypeEiPNS0_10SubMixTypeEfii", (void *)snk_audio_trace_splitter_matrix, 5, 1, 0},
+            {"_ZN2nn5audio20SetSplitterMixVolumeEPNS0_12SplitterTypeEiPNS0_12FinalMixTypeEfii", (void *)snk_audio_trace_splitter_matrix, 5, 1, 0},
+            {"_ZN2nn5audio13AddDeviceSinkEPNS0_19AudioRendererConfigEPNS0_14DeviceSinkTypeEPNS0_12FinalMixTypeEPKaiPKc", (void *)snk_audio_trace_sink, 6, 0, 1},
+            {"_ZN2nn5audio16RemoveDeviceSinkEPNS0_19AudioRendererConfigEPNS0_14DeviceSinkTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_sink_remove, 3, 0, 1},
+            {"_ZN2nn5audio17SetAudioOutVolumeEPNS0_8AudioOutEf", (void *)snk_audio_trace_audio_out_volume, 1, 1, 1},
+            {"_ZN2nn5audio26SetAudioDeviceOutputVolumeEPKNS0_15AudioDeviceNameEf", (void *)snk_audio_trace_device_volume, 1, 1, 1},
+            {"_ZN2nn5audio20GetSubMixBufferCountEPKNS0_10SubMixTypeE", (void *)snk_audio_mix_buffer_count, 1, 0, 1},
+            {"_ZN2nn5audio22GetFinalMixBufferCountEPKNS0_12FinalMixTypeE", (void *)snk_audio_mix_buffer_count, 1, 0, 1},
+            {"_ZN2nn5audio13ReleaseSubMixEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeE", (void *)snk_audio_trace_mix_release, 2, 0, 0},
+            {"_ZN2nn5audio15ReleaseFinalMixEPNS0_19AudioRendererConfigEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_mix_release, 2, 0, 0},
+            {"_ZN2nn5audio15SetSubMixVolumeEPNS0_10SubMixTypeEf", (void *)snk_audio_trace_mix_volume, 1, 1, 0},
+            {"_ZN2nn5audio17SetFinalMixVolumeEPNS0_12FinalMixTypeEf", (void *)snk_audio_trace_mix_volume, 1, 1, 0},
+            {"_ZN2nn5audio18SetSubMixMixVolumeEPNS0_10SubMixTypeES2_fii", (void *)snk_audio_trace_mix_matrix, 4, 1, 0},
+            {"_ZN2nn5audio18SetSubMixMixVolumeEPNS0_10SubMixTypeEPNS0_12FinalMixTypeEfii", (void *)snk_audio_trace_mix_matrix, 4, 1, 0},
+            {"_ZN2nn5audio20SetSubMixDestinationEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeES4_", (void *)snk_audio_trace_mix_destination, 3, 0, 0},
+            {"_ZN2nn5audio20SetSubMixDestinationEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_mix_destination, 3, 0, 0},
+            {"_ZN2nn5audio20SetSubMixDestinationEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeEPNS0_12SplitterTypeE", (void *)snk_audio_trace_mix_destination, 3, 0, 0},
+            {"_ZN2nn5audio22ClearSubMixDestinationEPNS0_19AudioRendererConfigEPNS0_10SubMixTypeE", (void *)snk_audio_trace_mix_clear, 2, 0, 0},
+            {"_ZN2nn5audio8AddDelayEPNS0_19AudioRendererConfigEPNS0_9DelayTypeEPvmPNS0_10SubMixTypeENS_8TimeSpanEi", (void *)snk_audio_trace_delay_add, 7, 0, 1},
+            {"_ZN2nn5audio15AddBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_10SubMixTypeE", (void *)snk_audio_trace_biquad_add, 3, 0, 1},
+            {"_ZN2nn5audio15AddBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_biquad_add, 3, 0, 1},
+            {"_ZN2nn5audio13AddCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_10SubMixTypeEi", (void *)snk_audio_trace_compressor_add, 4, 0, 1},
+            {"_ZN2nn5audio13AddCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_12FinalMixTypeEi", (void *)snk_audio_trace_compressor_add, 4, 0, 1},
+            {"_ZN2nn5audio14AddI3dl2ReverbEPNS0_19AudioRendererConfigEPNS0_15I3dl2ReverbTypeEPvmPNS0_10SubMixTypeEi", (void *)snk_audio_trace_reverb_add, 6, 0, 1},
+            {"_ZN2nn5audio21SetI3dl2ReverbEnabledEPNS0_15I3dl2ReverbTypeEb", (void *)snk_audio_trace_effect_enabled, 2, 0, 0},
+            {"_ZN2nn5audio15SetDelayEnabledEPNS0_9DelayTypeEb", (void *)snk_audio_trace_effect_enabled, 2, 0, 0},
+            {"_ZN2nn5audio22SetBiquadFilterEnabledEPNS0_16BiquadFilterTypeEb", (void *)snk_audio_trace_effect_enabled, 2, 0, 0},
+            {"_ZN2nn5audio20SetCompressorEnabledEPNS0_14CompressorTypeEb", (void *)snk_audio_trace_effect_enabled, 2, 0, 0},
+            {"_ZN2nn5audio19IsCompressorEnabledEPKNS0_14CompressorTypeE", (void *)snk_audio_trace_compressor_enabled, 1, 0, 1},
+            {"_ZN2nn5audio22SetCompressorThresholdEPNS0_14CompressorTypeEf", (void *)snk_audio_trace_threshold, 1, 1, 0},
+            {"_ZN2nn5audio18SetCompressorRatioEPNS0_14CompressorTypeEf", (void *)snk_audio_trace_ratio, 1, 1, 0},
+            {"_ZN2nn5audio23SetCompressorAttackTimeEPNS0_14CompressorTypeENS_8TimeSpanE", (void *)snk_audio_trace_attack, 2, 0, 0},
+            {"_ZN2nn5audio24SetCompressorReleaseTimeEPNS0_14CompressorTypeENS_8TimeSpanE", (void *)snk_audio_trace_release, 2, 0, 0},
+            {"_ZN2nn5audio20SetCompressorOutGainEPNS0_14CompressorTypeEf", (void *)snk_audio_trace_out_gain, 1, 1, 0},
+            {"_ZN2nn5audio23SetCompressorParametersEPNS0_14CompressorTypeEPKNS0_22CompressorParameterSetE", (void *)snk_audio_trace_compressor_parameters, 2, 0, 0},
+            {"_ZN2nn5audio15SetDelayDryGainEPNS0_9DelayTypeEf", (void *)snk_audio_trace_dry_gain, 1, 1, 0},
+            {"_ZN2nn5audio14SetDelayInGainEPNS0_9DelayTypeEf", (void *)snk_audio_trace_in_gain, 1, 1, 0},
+            {"_ZN2nn5audio20SetDelayFeedbackGainEPNS0_9DelayTypeEf", (void *)snk_audio_trace_feedback_gain, 1, 1, 0},
+            {"_ZN2nn5audio12SetDelayTimeEPNS0_9DelayTypeENS_8TimeSpanE", (void *)snk_audio_trace_delay_time, 2, 0, 0},
+            {"_ZN2nn5audio21SetI3dl2ReverbDryGainEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_dry_gain, 1, 1, 0},
+            {"_ZN2nn5audio22SetI3dl2ReverbRoomGainEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_room_gain, 1, 1, 0},
+            {"_ZN2nn5audio24SetI3dl2ReverbRoomHfGainEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_room_hf_gain, 1, 1, 0},
+            {"_ZN2nn5audio25SetI3dl2ReverbHfReferenceEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_hf_reference, 1, 1, 0},
+            {"_ZN2nn5audio33SetI3dl2ReverbLateReverbDecayTimeEPNS0_15I3dl2ReverbTypeENS_8TimeSpanE", (void *)snk_audio_trace_decay_time, 2, 0, 0},
+            {"_ZN2nn5audio36SetI3dl2ReverbLateReverbHfDecayRatioEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_decay_hf_ratio, 1, 1, 0},
+            {"_ZN2nn5audio29SetI3dl2ReverbReflectionsGainEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_reflections_gain, 1, 1, 0},
+            {"_ZN2nn5audio33SetI3dl2ReverbReflectionDelayTimeEPNS0_15I3dl2ReverbTypeENS_8TimeSpanE", (void *)snk_audio_trace_reflection_time, 2, 0, 0},
+            {"_ZN2nn5audio24SetI3dl2ReverbReverbGainEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_reverb_gain, 1, 1, 0},
+            {"_ZN2nn5audio33SetI3dl2ReverbLateReverbDelayTimeEPNS0_15I3dl2ReverbTypeENS_8TimeSpanE", (void *)snk_audio_trace_reverb_time, 2, 0, 0},
+            {"_ZN2nn5audio33SetI3dl2ReverbLateReverbDiffusionEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_diffusion, 1, 1, 0},
+            {"_ZN2nn5audio31SetI3dl2ReverbLateReverbDensityEPNS0_15I3dl2ReverbTypeEf", (void *)snk_audio_trace_density, 1, 1, 0},
+            {"_ZN2nn5audio24SetCompressorInputOutputEPNS0_14CompressorTypeEPKaS4_i", (void *)snk_audio_trace_effect_io, 4, 0, 0},
+            {"_ZN2nn5audio19SetDelayInputOutputEPNS0_9DelayTypeEPKaS4_i", (void *)snk_audio_trace_effect_io, 4, 0, 0},
+            {"_ZN2nn5audio25SetI3dl2ReverbInputOutputEPNS0_15I3dl2ReverbTypeEPKaS4_i", (void *)snk_audio_trace_effect_io, 4, 0, 0},
+            {"_ZN2nn5audio26SetBiquadFilterInputOutputEPNS0_16BiquadFilterTypeEPKaS4_i", (void *)snk_audio_trace_effect_io, 4, 0, 0},
+            {"_ZN2nn5audio24SetBiquadFilterParameterEPNS0_16BiquadFilterTypeERKNS0_22TBiquadFilterParameterIsEE", (void *)snk_audio_trace_biquad_parameters, 2, 0, 0},
+            {"_ZN2nn5audio17RemoveI3dl2ReverbEPNS0_19AudioRendererConfigEPNS0_15I3dl2ReverbTypeEPNS0_10SubMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio17RemoveI3dl2ReverbEPNS0_19AudioRendererConfigEPNS0_15I3dl2ReverbTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio11RemoveDelayEPNS0_19AudioRendererConfigEPNS0_9DelayTypeEPNS0_10SubMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio11RemoveDelayEPNS0_19AudioRendererConfigEPNS0_9DelayTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio18RemoveBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_10SubMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio18RemoveBiquadFilterEPNS0_19AudioRendererConfigEPNS0_16BiquadFilterTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio16RemoveCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_10SubMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
+            {"_ZN2nn5audio16RemoveCompressorEPNS0_19AudioRendererConfigEPNS0_14CompressorTypeEPNS0_12FinalMixTypeE", (void *)snk_audio_trace_effect_remove, 3, 0, 1},
             {"_ZN2nn5audio10AddCaptureEPNS0_19AudioRendererConfigEPNS0_11CaptureTypeEPNS0_10SubMixTypeEPvm", (void *)snk_audio_result_ok, 5, 0, 1},
             {"_ZN2nn5audio10AddCaptureEPNS0_19AudioRendererConfigEPNS0_11CaptureTypeEPNS0_12FinalMixTypeEPvm", (void *)snk_audio_result_ok, 5, 0, 1},
             {"_ZN2nn5audio19SetVoiceDestinationEPNS0_19AudioRendererConfigEPNS0_9VoiceTypeEPNS0_10SubMixTypeE", (void *)snk_audio_set_destination, 3, 0, 1},
@@ -1525,9 +2186,12 @@ uint64_t snk_hle_media_lookup(const char *name, unsigned *gp_arguments,
             {"_ZN2nn5audio16AppendWaveBufferEPNS0_9VoiceTypeEPKNS0_10WaveBufferE", (void *)snk_audio_v_append_wave, 2, 0, 1},
             {"_ZN2nn5audio17SetVoicePlayStateEPNS0_9VoiceTypeENS1_9PlayStateE", (void *)snk_audio_v_play_state, 2, 0, 1},
             {"_ZN2nn5audio16FlushWaveBuffersEPNS0_9VoiceTypeE", (void *)snk_audio_v_flush, 1, 0, 1},
+            {"_ZN2nn5audio16ReleaseVoiceSlotEPNS0_19AudioRendererConfigEPNS0_9VoiceTypeE", (void *)snk_audio_release_voice, 2, 0, 0},
             {"_ZN2nn5audio13SetVoicePitchEPNS0_9VoiceTypeEf", (void *)snk_audio_v_pitch, 1, 1, 1},
-            {"_ZN2nn5audio17SetVoiceMixVolumeEPNS0_9VoiceTypeEPNS0_10SubMixTypeEfii", (void *)snk_audio_v_volume, 4, 1, 1},
-            {"_ZN2nn5audio17SetVoiceMixVolumeEPNS0_9VoiceTypeEPNS0_12FinalMixTypeEfii", (void *)snk_audio_v_volume, 4, 1, 1},
+            {"_ZN2nn5audio17SetVoiceMixVolumeEPNS0_9VoiceTypeEPNS0_10SubMixTypeEfii", (void *)snk_audio_v_mix_volume, 4, 1, 0},
+            {"_ZN2nn5audio17SetVoiceMixVolumeEPNS0_9VoiceTypeEPNS0_12FinalMixTypeEfii", (void *)snk_audio_v_mix_volume, 4, 1, 0},
+            {"_ZN2nn5audio14SetVoiceVolumeEPNS0_9VoiceTypeEf", (void *)snk_audio_v_volume, 1, 1, 0},
+            {"_ZN2nn5audio12IsVoiceValidEPKNS0_9VoiceTypeE", (void *)snk_audio_v_valid, 1, 0, 1},
             {"_ZN2nn5audio25GetVoicePlayedSampleCountEPKNS0_9VoiceTypeE", (void *)snk_audio_v_played, 1, 0, 1},
             {"_ZN2nn5audio18GetWaveBufferCountEPKNS0_9VoiceTypeE", (void *)snk_audio_v_wave_count, 1, 0, 1},
             {"_ZN2nn5audio21GetReleasedWaveBufferEPNS0_9VoiceTypeE", (void *)snk_audio_v_released, 1, 0, 1},
