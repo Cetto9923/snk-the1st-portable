@@ -2680,17 +2680,8 @@ int32_t nso_host_oe_performance_clock(void) {
 static uint32_t s_oe_operation_mode = 1;
 
 uint32_t nso_host_oe_get_operation_mode(void) {
-    /* Allow external control of Handheld (0, 720p) vs Docked (1, 1080p).
-     * If files/oe-operation-mode exists, its content ('0' or '1') overrides
-     * the mode. Default remains 1 (Docked). */
-    FILE *f = fopen("/storage/emulated/0/Android/data/org.ffrs.gamewindow/files/oe-operation-mode", "rb");
-    if (!f) f = fopen("/sdcard/Android/data/org.ffrs.gamewindow/files/oe-operation-mode", "rb");
-    if (f) {
-        int c = fgetc(f);
-        fclose(f);
-        if (c == '0') s_oe_operation_mode = 0;
-        else if (c == '1') s_oe_operation_mode = 1;
-    }
+    /* The APK supplies its own boot configuration. Standalone diagnostics
+     * retain the explicit environment override and the docked default. */
     const char *env = getenv("FFRS_OPERATION_MODE");
     if (env) {
         if (env[0] == '0') s_oe_operation_mode = 0;

@@ -983,7 +983,7 @@ void forget_framebuffers(Image &im,std::vector<VkFramebuffer> *deferred=nullptr)
 // 3.6% of the render thread on Adreno 730. gfx-no-slot-pools keeps the shared pool. Readback arenas in host-cached memory
 // (gfx-readback-cached = '1'): GPU results read back by the CPU (storage writebacks) come from uncached memory otherwise.
 bool slot_pools_enabled=true,readback_cached=false;
-unsigned mali_render_height=0;
+unsigned native_render_height=0;
 // Experiment (marker gfx-no-occlusion = '1'): no occlusion queries at all; counter reports then read 0 samples. Measures
 // what the per-draw precise queries cost the GPU (count_samples stays on after the game's first counter reset). A/B
 // target occ does the same in the off half (on the Redmi K50 Ultra bench the GPU then took 1.75 ms a frame more).
@@ -7002,14 +7002,18 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
         xbg_logf("NVN Honor subgroup helper inline enabled=%d", int(honor_inline_enabled));
     }
 #endif
-    // RG477M validation profile. Explicit markers retain diagnostic overrides.
-    mali_render_height=0;
+    // Internal resolution is independent of the all-device docked operation mode.
+    native_render_height=properties.vendorID==0x13b5?540:0;
+    if(const char *height=getenv("FFRS_PROFILE_RENDER_HEIGHT")){
+        if(!strcmp(height,"0"))native_render_height=0;
+        else if(!strcmp(height,"540"))native_render_height=540;
+        else if(!strcmp(height,"720"))native_render_height=720;
+    }
     if(properties.vendorID==0x13b5){
-        mali_render_height=540;
         std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');
         FILE *marker=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mali-render-height").c_str(),"rb");
         unsigned height=0;
-        if(marker){mali_render_height=0;if(fscanf(marker,"%u",&height)==1 && (height==540 || height==720))mali_render_height=height;fclose(marker);}
+        if(marker){native_render_height=0;if(fscanf(marker,"%u",&height)==1 && (height==540 || height==720))native_render_height=height;fclose(marker);}
     }
     VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};pp.pNext=&subgroup;vkGetPhysicalDeviceProperties2(cfg.physical,&pp);
     VkPhysicalDeviceFeatures available;vkGetPhysicalDeviceFeatures(cfg.physical,&available);const VkBool32 *want=reinterpret_cast<const VkBool32*>(&cfg.enabled_core),*have=reinterpret_cast<const VkBool32*>(&available);for(size_t i=0;i<sizeof(available)/sizeof(VkBool32);i++)if(want[i]&&!have[i]){if(error&&bytes)snprintf(error,bytes,"Requested enabled feature %zu is unsupported",i);return -1;}
@@ -7426,13 +7430,13 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
     return fence<=completed;
 }
 extern "C" void xbg_legacy_finish(){gfx_drain();std::lock_guard<std::recursive_mutex> lock(mutex);need(initialized,"Queue finish before Vulkan initialization");++perf.why_finish;complete_all();VK(vkQueueWaitIdle(cfg.queue));}
-static uint64_t s_target_frame_ns = 0; // 0 = unthrottled (swapchain interval locks to 30 Hz without double pacing)
+static uint64_t s_target_frame_ns = 33333333; // The application target starts at 30 FPS.
 static uint64_t s_next_present_ns = 0;
 static uint32_t s_pace_check_counter = 0;
 static int s_logged_target_fps = -1;
 
 static void xbg_refresh_target_fps() {
-    int target_fps = 0; // default 0 (unthrottled software pacing; Vulkan swapchain handles 30Hz VSync)
+    int target_fps = 30; // Explicit marker or environment overrides remain available.
     const char *env_fps = getenv("FFRS_TARGET_FPS");
     if (env_fps && atoi(env_fps) >= 0) target_fps = atoi(env_fps);
     const std::string marker = pipeline_cache_path().substr(0, pipeline_cache_path().find_last_of('/')) + "/gfx-target-fps";
@@ -7475,10 +7479,12 @@ static uint64_t xbg_frame_pace() {
             struct timespec req;
             req.tv_sec = (time_t)(diff / 1000000000ull);
             req.tv_nsec = (long)(diff % 1000000000ull);
-            nanosleep(&req, nullptr);
+            while(nanosleep(&req,&req)<0 && errno==EINTR){}
         }
     }
 
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    now_ns = (uint64_t)ts.tv_sec * 1000000000ull + (uint64_t)ts.tv_nsec;
     s_next_present_ns += s_target_frame_ns;
     // Catch-up clamp: if we fell behind by more than 1 frame interval, reset deadline
     if (now_ns > s_next_present_ns + s_target_frame_ns) {
@@ -7841,8 +7847,8 @@ extern "C" void xbg_submit(int n,const uint64_t *handles){
     gfx_drain();
 }
 extern "C" void xbg_present_texture(const win_t *window,const tex_t *texture){
-    if(mali_render_height && guest_process_apply_snk_render_height)
-        guest_process_apply_snk_render_height(mali_render_height);
+    if(native_render_height && guest_process_apply_snk_render_height)
+        guest_process_apply_snk_render_height(native_render_height);
     if(!gfx_async){xbg_present_texture_now(window,texture);return;}
     // At most two frames queued ahead of the graphics thread.
     {uint64_t t0=uint64_t(std::chrono::steady_clock::now().time_since_epoch().count());std::unique_lock<std::mutex> l(gfx_job_mutex);gfx_idle_cv.wait(l,[]{return gfx_presents_queued.load()<2;});++gfx_presents_queued;gfx_pace_ns+=uint64_t(std::chrono::steady_clock::now().time_since_epoch().count())-t0;}

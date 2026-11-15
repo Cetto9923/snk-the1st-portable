@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T22:36:47.267900+08:00",
-  "phase": "T59宿主页写入跟踪已接入，准备所有设备底座模式适配",
+  "updated_at": "2026-11-15T23:03:09.806072+08:00",
+  "phase": "所有设备底座模式已接通，洛连特市移动发现未覆盖间接参数生产者",
   "coordinator": "Codex",
-  "integration_branch": "task/T59-rg477m-frame-time",
+  "integration_branch": "task/T60-docked-profiles",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -26,7 +26,7 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T59",
+      "task": "T60",
       "paths": [
         "src/",
         "scripts/",
@@ -222,16 +222,17 @@
     {
       "id": "T60",
       "role": "GRAPHICS",
-      "status": "pending",
+      "status": "in_progress",
       "dependencies": [
-        "T59"
+        "T58"
       ],
       "owner": "Codex",
       "objective": "所有机型统一底座模式，按设备能力分档，强机1080p目标并优先稳定30帧",
       "inputs": [
         "用户要求所有设备底座模式",
         "FFRS只读DeviceProfile实现",
-        "Qualcomm与MediaTek官方规格及公开Android原生移植项目"
+        "Qualcomm与MediaTek官方规格及公开Android原生移植项目",
+        "T59宿主缓存检查点22457ba"
       ],
       "outputs": [
         "底座模式与分辨率独立的配置入口",
@@ -256,8 +257,9 @@
         "区分配置覆盖与逐机实测"
       ],
       "recovery": "v1.0.1-preview / a35c458; T59 checkpoint 234841e",
-      "branch": "",
-      "pass_gates": []
+      "branch": "task/T60-docked-profiles",
+      "pass_gates": [],
+      "checkpoint": "22457ba + all-docked T60 / installed APK ab12ac3e"
     }
   ],
   "blockers": [],
@@ -283,12 +285,15 @@
     "大块几何写跟踪没有实际命中。同提交前缀复用、缓存上传及批量刷新均无可确认性能收益，试验改动已撤回，原始patch和日志只保留.local/publication。",
     "新simpleperf城门采样8413个且无丢失，memcpy15.93%、descriptors_build4.03%、nvn_program_info_if_changed2.90%。程序查找桶冲突仍回退全表扫描，正在构建索引链修正。",
     "程序桶链APK a66bd9ed正常读回城门。simpleperf中program_info退出至少1%热点，真实移动601个不同工作帧25.405FPS、p95 48.765ms、最大86.724ms，未优于前一移动窗口。",
-    "宿主几何缓存候选每帧命中约22.3MB，顶点与索引实际复制约0.04MB，城门站立27.4-27.6FPS。同边界退休描述符复用后，临时池注册累计79209次时仅369槽、13活跃池，未按注册次数持续增长。"
+    "宿主几何缓存候选每帧命中约22.3MB，顶点与索引实际复制约0.04MB，城门站立27.4-27.6FPS。同边界退休描述符复用后，临时池注册累计79209次时仅369槽、13活跃池，未按注册次数持续增长。",
+    "T60源码将底座模式与内部渲染分辨率分开。RG新包ab12ac3e真实日志operation_mode1、native render540 selector2、target_fps30，保存save004洛连特市22:44并重启读回。",
+    "T60图形69项68通过1私有fixture跳过，运行时9通过，设备环境与底座/限帧重点5项通过，Java分档合约通过。",
+    "洛连特市底座模式600帧真实移动601次queue回调且601个不同工作帧，11.670685FPS，p95 104.982ms，最大132.375ms，超过100ms70个。每帧why5 GPU读回一次，已定位未有模板证明的342eaea42136f6fc生产1280字节索引间接参数。"
   ],
   "unverified": [
-    "RG477M稳定30帧尚未达成。最新程序桶链600帧真实移动25.405FPS，p95 48.765ms。公开版仍保留a35c458无延迟事件默认。",
-    "除RG477M外的天玑机型仍待逐机验证，荣耀真机继续暂停。",
-    "新几何缓存仍待600帧真实移动和草叶/天空过图回归。当前已进入城门对白，34-35FPS对白采样不作为移动或稳定30验收。"
+    "RG477M稳定30尚未达到。最新洛连特市真实移动11.671FPS，CPU每帧等待间接参数GPU结果，继续修复。",
+    "高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。",
+    "新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。"
   ],
   "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",

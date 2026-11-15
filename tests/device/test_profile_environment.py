@@ -12,12 +12,12 @@ ROOT = Path(__file__).resolve().parents[2]
 class ProfileEnvironment(unittest.TestCase):
     def test_profile_switch_and_external_override(self):
         source = (ROOT / 'src/android/native/guest_boot_jni.cpp').read_text()
-        signature = 'Java_org_ffrs_diagnostic_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean docked) {'
+        signature = 'Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean tablet) {'
         start = source.index(signature) + len(signature)
         end = source.index('\n}\n', start)
         body = source[start:end]
         fixture = '''#include <cstdlib>\n#include <cstring>\n#include <cstdio>\n'''
-        fixture += 'static void apply(int fps, bool docked) {' + body + '\n}\n'
+        fixture += 'static void apply(int fps, bool tablet) {' + body + '\n}\n'
         fixture += r'''
 static bool eq(const char *name, const char *wanted) {
     const char *value = getenv(name);
@@ -27,14 +27,14 @@ int main(int argc, char **argv) {
     if (argc != 2) return 2;
     if (!strcmp(argv[1], "default")) {
         apply(30, false);
-        if (!eq("FFRS_TARGET_FPS", nullptr) || !eq("FFRS_PROFILE_TABLET", "0") ||
-            !eq("FFRS_PROFILE_OPERATION_MODE", "0")) return 3;
+        if (!eq("FFRS_TARGET_FPS", "30") || !eq("FFRS_PROFILE_TABLET", "0") ||
+            !eq("FFRS_PROFILE_OPERATION_MODE", "1")) return 3;
         apply(60, true);
         if (!eq("FFRS_TARGET_FPS", "60") || !eq("FFRS_PROFILE_TABLET", "1") ||
             !eq("FFRS_PROFILE_OPERATION_MODE", "1")) return 4;
         apply(30, false);
-        if (!eq("FFRS_TARGET_FPS", nullptr) || !eq("FFRS_PROFILE_TABLET", "0") ||
-            !eq("FFRS_PROFILE_OPERATION_MODE", "0")) return 5;
+        if (!eq("FFRS_TARGET_FPS", "30") || !eq("FFRS_PROFILE_TABLET", "0") ||
+            !eq("FFRS_PROFILE_OPERATION_MODE", "1")) return 5;
     } else if (!strcmp(argv[1], "external")) {
         apply(60, true);
         if (!eq("FFRS_TARGET_FPS", "40")) return 6;

@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-15T22:36:47.267900+08:00
-阶段：T59宿主页写入跟踪已接入，准备所有设备底座模式适配
+状态事件时间：2026-11-15T23:03:09.806072+08:00
+阶段：所有设备底座模式已接通，洛连特市移动发现未覆盖间接参数生产者
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -17,11 +17,11 @@
 | T07 | RESOURCE | passed | Antigravity | T00 | 无额外门禁 | work/snk-the1st-honor-gtpro |
 | T58 | RELEASE_ANDROID | passed | Codex | 无 | 无额外门禁 | task/T58-community-release |
 | T59 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T59-rg477m-frame-time |
-| T60 | GRAPHICS | pending | Codex | T59 | 无额外门禁 | 未创建 |
+| T60 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T60-docked-profiles |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T59", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T60", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -51,11 +51,14 @@
 - 新simpleperf城门采样8413个且无丢失，memcpy15.93%、descriptors_build4.03%、nvn_program_info_if_changed2.90%。程序查找桶冲突仍回退全表扫描，正在构建索引链修正。
 - 程序桶链APK a66bd9ed正常读回城门。simpleperf中program_info退出至少1%热点，真实移动601个不同工作帧25.405FPS、p95 48.765ms、最大86.724ms，未优于前一移动窗口。
 - 宿主几何缓存候选每帧命中约22.3MB，顶点与索引实际复制约0.04MB，城门站立27.4-27.6FPS。同边界退休描述符复用后，临时池注册累计79209次时仅369槽、13活跃池，未按注册次数持续增长。
+- T60源码将底座模式与内部渲染分辨率分开。RG新包ab12ac3e真实日志operation_mode1、native render540 selector2、target_fps30，保存save004洛连特市22:44并重启读回。
+- T60图形69项68通过1私有fixture跳过，运行时9通过，设备环境与底座/限帧重点5项通过，Java分档合约通过。
+- 洛连特市底座模式600帧真实移动601次queue回调且601个不同工作帧，11.670685FPS，p95 104.982ms，最大132.375ms，超过100ms70个。每帧why5 GPU读回一次，已定位未有模板证明的342eaea42136f6fc生产1280字节索引间接参数。
 
 ## 未验证
 
-- RG477M稳定30帧尚未达成。最新程序桶链600帧真实移动25.405FPS，p95 48.765ms。公开版仍保留a35c458无延迟事件默认。
-- 除RG477M外的天玑机型仍待逐机验证，荣耀真机继续暂停。
-- 新几何缓存仍待600帧真实移动和草叶/天空过图回归。当前已进入城门对白，34-35FPS对白采样不作为移动或稳定30验收。
+- RG477M稳定30尚未达到。最新洛连特市真实移动11.671FPS，CPU每帧等待间接参数GPU结果，继续修复。
+- 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
+- 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
 
 具体恢复命令与未完成修改见 HANDOFF.md。

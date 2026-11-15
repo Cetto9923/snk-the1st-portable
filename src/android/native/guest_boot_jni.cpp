@@ -121,26 +121,10 @@ void* GuestThreadMain(void* opaque) {
         size_t slash = path.find_last_of('/');
         if (slash == std::string::npos) return nullptr;
         path.resize(slash);
-        // Each APK owns its port configuration. Do not inherit the main
-        // package's docked profile when this runtime runs in an isolated APK.
-        // RG477M's fixed handheld profile is the 720p baseline; this is not
-        // the Android CPU/GPU game-mode switch and does not change game time.
-        const std::string operation_marker = path + "/oe-operation-mode";
-        const char *profile_mode = getenv("FFRS_PROFILE_OPERATION_MODE");
-        int operation_mode = profile_mode && profile_mode[0] == '1' ? 1 : 0;
-        const char *operation_source = operation_mode ? "profile-docked" : "default-handheld";
-        FILE *operation_file = fopen(operation_marker.c_str(), "rb");
-        if (operation_file) {
-            int value = fgetc(operation_file);
-            fclose(operation_file);
-            if (value == '0' || value == '1') {
-                operation_mode = value - '0';
-                operation_source = "app-marker";
-            } else fprintf(stderr, "[port] invalid operation-mode marker; using handheld\n");
-        }
-        setenv("FFRS_OPERATION_MODE", operation_mode ? "1" : "0", 1);
-        fprintf(stderr, "[port] operation_mode=%d source=%s marker=%s\n",
-                operation_mode, operation_source, operation_marker.c_str());
+        // All device tiers use the requested docked game mode. Internal
+        // render resolution is selected independently by the device profile.
+        setenv("FFRS_OPERATION_MODE", "1", 1);
+        fprintf(stderr, "[port] operation_mode=1 source=all-device-docked\n");
         const std::string pointer_marker = path + "/hle-original-pointer-tests";
         FILE *pointer_file = fopen(pointer_marker.c_str(), "rb");
         char platform[PROP_VALUE_MAX] = {};
@@ -373,7 +357,7 @@ static jlong StartGuest(JNIEnv* env,
 // Preserve the existing ABI for all frozen APKs. Managed installs supply a
 // stable app-owned save path independently of the replaceable data version.
 extern "C" JNIEXPORT void JNICALL
-Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean docked) {
+Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean tablet) {
     // Preserve an external override; otherwise refresh the profile default on
     // every activity start, including a switch back to the handheld preset.
     static bool observed_target = false;
@@ -383,11 +367,18 @@ Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint f
         observed_target = true;
     }
     if (!external_target) {
-        if (docked && fps == 60) setenv("FFRS_TARGET_FPS", "60", 1);
+        if (fps == 30) setenv("FFRS_TARGET_FPS", "30", 1);
+        else if (fps == 60) setenv("FFRS_TARGET_FPS", "60", 1);
         else unsetenv("FFRS_TARGET_FPS");
     }
-    setenv("FFRS_PROFILE_OPERATION_MODE", docked ? "1" : "0", 1);
-    setenv("FFRS_PROFILE_TABLET", docked ? "1" : "0", 1);
+    setenv("FFRS_PROFILE_OPERATION_MODE", "1", 1);
+    setenv("FFRS_PROFILE_TABLET", tablet ? "1" : "0", 1);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_snk_the1st_GameWindowNative_setProfileRenderHeight(JNIEnv*, jclass, jint height) {
+    const char *value = height == 540 ? "540" : height == 720 ? "720" : "0";
+    setenv("FFRS_PROFILE_RENDER_HEIGHT", value, 1);
 }
 
 extern "C" JNIEXPORT jlong JNICALL

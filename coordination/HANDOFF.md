@@ -636,3 +636,18 @@
 - 已只读核对FFRS的DeviceProfile.java，它用分档连接operation mode与目标帧率。本项目当前JNI只把tablet_sd8s当docked，且所有Mali统一540，未满足用户新增要求，须改为底座模式与内部渲染分辨率分别配置。FFRS_PROFILE_TABLET还控制荣耀特有路径，不能直接把它对所有手机置1。
 - 原始main NSO build仍4f4fd1aed39eb96a649aba489ad3767d，rodata表main+61901c有640x360、800x450、960x540、1280x720、1440x810、1600x900、1920x1080、2560x1440、2880x1620、3840x2160。1080对应selector6。当前运行时基准1600x900，1080入口尚须验证附件、viewport与UV一起更新，不能只改变最终surface尺寸就声称原生1080。
 - 公开参考已查官方Qualcomm Snapdragon 8 Elite Gen5、MediaTek Dimensity9500规格及RogelioLB/nxnative-android、shenmintao/nxnative-android。后者明确Mali仍在调查，其他项目帧率不迁移为本项目验收。任天堂官方确认第一代Switch底座最高1920x1080/60Hz输出，具体游戏内部渲染率需实测。
+
+## T60 全设备底座模式检查点与城内同步热点
+
+- 现分支task/T60-docked-profiles，基于T59检查点22457ba。用户最终明确“要求都是底座模式”，先正常画面与稳定30，1080p/60后续分别验证。T60卡启动依赖为已完成T58，T59整体帧率目标仍未完成。
+- 新APK启动固定FFRS_OPERATION_MODE1，旧oe-operation-mode0文件与intent不再改变APK的底座模式。HLE只读APK提供的环境配置，移除FFRS包硬编码路径。独立HLE诊断保留显式环境模式0/1。FFRS_PROFILE_TABLET继续只标记荣耀平板专用路径，所有设备底座模式没有把手机误标为荣耀平板。
+- 分档新增SM8xxx/旗舰Snapdragon名称、MT69xx/Dimensity9xxx系列，目标1080/30，低屏幕手机720/30，RG477M540/30，未知与较低芯片720/30。物理屏幕短边参与手机档位。nativeRenderHeight0保留原游戏底座尺寸，高端设备真实1080场景尚未验收。不要把targetShortEdge1080或界面1920x1080当作实际3D1080证明。
+- setProfileRenderHeight独立传递540/720/原生尺寸。原mali_render_height改名native_render_height，通用环境可作用于所有GPU，旧gfx-mali-render-height诊断标记仍只作用于ARM。荣耀默认原生入口不增加强制低分辨率。新包默认软件限帧30，显式诊断marker/env覆盖保留。
+- 修正xbg_frame_pace原来睡眠后没有重新读时钟、耗时恒0的统计错误。nanosleep被信号打断时继续等待剩余时长。真实函数组件覆盖首次期限、打断重试、实际等待时长、严重迟到重置和0不限帧覆盖。未改游戏tick、动画/物理/音频时间。
+- 构建build-docked-paced.log退出0，安装APK ab12ac3ee6c3cdb7d8e4be9ebe42d15d346abd1e42a3238b59459dcd9d8716c5，rg-all-docked-install.log成功。之后仅将JNI形参名docked改为tablet，函数ABI和机器行为不变，下一构建重新记录SHA。完整graphics69项68通过1私有fixture跳过，runtime9通过，重点设备环境/底座启动/限帧5项与Java分档合约通过。
+- 一次对整个tests/device用unittest discover误收4个需要--classes/--elf等参数的独立CLI脚本，出现4个导入参数错误。还发现原限帧门禁期待缺省30、实现却为0，已恢复缺省30并通过原断言。该混合目录不能报全绿，独立CLI门禁本轮未按其专用参数重跑。没有删除或放松断言。
+- 已正常新建save004洛连特市，界面Playtime22:44，时间14:46:34。原槽保留，device-backup/saves-town-slot004.tar备份。新包Continue确认同存档并正常读回。rg-all-docked-current-boot.log确认operation_mode1、GetOperationMode1、native540/selector2、target_fps30。标题30FPS仅为限帧入口核对。
+- PID32341城内站立约26.61FPS。无录屏、事先声明600帧真实左右移动，all-docked-motion-plan/actions/csv/metrics/run.log保留。601成功queue回调、601不同工作帧、重复0/失败0，耗时51.410862695s，11.670685FPS，p50 84.324308ms、p95 104.982153ms、p99 113.460692ms、max132.375385ms，超过100ms70个，无按帧时间删行。该窗口较旧城门移动更差，场景及模式不同，未作严格单变量归因。
+- 当前慢点每帧why5同步一次，GPU约47ms/submitCPU约66ms，dispatch间接15/15均在GPU且CPU fallback0，问题来自索引间接绘制回退。6秒probe3诊断已恢复0，日志rg-town-indirect-sync-diagnostic.log。具体为op26/a.ind20B，最新GPU写回1280B，writer342eaea42136f6fc，vs b8dee80fcc1d969e、fs066dad9ed3341f65，proof0/rows0，注册索引地址可用空间约1.5GB，不能盲目整段拷贝或删除范围门禁。原始无诊断窗口也有每帧why5一次，probe3数据只作定位。
+- 未覆盖的compute342eaea42136f6fc已从私有XGS提取到town-indirect-342.spv并spirv-val Vulkan1.1退出0，反汇编town-indirect-342.spvasm。LocalSize32，常量绑定41/47/53/59，存储绑定11/17/23/29/35。下一步分析它写入20字节索引绘制参数的静态字段，扩展已有indirect_template_batch模板证明与GPU常驻路径，保留输入范围和在途副本生命周期校验。
+- 已把当前低帧率镜头位置正常新建save005，23:00时设备目录确认存在，备份device-backup/saves-town-slow-slot005.tar。下一次重启可Continue该点。当前设备仅RG477M01445122，FFRS进程不存在。公开Release仍a35c458的1.0.1-preview，新模式候选尚未发布。稳定30与全机型实测仍未完成，目标继续active。

@@ -819,7 +819,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         getWindowManager().getDefaultDisplay().getRealMetrics(metrics);
         smallestWidthDp = DeviceProfile.formFactorWidthDp(metrics.widthPixels, metrics.heightPixels,
                 android.util.DisplayMetrics.DENSITY_DEVICE_STABLE, smallestWidthDp);
-        DeviceProfile profile = DeviceProfile.select(soc, Build.MODEL, smallestWidthDp, override);
+        DeviceProfile profile = DeviceProfile.select(soc, Build.MODEL, smallestWidthDp,
+                Math.min(metrics.widthPixels, metrics.heightPixels), override);
         Display display = getWindowManager().getDefaultDisplay();
         Display.Mode mode = display == null ? null : display.getMode();
         Log.i(TAG, "device_profile id=" + profile.id + " soc=" + soc
@@ -829,7 +830,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 + " target_fps=" + profile.targetFps
                 + " display_short_edge=" + (mode == null ? 0 : Math.min(mode.getPhysicalWidth(), mode.getPhysicalHeight()))
                 + " display_hz=" + (mode == null ? 0 : mode.getRefreshRate())
-                + " gpu=see_vulkan_device_log operation_mode=" + (profile.targetShortEdge >= 1080 ? "docked" : "handheld") + "");
+                + " gpu=see_vulkan_device_log operation_mode=docked");
         return profile;
     }
 
@@ -1465,19 +1466,9 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
                 && dataInstaller.root.getAbsolutePath().equals(game_dir);
         File files = managed ? dataInstaller.runtimeRoot : getExternalFilesDir(null);
         String saveRoot = managed ? new File(getFilesDir(), "saves").getAbsolutePath() : null;
-        String op_mode = getIntent() == null ? null : getIntent().getStringExtra("operation_mode");
-        if (op_mode != null && !op_mode.isEmpty() && files != null) {
-            try {
-                java.io.FileOutputStream fos = new java.io.FileOutputStream(new File(files, "oe-operation-mode"));
-                fos.write(op_mode.getBytes());
-                fos.close();
-                Log.i(TAG, "operation_mode configured from intent: " + op_mode);
-            } catch (Throwable t) {
-                Log.w(TAG, "failed to persist operation_mode: " + t.getMessage());
-            }
-        }
         GameWindowNative.setProfileTargetFps(selectedDeviceProfile.targetFps,
                 selectedDeviceProfile.id.equals("tablet_sd8s"));
+        GameWindowNative.setProfileRenderHeight(selectedDeviceProfile.nativeRenderHeight());
         String log_path = files == null ? null : new File(files, "guest_boot.log").getAbsolutePath();
         Thread guest = new Thread(new GuestBootTask(image, romfs, log_path, saveRoot), "ffrs-guest");
         guest.start();

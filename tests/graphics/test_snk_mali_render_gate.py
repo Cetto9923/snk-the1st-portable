@@ -9,7 +9,7 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 class MaliRenderGateTests(unittest.TestCase):
     def test_marker_is_confined_to_arm_device(self):
         source = (ROOT / 'src/graphics/nvn_vulkan/engine/xbg_game.cpp').read_text()
-        start = source.index('    mali_render_height=0;')
+        start = source.index('    native_render_height=properties.vendorID')
         end = source.index('    VkPhysicalDeviceProperties2 pp', start)
         gate = source[start:end]
         start = source.index('extern "C" void xbg_present_texture(')
@@ -18,11 +18,13 @@ class MaliRenderGateTests(unittest.TestCase):
 #include <cassert>
 #include <cstdio>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <string>
 struct { uint32_t vendorID; } properties;
 static std::string shader_path;
 struct { const char *shader_directory; } cfg;
-static unsigned mali_render_height, calls, requested;
+static unsigned native_render_height, calls, requested;
 extern "C" void guest_process_apply_snk_render_height(unsigned height) { ++calls; requested=height; }
 static void configure() {
 ''' + gate + r'''
@@ -38,16 +40,22 @@ int main(int argc,char **argv) {
         for(uint32_t vendor:{0x13b5u,0x5143u,0x10deu,0u}) {
             properties.vendorID=vendor;calls=0;configure();present_boundary();
             bool enabled=vendor==0x13b5 && (height==540 || height==720);
-            assert(mali_render_height==(enabled?height:0));assert(calls==unsigned(enabled));
+            assert(native_render_height==(enabled?height:0));assert(calls==unsigned(enabled));
             if(enabled)assert(requested==height);
         }
     }
     remove(marker.c_str());
     for(uint32_t vendor:{0x13b5u,0x5143u,0x10deu,0u}) {
         properties.vendorID=vendor;calls=0;configure();present_boundary();
-        assert(mali_render_height==(vendor==0x13b5?540u:0u));
+        assert(native_render_height==(vendor==0x13b5?540u:0u));
         assert(calls==unsigned(vendor==0x13b5));
     }
+    for(const char *height:{"0","540","720","bad"})for(uint32_t vendor:{0x13b5u,0x5143u,0u}) {
+        setenv("FFRS_PROFILE_RENDER_HEIGHT",height,1);properties.vendorID=vendor;configure();
+        unsigned expected=!strcmp(height,"bad")?(vendor==0x13b5?540:0):unsigned(atoi(height));
+        assert(native_render_height==expected);
+    }
+    unsetenv("FFRS_PROFILE_RENDER_HEIGHT");
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
