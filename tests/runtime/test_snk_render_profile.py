@@ -60,6 +60,16 @@ int main(void){
     guest_process_apply_snk_render_height(720);memcpy(&index,config+0x1e8,4);assert(index==2);
     p.snk_render_profile_applied=0;
     guest_process_apply_snk_render_height(720);memcpy(&index,config+0x1e8,4);assert(index==3);
+    p.snk_render_profile_applied=0;
+    memcpy(before,config,sizeof(before));
+    guest_process_apply_snk_render_height(480);
+    assert(!p.snk_render_profile_applied && !memcmp(before,config,sizeof(before)));
+    guest_process_apply_snk_render_height(450);memcpy(&index,config+0x1e8,4);
+    assert(p.snk_render_profile_applied && index==1 && config[0x1f1]==1 && config[0x1f2]==1);
+    for(size_t i=0;i<sizeof(before);i++){
+        if(i>=0x1e8 && i<0x1ec)continue;
+        assert(config[i]==before[i]);
+    }
     free(m.image);
 }
 '''

@@ -691,3 +691,27 @@
 - 移动末尾和随后站立多窗口why4为0，少数加载新对象窗口1/60仍正常保守回退。原持续每2帧一次的padding等待消除，当前站立约27.55-27.90FPS，rg-cull-shadow-idle.log。角色/城墙/天空截图正常，rg-cull-shadow-idle.png同时有两位主角和NPC。移动结束一张图只显示约修亚，后续idle图艾丝蒂尔正常出现，未凭单截图宣称角色丢失或整段动态验收。
 - cull-metadata-shadow-provenance.json记录HEAD8b59ed8 dirty、4个源码/测试文件SHA、APK、原main build与完整运行配置。runtime-tests-cull-metadata-shadow.log另行重跑九项通过。公开版仍a35c458，稳定30尚未达到。
 - 下一步在相同shadow APK上仅将gfx-async-submit由0改1，重启Continue5后确认worker与实际场景，再600帧移动，其他标记保持540/底座1/target30/defer2/vcache1/wtrack0/perf0/probe0。旧async1慢的试验早于这两处读回消除，本次重新验证当前路径。如果更慢，恢复0，不固化无收益开关。
+
+## T62 新位置同点测试与原生分辨率档位
+
+- 467f656已提交推送T61元数据有序索引记录，源码干净。现在分支task/T62-rg477m-30fps，T59/60/61整体稳定30仍未完成。只操作RG477M，荣耀暂停。
+- 用户确认刚才正在玩，并明确“你继续操作”“我换了个地方”。之前async1启动后的画面移动来自用户操作，不能与旧城门按同点归因，也没有硬件漂移结论。随后已获继续操作授权。
+- 在用户新位置露天餐桌旁正常新建save006，截图rg-user-new-save-confirm/result.png确认是新建，Playtime32:36，日期2026/11/15 16:03:31，run-as ls确认save000-006与015均在。之前备份saves-before-user-new-location.tar，保存后saves-user-town-cafe-slot006.tar。缩略图正常，未覆盖旧槽。
+- async1先在该位置退出Save/Camp，事先300帧站立窗口cafe-async1-standing，301不同工作帧23.886959FPS、p95 74.250ms、max81.482ms，无重复/失败。软件PAD隐藏，纯站立。之后独立SurfaceFlinger最后127条短历史126有效不同呈现时间，22.304598FPS、p95 79.407ms。raw rg-cafe-async1-sf-latency.txt及cafe-async1-standing-sf-*，这份短SF历史未宣称等同整个300帧窗口。
+- 已查AOSP FrameTracker.cpp，dumpStats列顺序为desiredPresentTime/actualPresentTime/frameReadyTime，解析第二列，仅排除原生无效0/INT64_MAX，报告重复呈现时间，不过滤长帧。来源https://android.googlesource.com/platform/frameworks/native/+/master/services/surfaceflinger/FrameTracker.cpp 。私有sf-latency-snapshot.py留完整原始历史，适合补充真实显示证据。
+- 已仅将gfx-async-submit恢复0并重启同一461fa7aa APK，rg-cafe-async0-run.log进行中，下一步确认Continue6到餐桌场景，300帧站立同点比较。尚未把早先异步测试判成严格同点失败。
+
+- 同一save006餐桌位置在async0/540下，301不同工作帧30.004489FPS、p95 35.568ms、最大46.437ms，无重复/失败，cafe-async0-standing全套原始记录。随后独立SurfaceFlinger短历史127不同actualPresentTime，30.007004FPS，p95 49.613ms，max49.650ms。这里SF是短呈现样本，不能把它宣称为完整300帧物理长回归。
+- async1同点只有23.887FPS，因此保留async0。当前源码Mali无marker缺省本来就是async0，Adreno默认async1，未引入额外厂商开关。rg-cafe-async0-first.png仍在Continue确认，补A后rg-cafe-async0-loaded.png确实读回32:36的save006，随后才开始测量。
+- 原生450试验只增加HLE selector1与Mali诊断marker450支持，缺省仍540，Java和JNI设备分档尚未改动。原main已知分辨率表selector1为800x450，运行时仍要求精确build、initialized和原1600x900基准。runtime九项通过，新增450仅改selector/480拒绝，原540/720和不匹配build等负例保留。
+- build-native-450-diagnostic.log退出0，APK18854bdfad4dcca31cac757a83ac03f5411e0b77c26cab5fde11acb927cbde90，graphics75项74通过1跳过，原始native450-provenance.json记录源与APK哈希。当前设备依然461fa7aa/540，正在cafe-native540-motion预先600帧基线。完成前不得安装18854或改分辨率marker。之后再marker450+覆盖安装并Continue6进行同点画面与帧时间验证，有收益才固化RG默认。
+
+- Cafe540基线600帧移动完成，cafe-native540-motion全套，601不同工作帧26.726210FPS、p50 34.604ms、p95 51.165ms、p99 56.757ms、max85.126ms，失败0/重复0、超过100ms0。最后独立SF短历史127不同呈现29.314702FPS、p95 49.619ms。末尾短SF处于释放输入后的时段，未当成整个移动窗口。
+- 现已按用户允许477M降低分辨率的方向，将唯一gfx-mali-render-height marker设450并开始安装18854bdfad4dcca31cac757a83ac03f5411e0b77c26cab5fde11acb927cbde90，rg-native450-run.log进行中。async0/defer2/vcache1/wtrack0/target30/全设备底座1。Next先确认Continue6/32:36在餐桌附近及日志height450 selector1，再用现有单帧probe采样viewport800x450，之后再预先声明600帧移动对照。450尚未固化设备默认，也未声称性能收益。
+
+- 18854bdf已成功装机，PID26798，rg-native450-first.png/log确认真实Continue6餐桌位置，日志operation_mode1、native height450/selector1。单次probe1后finally字节0，目录codex-probe-26798，native450-frame-capture-final.txt END3156/events201/bytes66097052。3D group45起viewport800x450，UI group193/197viewport1920x1080，真实分辨率已核，没有只把surface尺寸当内部渲染。
+- 单帧capture对性能有同步影响，未用于FPS。完成后另行预声明600帧窗口cafe-native450-motion，启动当前帧+30，probe0，使用native450-provenance.json核APK18854与源哈希。当前工具session83590正在该移动脚本，完成后会采独立SF短历史、末尾截图和boot.log。必须先等该session并观察指标，再决定是否将450固化477M默认。
+
+- 450候选600帧移动601不同工作帧27.534035FPS、p95 49.790ms、p99 54.422ms、max95.012ms，无失败重复/超过100ms0，cafe-native450-motion全套。末尾SF短历史126不同actualPresentTime29.769FPS、p95 49.633ms、max66.133ms，不是完整移动物理窗口。截图rg-cafe-native450-motion-end.png人物/餐桌/颜色正常。
+- 相对540的26.726FPS只有约3%均值提升，未稳30，未将450固化RG默认。原生450支持保留作已验证诊断档位，Java/JNI分档默认540。现在marker恢复540，覆盖同一18854 APK并重启Continue6，rg-restore540-run.log进行中。不得把当前恢复540前后当新代码性能提升。
+- 下一步读取实际profile定位CPU复制。既有hostdirty.c的find_span有thread-local last_range，每页nvn_dirty_since查询可复用范围查找，可用现有API实现只读storage双副本逐页刷新，无需新增信号处理器或脏页API。复用OwnedIndirectBuffer与Slot.retire.objects，owner.use_count==1证明无在途读者，unchanged副本可多槽只读复用，有写入时只改无读者副本。未实现之前不改变默认。

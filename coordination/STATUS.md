@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-15T23:56:53.775894+08:00
-阶段：T61已消除粒子读回及场景元数据padding等待，测试当前路径异步提交
+状态事件时间：2026-11-16T00:24:02.996307+08:00
+阶段：T62低分辨率未达稳定30，恢复540并准备只读storage逐页缓存
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -19,10 +19,11 @@
 | T59 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T59-rg477m-frame-time |
 | T60 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T60-docked-profiles |
 | T61 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T61-town-indirect-gpu |
+| T62 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T62-rg477m-30fps |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T61", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T62", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -57,10 +58,12 @@
 - 洛连特市底座模式600帧真实移动601次queue回调且601个不同工作帧，11.670685FPS，p95 104.982ms，最大132.375ms，超过100ms70个。每帧why5 GPU读回一次，已定位未有模板证明的342eaea42136f6fc生产1280字节索引间接参数。
 - T61精确342e原模块模板证明装机3fcc2a9c，同save005站立300帧从12.606提高29.561FPS，601帧移动26.580FPS、p95 52.187ms、max82.156ms，失败0和重复0。graphics72项71通过1跳过，runtime9通过，去掉参数边界负控SIGABRT被拒绝。
 - T61有序捕获978a上传索引/flags后，原每两帧padding读回等待消除。shadow APK461fa7aa，600帧真实移动27.641FPS、p95 43.842ms、max79.347ms、601不同工作帧、无失败重复。graphics75项74通过1私有fixture跳过、runtime9通过。
+- T62用户新地点save006正常新建，缩略图正常并完整备份。540p同点站立async1为23.887FPS，async0为30.004FPS，独立SF短呈现历史30.007FPS。540p600帧移动26.726FPS，尚未稳定30。
+- T62原生450入口运行日志selector1/operation_mode1，PID26798单帧capture END3156，3D viewport800x450、UI1920x1080，画面人物/餐桌正常。graphics75项74通过1私有fixture跳过、runtime9通过，正在测600帧移动。
 
 ## 未验证
 
-- RG477M稳定30尚未达到。最新城内移动27.641FPS，周期性GPU参数等待已消除，继续评估当前路径异步提交及剩余帧时间。
+- RG477M移动稳定30仍未达到。540p新位置26.726FPS，450p27.534FPS，450未固化默认，恢复540后继续减少内存复制。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
 - 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
 

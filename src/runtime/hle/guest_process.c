@@ -138,15 +138,21 @@ static _Thread_local guest_os_tls_thread *current_os_thread;
  * viewport, sampling ratios and dependent targets together on the next tick. */
 void guest_process_apply_snk_render_height(unsigned height) {
     guest_process *p = current_process;
-    if (!p || !p->module || p->snk_render_profile_applied ||
-        (height != 540 && height != 720)) return;
+    if (!p || !p->module || p->snk_render_profile_applied) return;
+    uint32_t index;
+    switch (height) {
+        case 450: index = 1; break;
+        case 540: index = 2; break;
+        case 720: index = 3; break;
+        default: return;
+    }
     char build[33];
     nso_build_id(p->module, build);
     if (strcmp(build, "4f4fd1aed39eb96a649aba489ad3767d") ||
         nso_image_size(p->module) < 0x7253d4) return;
     uint8_t *config = (uint8_t *)(uintptr_t)nso_base(p->module) + 0x7251b0;
     if (!(config[0x1f0] & 1)) return;
-    uint32_t base_width, base_height, index = height == 540 ? 2 : 3;
+    uint32_t base_width, base_height;
     memcpy(&base_width, config + 0x1b4, sizeof(base_width));
     memcpy(&base_height, config + 0x1b8, sizeof(base_height));
     if (base_width != 1600 || base_height != 900) return;

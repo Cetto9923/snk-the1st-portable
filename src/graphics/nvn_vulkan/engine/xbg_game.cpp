@@ -7102,6 +7102,7 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
     native_render_height=properties.vendorID==0x13b5?540:0;
     if(const char *height=getenv("FFRS_PROFILE_RENDER_HEIGHT")){
         if(!strcmp(height,"0"))native_render_height=0;
+        else if(!strcmp(height,"450"))native_render_height=450;
         else if(!strcmp(height,"540"))native_render_height=540;
         else if(!strcmp(height,"720"))native_render_height=720;
     }
@@ -7109,7 +7110,7 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
         std::string dir=cfg.shader_directory;size_t cut=dir.find_last_of('/');
         FILE *marker=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mali-render-height").c_str(),"rb");
         unsigned height=0;
-        if(marker){native_render_height=0;if(fscanf(marker,"%u",&height)==1 && (height==540 || height==720))native_render_height=height;fclose(marker);}
+        if(marker){native_render_height=0;if(fscanf(marker,"%u",&height)==1 && (height==450 || height==540 || height==720))native_render_height=height;fclose(marker);}
     }
     VkPhysicalDeviceProperties2 pp{VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2};pp.pNext=&subgroup;vkGetPhysicalDeviceProperties2(cfg.physical,&pp);
     VkPhysicalDeviceFeatures available;vkGetPhysicalDeviceFeatures(cfg.physical,&available);const VkBool32 *want=reinterpret_cast<const VkBool32*>(&cfg.enabled_core),*have=reinterpret_cast<const VkBool32*>(&available);for(size_t i=0;i<sizeof(available)/sizeof(VkBool32);i++)if(want[i]&&!have[i]){if(error&&bytes)snprintf(error,bytes,"Requested enabled feature %zu is unsupported",i);return -1;}
