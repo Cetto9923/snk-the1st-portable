@@ -6604,7 +6604,13 @@ template<class T>T variable_payload(const uint8_t *p,size_t n){T out{};memcpy(&o
 // Graphics thread: retire submitted slots whose fence already signalled (non-blocking) so a game
 // thread blocked on an older fence is released while the next frame is still being translated.
 void poll_retire(){
-    bool any=false;for(auto &s:active_slots())if(s.pending && !s.recording && vkGetFenceStatus(cfg.device,s.fence)==VK_SUCCESS){retire_slot(s);any=true;}
+    bool any=false;
+    for(unsigned k=0;k<slot_count;++k){
+        Slot &s=slots[(slot_index+k)%slot_count];
+        if(!s.pending)continue;
+        if(s.recording || vkGetFenceStatus(cfg.device,s.fence)!=VK_SUCCESS)break;
+        retire_slot(s);any=true;
+    }
     if(any){{std::lock_guard<std::mutex> l(gfx_job_mutex);}gfx_idle_cv.notify_all();}
 }
 void execute(const uint8_t *pc,unsigned depth,uint64_t &budget){
@@ -7396,7 +7402,10 @@ extern "C" int xbg_legacy_wait(uint64_t fence,uint64_t timeout){
     if(completion_path && deadline.expired())return fence<=completed;
     SiteScope site(SITE_LEGACY_WAIT);uint64_t w0=timing_clock();struct Spent{uint64_t w0;~Spent(){legacy_wait_ns+=timing_clock()-w0;}}spent{w0};
     submit_slots(false);auto begin=std::chrono::steady_clock::now();
-    for(auto &slot:active_slots())if(slot.pending){uint64_t remaining=completion_path?deadline.remaining_ns():timeout;
+    for(unsigned k=0;k<slot_count;++k){
+        Slot &slot=slots[(slot_index+k)%slot_count];
+        if(!slot.pending)continue;
+        uint64_t remaining=completion_path?deadline.remaining_ns():timeout;
         if(completion_path && !remaining)return fence<=completed;
         if(!completion_path && timeout!=UINT64_MAX){auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::steady_clock::now()-begin).count();remaining=uint64_t(elapsed)>=timeout?0:timeout-uint64_t(elapsed);}
         bool busy=vkGetFenceStatus(cfg.device,slot.fence)==VK_NOT_READY;uint64_t b0=busy?timing_clock():0;

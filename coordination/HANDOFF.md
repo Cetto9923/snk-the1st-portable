@@ -556,3 +556,12 @@
 - 新构建build-pass-profile-expiry.log退出0，APK SHA9ea1d4a04fc88958ac3209fe932781be481f5af1e16e82a6cf52ba70c46cad34，覆盖安装rg-pass-expiry-install.log退出0。源码尚待检查点提交，公开Release仍a35c458。
 - 下一轮gfx-defer-events1、gfx-event-guard1、wtrack0，无pass-profile，无SPV覆盖。用现有守卫查是否有guest直接读取待完成事件，守卫只作观察，fault后打开页不会强行完成GPU，不能当修复。脚本session81801正常标题/Continue10:35，之后抓evguard exact/other/write PC与LR，若画面闪即保存录像，结束时恢复defer0并移走guard marker。
 - GitHub默认分支work/snk-the1st-honor-gtpro已从cab771a安全快进到发布a35c458，tag和默认源码一致。当前T59实验独立分支，不改已发布APK。
+
+## T59 环形槽写回顺序修复候选
+
+- 事件守卫PID10673城门样本guards1403、exact0、other6/writes6。llvm-addr2line将写入PC/LR定位到nvnEventSignal，本轮未发现guest直接读事件word的证据。守卫marker已移到config-before-defaults-20261115/gfx-event-guard-observed。defer1下rg-evguard-city.png曾缺少金属柱体，rg-no-guard-deferred-city.png墙体/房屋也不稳定，尚未显示验收。
+- 为cpu_access why3增加过限量观察，APK7625b8d87fb74162665891fb541bf59418cd12086606c320172f15a714aaa854，PID15747原始rg-storage-overlap-trace.log未命中部分SSBO的未完成CPU复制。该诊断代码已还原，不据此修复未证实路径。defer1/无守卫/原shader城门约20.2-20.8FPS，仍不稳定30。
+- 代码审计发现poll_retire按active_slots物理0..15顺序退休，而slot_index标识下一录制/最老在途槽。回绕时可先写回新提交，再把旧提交结果写回CPU。defer0的complete_all路径按slot_index顺序，因此配置相关性与此缺陷一致，真机修复效果仍待确认。
+- 修改poll_retire按slot_index起始的环形提交顺序，只退休连续完成前缀，遇到未完成或仍录制的最老槽停止。xbg_legacy_wait最终wait-all回退也改为相同顺序，保留原超时预算。其他退休点已检查，原有oldest_pending与submit_slots(true)本来按提交顺序。
+- 新增提取真实poll_retire函数的ASan/UBSan回归，以2/4/16槽所有回绕点验证写回/完成值递增、未完成首槽阻断、部分前缀退休、录制槽、通知和空轮询。单项通过retirement-order-test.log。完整图形测试进行中，构建build-retirement-order.log退出0。
+- 下一步保存旧defer1视频rg-before-retirement-order.mp4后装新包，marker保持defer1、wtrack0、无guard、无pass-profile、无SPV覆盖，Continue同save00310:35，观察墙/柱/天空与帧时间。显示未过前保持公开Mali默认defer0。
