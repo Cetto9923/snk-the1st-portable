@@ -5845,8 +5845,30 @@ void dispatch(p_dispatch p,uint64_t indirect_address=0){overlay_shadow={};struct
     if(indirect_address){
         need(!(indirect_address&3) && indirect_address+12>=indirect_address,"Invalid indirect dispatch address");
         ++disp_indirect_total;
-        if(current_pending_range(indirect_address,12,4) &&
-            (indirect_dispatch_inputs_resident() || (properties.vendorID==0x13b5 && indirect_dispatch_inputs_resident(true))))
+        const bool can_pin=properties.vendorID==0x13b5 && owned_input_copy_enabled &&
+            !capture.active && !capture.probe && !provenance_file && !pass_prof_enabled && g_ui_moff==0;
+        bool current_args=current_pending_range(indirect_address,12,4);
+        if(can_pin && !current_args){
+            uint64_t parent_address=0,parent_bytes=0;
+            for(auto w=pending_writebacks.rbegin();w!=pending_writebacks.rend();++w){
+                if(!xbg_wb_overlaps(indirect_address,12,w->addr,w->bytes))continue;
+                if(indirect_address>=w->addr && w->bytes>=12 && indirect_address-w->addr<=w->bytes-12){
+                    parent_address=w->addr;parent_bytes=w->bytes;
+                }
+                break;
+            }
+            if(parent_bytes){
+                // Starting a slot may retire writebacks, so retain only their range.
+                recording_slot();
+                // Preserve the whole parameter table for subsequent dispatch offsets.
+                if(!indirect_dispatch_inputs_resident(true) ||
+                   (!current_pending_range(indirect_address,12,4) && !pin_pending_input(parent_address,parent_bytes)))
+                    resolve_pending();
+                current_args=current_pending_range(indirect_address,12,4);
+            }
+        }
+        if(current_args &&
+            (indirect_dispatch_inputs_resident() || (can_pin && indirect_dispatch_inputs_resident(true))))
             gpu_indirect=pending_view(indirect_address,12,4,indirect);
         if(!gpu_indirect){cpu_access(indirect_address,12,5);uint32_t xyz[3];memcpy(xyz,reinterpret_cast<void*>(indirect_address),12);p.x=int32_t(xyz[0]);p.y=int32_t(xyz[1]);p.z=int32_t(xyz[2]);p.ind=0;
             // #region agent log

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T07:13:20.389306+08:00",
+  "updated_at": "2026-11-16T07:22:38.151549+08:00",
   "phase": "T71提交阶段长帧与上传既有计数诊断",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
@@ -664,7 +664,7 @@
         "真实场景减少长帧且无显示/速度回归"
       ],
       "recovery": "a319195 / apk-compute-input-copy-candidate.apk(d19bad24) / 450/4槽/cache1/texdirty1/async0/FIFO/timing1 / save008",
-      "checkpoint": "94714083 / BC CPU scratch <=32MiB per thread / graphics87:86 passed,1 private skipped / runtime9 passed / 4 negative assertions / save008 2400 intervals work29.869 SF29.872 p95=33.224ms max99.277ms / HOME 3 cycles same PID24410 draw/present advanced result0"
+      "checkpoint": "a756c3a + args-table / a0f6da07 / graphics87:86 passed,1 skipped / runtime9 / 7 negative controls / save008 2400 work29.865 max63.634ms SF29.865 p95=33.246ms max99.268ms / HOME3 same PID31369 / flower next"
     }
   ],
   "blockers": [],

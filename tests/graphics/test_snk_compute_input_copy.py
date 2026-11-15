@@ -25,7 +25,7 @@ class ComputeInputCopyTests(unittest.TestCase):
             'bool indirect_dispatch_inputs_resident(bool pin){',
             'bool pin_indexed_input(const IndexedInputFailure &input){',
         ))
-        start = source.index('        if(current_pending_range(indirect_address,12,4) &&')
+        start = source.index('        const bool can_pin=')
         end = source.index('gpu_indirect=pending_view(indirect_address,12,4,indirect);', start)
         selection = source[start:end + len('gpu_indirect=pending_view(indirect_address,12,4,indirect);')]
         program = r'''
@@ -44,9 +44,10 @@ struct Buffer { uint64_t buffer=0,offset=0,size=0; };
 struct Owner { Buffer view; };
 static unsigned copies;
 static Buffer copied_source;
+static std::vector<size_t> copied_sizes;
 struct OwnedInputCopy {
     std::shared_ptr<Owner> owned=std::make_shared<Owner>();
-    OwnedInputCopy(const Buffer &source,size_t bytes){++copies;copied_source=source;owned->view={99,0,bytes};}
+    OwnedInputCopy(const Buffer &source,size_t bytes){++copies;copied_sizes.push_back(bytes);copied_source=source;owned->view={99,0,bytes};}
 };
 struct Retire { std::vector<std::shared_ptr<void>> objects; };
 struct Slot { bool recording=false,pending=false;std::vector<std::shared_ptr<OwnedInputCopy>> copy_readers;Retire retire; };
@@ -68,20 +69,37 @@ static struct {unsigned submits=0;}perf;static unsigned submit_by[1];
 static bool xbg_wb_overlaps(uint64_t a,uint64_t n,uint64_t b,uint64_t m){return a<b+m && b<a+n;}
 static uint64_t uniform_range(uint64_t bytes){return (bytes+255)&~uint64_t(255);}
 static uint64_t pool_address,pool_bytes;
-static void *resolve(uint64_t address,size_t *available){*available=pool_bytes;return address==pool_address?reinterpret_cast<void *>(address):nullptr;}
+static void *resolve(uint64_t address,size_t *available){
+    if(address>=0x1000 && address<0x2000){*available=0x2000-address;return reinterpret_cast<void *>(address);}
+    *available=pool_bytes;return address==pool_address?reinterpret_cast<void *>(address):nullptr;
+}
 static void *(*nvn_memory_pool_resolve_address)(uint64_t,size_t *)=resolve;
 static void snapshot_invalidate(uint64_t,uint64_t){}
 static uint64_t indirect_trace_record(const char*,const char*,uint64_t,uint64_t,const Buffer&,uint64_t,uint64_t){return 17;}
 template<class... T>static void xbg_logf(const char*,T...){}
 struct IndexedInputFailure {const char *why;unsigned stage,binding;uint64_t address,bytes;};
+static unsigned begins,resolves;static bool retire_args_on_begin;
+static Slot &recording_slot(){
+    auto &slot=slots[slot_index];
+    if(!slot.recording){
+        ++begins;slot.recording=true;
+        if(retire_args_on_begin){
+            pending_writebacks.erase(std::remove_if(pending_writebacks.begin(),pending_writebacks.end(),
+                [](const Pending &w){return w.addr==0x1100;}),pending_writebacks.end());
+            pending_writebacks.shrink_to_fit();
+        }
+    }
+    return slot;
+}
+static void resolve_pending(){++resolves;pending_writebacks.clear();pending_reports.clear();}
 bool indirect_dispatch_inputs_resident(bool pin=false);
 ''' + functions + r'''
 static bool picked;
 static bool pending_view(uint64_t address,uint64_t bytes,uint64_t align,Buffer &out){
     assert(current_pending_range(address,bytes,align));out={7,256,12};return true;
 }
-static void select_dispatch(){
-    uint64_t indirect_address=0x1100;Buffer indirect;bool gpu_indirect=false;
+static void select_dispatch(uint64_t indirect_address=0x1100){
+    Buffer indirect;bool gpu_indirect=false;
 ''' + selection + r'''
     picked=gpu_indirect;
 }
@@ -90,7 +108,8 @@ static void reset(bool written=false){
     pending_writebacks.clear();pending_reports.clear();for(auto &s:slots)s=Slot{};
     state={};capture={};provenance_file=nullptr;pass_prof_enabled=false;g_ui_moff=0;
     properties.vendorID=0x13b5;owned_input_copy_enabled=true;nvn_memory_pool_resolve_address=resolve;
-    copies=0;perf.submits=0;submit_by[0]=0;slot_index=1;slots[1].recording=true;slots[0].pending=true;
+    copies=0;copied_sizes.clear();begins=0;resolves=0;retire_args_on_begin=false;
+    perf.submits=0;submit_by[0]=0;slot_index=1;slots[1].recording=true;slots[0].pending=true;
     shader.bindings={{11,2,2,0},{17,2,2,1},{23,2,2,2}};shader.storage_writes.clear();if(written)shader.storage_writes.insert(17);
     state.shader[5]=&shader;state.shader[0]=&shader;
     state.sb[5][0]={0x1000,16};state.sb[5][1]={0x1000000,262160};state.sb[5][2]={0x2000000,256};
@@ -98,6 +117,10 @@ static void reset(bool written=false){
     pending_writebacks.push_back({0x1000,16,{1,0,16},&slots[1],{},{}});
     pending_writebacks.push_back({0x1100,3040,{2,256,3040},&slots[1],{},{}});
     pending_writebacks.push_back({pool_address,pool_bytes,{3,11796992,pool_bytes},&slots[0],{},{}});
+}
+static void reset_old_args(){
+    reset();slots[1].recording=false;
+    pending_writebacks[0].slot=&slots[0];pending_writebacks[1].slot=&slots[0];
 }
 int main(){
     for(bool written:{false,true}){
@@ -151,6 +174,39 @@ int main(){
     assert(!pin_indexed_input({"texel",1,17,pool_address,pool_bytes}));
     assert(!pin_indexed_input({"texel",0,65,pool_address,pool_bytes}));
     assert(pin_indexed_input({"texel",0,17,pool_address,pool_bytes}) && copies==1);
+    // Real slow-frame shape: args+132, counter and 262160-byte data all from an older slot.
+    reset_old_args();select_dispatch(0x1100+132);
+    assert(picked && begins==1 && copies==3 && resolves==0);
+    assert((copied_sizes==std::vector<size_t>{16,262160,3040}));
+    assert(slots[0].copy_readers.size()==3 && slots[1].retire.objects.size()==3);
+    assert(current_pending_range(0x1100,3040,4));
+    select_dispatch(0x1100+60);assert(picked && copies==3 && begins==1 && resolves==0);
+    // Clean CPU parameters do not create a recording slot or any GPU copy.
+    reset_old_args();pending_writebacks.erase(pending_writebacks.begin()+1);
+    select_dispatch();assert(!picked && begins==0 && copies==0 && resolves==0);
+    for(unsigned gate=0;gate<7;++gate){
+        reset_old_args();
+        if(gate==0)properties.vendorID=0x5143;if(gate==1)owned_input_copy_enabled=false;
+        if(gate==2)capture.active=true;if(gate==3)capture.probe=true;
+        if(gate==4)provenance_file=&shader;if(gate==5)pass_prof_enabled=true;if(gate==6)g_ui_moff=1;
+        select_dispatch();assert(!picked && begins==0 && copies==0 && resolves==0);
+    }
+    // A partially covering newest writeback must keep the original CPU fallback.
+    reset_old_args();pending_writebacks.push_back({0x1104,8,{4,0,8},&slots[0],{},{}});
+    select_dispatch();assert(!picked && begins==0 && copies==0 && resolves==0);
+    // Once slot acquisition changes writebacks, failed preparation explicitly synchronizes.
+    reset_old_args();retire_args_on_begin=true;select_dispatch();
+    assert(!picked && begins==1 && copies==2 && resolves==1);
+    reset_old_args();shader.bindings.push_back({30,3,7,0});select_dispatch();
+    assert(!picked && begins==1 && copies==0 && resolves==1);
+    reset_old_args();shader.bindings={{17,1,1,0}};state.ub[5][0]={0x1000,16};select_dispatch();
+    assert(!picked && begins==1 && copies==0 && resolves==1);
+    reset_old_args();pending_reports.push_back({0x1100});select_dispatch();
+    assert(!picked && begins==1 && copies==2 && resolves==1);
+    reset_old_args();nvn_memory_pool_resolve_address=nullptr;select_dispatch();
+    assert(!picked && begins==1 && copies==0 && resolves==1);
+    reset_old_args();pending_writebacks[1].bytes=1048580;select_dispatch();
+    assert(!picked && begins==1 && copies==2 && resolves==1);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

@@ -944,3 +944,12 @@
 - gate-upload-scratch-final-motion-*保存原CSV/输入/连续SF完整历史。底座450/4槽/cache1/texdirty1/async0/FIFO/timing1/PAD可见，摇杆2400间隔2401不同工作帧29.868626FPS/p95 39.365ms/max72.555ms，无失败、重复或工作>100ms。物理29.871523FPS/p95 33.224ms/p99 49.616ms/max99.277ms，无物理>100ms。39批CPU提交均值15.177ms/GPU23.915ms，draw874.651/dispatch34.679。NPC与时序不同，不能把整体FPS小幅变化全归因内存复用，仍未达到长流程稳定30。
 - 诊断7另抓frame15490的why5/op27/12B，shader a0d6a4fbded819b4，参数在3040B父块偏移132B，参数/16B计数/262160B数据均在旧槽3，当前槽0。原T70仅处理参数已经在当前槽的情况，下一步复用原OwnedInputCopy保留完整父参数块与输入，未知/部分覆盖仍回退CPU同步。依据Khronos vkCmdDispatchIndirect与Synchronization Examples核对设备读参数和依赖语义，保留原屏障及双租约。花盆专门窗口、默认配置固化和公开版本更新仍待完成。
 - 947产品包三轮HOME3秒/前台10秒，同PID24410，真实draw/present递增且present_result0。rg-upload-scratch-final-resume-cycles.json、三截图与tail日志保留，末图人物、房屋与花叶可见。两帧呈现余量约66ms仍启用，端到端输入延迟未测。荣耀暂停，公开release未更新。
+
+### T70/T71 完整参数表跨槽保留候选
+
+- a756c3a之后新增Mali限定的参数准备。只有完整覆盖12B参数的待写回块存在、原capture/probe/provenance/profile排除条件通过、owned copy开启时，才尝试取得consumer槽。跨槽复制原storage输入，再保留整个父参数表。取得槽前只保存addr/bytes，避免退休写回后引用失效。准备失败显式resolve_pending，保留原CPU读取完整同步语义。原current-slot与descriptor准备serial断言仍在，GPU继续读取原真实维度。
+- 实际选择与pin/residency函数ASan/UBSan扩展覆盖3040B参数表offset132、16B计数、262160B数据均旧槽的现场。第一次3副本，第二偏移复用整表，CPU-clean/Adreno/捕获等不额外建槽，部分覆盖拒绝，槽获取退休参数/UBO/未知描述符/报告/无pool/过大父块均正确回退。原生产/消费双租约测试保留。7负控均实际断言失败，compute-args-copy-negative-controls.log/json。
+- 图形87项86通过1私有fixture跳过，运行时9项通过，build-compute-args-copy-candidate.log退出0。APK a0f6da07b390f6eb309367d153ef5bb053cb359257a32d60cb3a224b68795a2d，精确ELF、patch与compute-args-copy-candidate-provenance.json保留。覆盖装Continue8首图人物、NPC和城门可见。原日志首次出现16B与3040B owned pending input copy，实际GPU路径已运行。声音日志非零、AAudio_state4/xruns0，仅日志验收。
+- 正在gate-compute-args-copy-motion-*底座450同配置、摇杆2400间隔及连续SF测量。该候选收益、花盆与HOME尚待结果。发布仍为旧公开预览版，荣耀暂停，长流程稳定30总目标继续。
+- a0f6da07同save008移动2400间隔2401不同工作帧29.864560FPS/p95 39.168ms/max63.634ms，失败0/重复0/>100ms0。完整SF物理29.865348FPS/p95 33.246ms/p99 49.611ms/max99.268ms，17个<25/2316个25–42/60个42–58/6个58+。工作最大间隔本次下降，平均/物理最大值基本不变，未宣称整体稳定30。39批CPU提交15.067ms/GPU24.091ms、draw872.341/dispatch34.8。原有限boot窗口出现16B与3040B复制9次以内日志，无op27 CPU同步，只有加载期frame1047/op26旧回退。
+- a0f6da07三轮HOME恢复同PID31369、实际draw与present递增且result0，rg-compute-args-copy-resume-*末图人物/房屋可见。正常System载入列表save008与save007缩略图均显示，正在正常载入save007花盆，以检查此前草叶位置和长移动窗口。恢复包为94714083，整表副本扩展仍在本分支，尚未公开发布。
