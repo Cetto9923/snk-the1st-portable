@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T21:05:13.613795+08:00",
-  "phase": "T59按提交顺序退休环形槽，真机验证延迟提交显示",
+  "updated_at": "2026-11-15T22:00:34.024413+08:00",
+  "phase": "T59程序桶链回归与真实移动复测完成，稳定30未达成",
   "coordinator": "Codex",
   "integration_branch": "task/T59-rg477m-frame-time",
   "baseline": {
@@ -17,7 +17,10 @@
     "rights_id": "01001e90239200000000000000000012",
     "titlekek": "titlekek_11",
     "device": "HONOR ROD2-W69 / SM8635 / Adreno 735 / Android 16",
-    "device_serial": "A42BBB5109000333"
+    "device_serial": "A42BBB5109000333",
+    "active_test_device": "RG477M / MT6897 / Mali-G615 MC6 / Android 14",
+    "active_test_serial": "RG477M01445122",
+    "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
   "active_writers": [
@@ -191,7 +194,7 @@
       "objective": "保持无闪烁显示并提升RG477M实际游戏帧率至稳定30",
       "inputs": [
         "a35c458 release source",
-        "RG477M save002 same scene",
+        "RG477M save003 艾里兹街道10:35",
         "simpleperf CPU samples"
       ],
       "outputs": [
@@ -209,7 +212,8 @@
         "preserve graphics audio and normal game time",
         "actual motion stable30 on RG477M"
       ],
-      "recovery": "release v1.0.1-preview and device config-before-defaults-20261115"
+      "recovery": "release v1.0.1-preview and device config-before-defaults-20261115",
+      "checkpoint": "68b7795 + validated program bucket lookup / APK a66bd9ed"
     }
   ],
   "blockers": [],
@@ -230,12 +234,16 @@
     "缺调试marker入口正常。原游戏新建save002艾里兹街道9:08，重启覆盖安装后Continue读回同位置和两个人物，缩略图正确。",
     "T59轮询缓存候选通过graphics65项64通过1私有输入跳过。载入户外与城门人物正常。先后采样含移动/剧情状态变化，不作为严格同点FPS提升证据。",
     "T59图形66项65通过1私有fixture跳过，运行时9项通过。有限阶段采集到期后恢复GPU快路径的修正已构建装机。",
-    "T59实际poll_retire回归覆盖2/4/16槽全部回绕点通过，旧物理顺序循环负控被断言拒绝。完整图形67项66通过1私有fixture跳过。"
+    "T59实际poll_retire回归覆盖2/4/16槽全部回绕点通过，旧物理顺序循环负控被断言拒绝。完整图形67项66通过1私有fixture跳过。",
+    "T59槽位代际写跟踪回归通过。批末事件模式2城门600帧真实移动窗口25.588FPS，p95 48.658ms，601个不同工作帧，失败0和重复0，尚未稳定30。",
+    "大块几何写跟踪没有实际命中。同提交前缀复用、缓存上传及批量刷新均无可确认性能收益，试验改动已撤回，原始patch和日志只保留.local/publication。",
+    "新simpleperf城门采样8413个且无丢失，memcpy15.93%、descriptors_build4.03%、nvn_program_info_if_changed2.90%。程序查找桶冲突仍回退全表扫描，正在构建索引链修正。",
+    "程序桶链APK a66bd9ed正常读回城门。simpleperf中program_info退出至少1%热点，真实移动601个不同工作帧25.405FPS、p95 48.765ms、最大86.724ms，未优于前一移动窗口。"
   ],
   "unverified": [
-    "RG477M稳定30帧尚未达成。组合优化曾站立29.6帧，实际移动26.38帧且会天空闪烁，已弃用事件延迟。无闪烁配置城镇约10至20帧。",
+    "RG477M稳定30帧尚未达成。最新程序桶链600帧真实移动25.405FPS，p95 48.765ms。公开版仍保留a35c458无延迟事件默认。",
     "除RG477M外的天玑机型仍待逐机验证，荣耀真机继续暂停。",
-    "当前defer-events1加event-guard诊断可能复现天空闪烁，结束须恢复defer0与关闭守卫。尚未达到稳定30。"
+    "批末事件模式2尚待更长时间和草叶区域显示回归。完整vertex/index写入跟踪尚未接入，保持vcache0。"
   ],
   "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",

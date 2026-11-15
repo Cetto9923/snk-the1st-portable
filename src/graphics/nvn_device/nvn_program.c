@@ -73,6 +73,7 @@ typedef struct {
     uint64_t serial;
     char debug_label[64];
     int in_use;
+    size_t lookup_next;
 } nvn_program_state;
 
 static pthread_mutex_t s_program_lock = PTHREAD_MUTEX_INITIALIZER;
@@ -80,8 +81,8 @@ static pthread_mutex_t s_program_lock = PTHREAD_MUTEX_INITIALIZER;
 static uint64_t s_program_serial;
 static nvn_object_table s_programs = { NULL, 0, 0, sizeof(nvn_program_state) };
 static nvn_program_stats s_stats;
-/* Store indices because growing the object table can relocate its block.
- * Every hit still checks the live object under s_program_lock. */
+/* Bucket chains store indices because table growth can relocate its block.
+ * All lookups and chain updates hold s_program_lock. */
 static size_t s_program_lookup[256];
 
 static nvn_program_state *program_find(void *program, int create) {
@@ -90,30 +91,40 @@ static nvn_program_state *program_find(void *program, int create) {
     if (!program) return NULL;
     uintptr_t key = (uintptr_t)program;
     size_t bucket = ((key >> 4) ^ (key >> 13)) & 255u;
-    size_t cached_index = s_program_lookup[bucket];
-    nvn_program_state *cached = cached_index ?
-        (nvn_program_state *)nvn_object_table_at(&s_programs, cached_index - 1u) : NULL;
-    if (cached && cached->in_use && cached->program == program) return cached;
-    for (i = 0; i < s_programs.count; i++) {
-        nvn_program_state *entry = (nvn_program_state *)nvn_object_table_at(&s_programs, i);
-        if (!entry) continue;
-        if (entry->in_use) {
-            if (entry->program == program) {
-                s_program_lookup[bucket] = i + 1u;
-                return entry;
-            }
-        } else if (!free_slot) {
-            free_slot = entry;
-        }
+    if (!s_programs.count) memset(s_program_lookup, 0, sizeof(s_program_lookup));
+    for (size_t index = s_program_lookup[bucket]; index;) {
+        nvn_program_state *entry = nvn_object_table_at(&s_programs, index - 1u);
+        if (!entry) return NULL;
+        if (entry->in_use && entry->program == program) return entry;
+        index = entry->lookup_next;
     }
     if (!create) return NULL;
-    if (!free_slot) {
+    for (i = 0; i < s_programs.count; i++) {
+        nvn_program_state *entry = nvn_object_table_at(&s_programs, i);
+        if (!entry->in_use) {
+            free_slot = entry;
+            break;
+        }
+    }
+    if (free_slot) {
+        /* Remove the old address before reusing its slot in another bucket. */
+        uintptr_t old_key = (uintptr_t)free_slot->program;
+        size_t old_bucket = ((old_key >> 4) ^ (old_key >> 13)) & 255u;
+        size_t index = i + 1u;
+        size_t *link = &s_program_lookup[old_bucket];
+        while (*link && *link != index) {
+            nvn_program_state *entry = nvn_object_table_at(&s_programs, *link - 1u);
+            link = &entry->lookup_next;
+        }
+        if (*link) *link = free_slot->lookup_next;
+    } else {
         free_slot = (nvn_program_state *)nvn_object_table_new_entry(&s_programs, NVN_PROGRAM_MAX_OBJECTS);
         if (!free_slot) return NULL;
     }
     memset(free_slot, 0, sizeof(*free_slot));
     free_slot->program = program;
     free_slot->in_use = 1;
+    free_slot->lookup_next = s_program_lookup[bucket];
     s_program_lookup[bucket] = ((char *)free_slot - (char *)s_programs.slots) /
         sizeof(*free_slot) + 1u;
     return free_slot;

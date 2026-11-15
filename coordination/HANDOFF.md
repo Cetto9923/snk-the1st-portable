@@ -603,3 +603,19 @@
 
 - PID10492、gfx-async-submit1/defer2/wtrack0同城门约18.0-18.4FPS、CPU提交28ms、GPU24ms，2次Vulkan提交，较async0约26FPS更慢。画面截图rg-async-batch-events-scene.png，原始rg-async-batch-events-scene.log。top可见dm-gfx与guest线程分别占CPU，没有FFRS进程。
 - 随后仅将gfx-render-cpu设7，现有worker自身亲和诊断可实时生效，保留其余设置。下一步核成功日志与FPS。若仍无改善，恢复async0及render-cpu缺省，再尝试现有只读vertex/index跨帧缓存gfx-vcache，依赖现有dirty tracker，必须验证动态人物、草叶与过图。
+
+## T59 缓存对照与程序对象查找检查点
+
+- 用户已明确现在不在玩，可随时安装、重启，不再询问。仍只操作RG477M01445122，荣耀暂停。当前正常Continue为save003艾里兹街道10:35。
+- 异步绑CPU7仍约17.3-18.9FPS，已恢复async0并移动render-cpu标记。vcache缺少完整宿主dirty tracker接口，实际entries0/hits0。修正日志必须同时检查since/tracked/protect/now，避免把单个stub存在当tracker已接入。
+- 几何写跟踪mode2只选大于等于1MiB的vertex/index，没有命中，copied0/dirty0。APK05c34ec4、build-wtrack-geometry.log、graphics-tests-geometry-track.log为68项67通过1私有fixture跳过。改动已撤回，geometry-track-trial.patch和test_snk_wtrack_sites-trial.py只保留.local/publication。
+- 程序PID17592同城门simpleperf10秒记录8413样本、丢失0。rg-batch-current-profile.txt中memcpy15.93%、descriptors_build4.03%、program_info_if_changed2.90%。原始perf-batch-current.data保留app私有files。
+- gfx-perf-sample0单独重启后城门约26.17-26.29FPS，无明确吞吐改善。后续均保持0以避免诊断计时周期长帧，暂未改变公开默认。
+- 同提交内较短前缀复用试验APK81c31d9b、graphics68项67通过1跳过，实际城门约26.22FPS、复制量仍约40MB/帧，未确认收益，已撤回。保留snapshot-prefix-trial.patch、test_snk_snapshot_prefix-trial.py与rg-snapshot-prefix-scene.log/png。早先黑屏截图发生于正常读档加载，稍后两个人物、城墙与柱体正常。
+- 缓存上传试验APK683a3e0d，逐小范围flush约25.66-25.88FPS、submit23ms。批末刷新试验APK98449d45约25.18-25.61FPS、submit20.5ms，均低于原上传配置，已撤回。真实Buffer缓存范围与批量flush组件回归、完整graphics68项67通过1跳过。原始upload-cached-batch-trial.patch、test_snk_buffer_cache_range-trial.py、rg-upload-batch-live.log留.local。设备gfx-upload-cached已设0，下次重启恢复原上传类型。
+- 新候选将nvn_program.c的256个单项缓存改为索引桶链，冲突在桶内查找。保留原互斥锁、对象表扩容、首次空槽复用及serial语义，复用空槽前从旧地址桶摘除索引。测试覆盖3000对象扩容、同桶交替、finalize后异址复用、原址重建和整表释放。新增9000查询小于288000次表访问断言，旧全表回退负控SIGABRT被拒绝。program-buckets-tests.log、program-buckets-negative-control.log。
+- build-program-buckets.log退出0，APK SHA a66bd9edae9bf6d16429f9ac41d190c8a192bc85a6174d368a0904833a312173。完整graphics67项66通过1私有fixture跳过，日志graphics-tests-program-buckets.log。rg-program-buckets-install.log装机，session9257按既定10/8/6/6秒输入Continue，下一步等加载结束核画面、同点simpleperf与真实移动600帧。
+- 当前源码68b7795加未提交程序桶链与tracker日志修正。公开Release仍a35c458的1.0.1-preview。稳定30尚未达到，保留active目标。最新600帧移动证据仍为25.588FPS、p95 48.658ms，不能用新标题帧率替代。
+- 程序桶链候选已正常读回城门，截图rg-program-buckets-scene.png人物、柱体和城墙持续显示。PID32313同点simpleperf10秒8165样本、丢失0，nvn_program_info_if_changed退出至少1%热点，memcpy17.01%仍第一，rg-program-buckets-profile.txt。CPU比例只作热点定位，不能据此声称端到端已提速。
+- 新真实移动窗口在操作前声明600帧，program-buckets-motion-plan.json记录PID、源码dirty基线、APK、flags和动作。无录屏，横向杆左右各1秒、释放0.2秒。601次成功queue回调、601个不同工作帧、失败0、重复0，25.404914FPS，p50 37.913ms、p95 48.765462ms、p99 55.106461ms、max86.723615ms，超过100ms为0，未按帧时间删行。原CSV、metrics、actions和运行退出0日志均留.local/publication。该移动指标没有优于前次25.588FPS，未声称稳定30或严格同轨迹提升。
+- 完整图形67项66通过1私有输入跳过。程序查找组件另补1000个不同链位置的销毁、异址复用与存活对象验证，通过ASan/UBSan。下一步保留本轮索引查找有界性修正，评估为现有vertex/index缓存接入完整dirty tracker，以减少每帧约22MB几何复制，须先覆盖真实写入、宿主pread、池销毁与并发保护，未实现前保持vcache0。

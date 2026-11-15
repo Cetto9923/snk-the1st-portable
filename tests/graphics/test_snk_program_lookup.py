@@ -21,6 +21,11 @@ class ProgramLookupTests(unittest.TestCase):
 #define NVN_PROGRAM_MAX_STAGES 6
 #define NVN_PROGRAM_CONTROL_SIZE 0x880
 #define NVN_PROGRAM_MAX_OBJECTS 4096
+static unsigned table_reads;
+static void *counted_table_at(nvn_object_table *table,size_t index){
+    ++table_reads;return nvn_object_table_at(table,index);
+}
+#define nvn_object_table_at counted_table_at
 ''' + source[begin:end] + r'''
 static void *key(unsigned i){return (void*)(uintptr_t)(0x100000+i*160);}
 int main(void){
@@ -30,11 +35,13 @@ int main(void){
         nvn_program_state *p=program_find(key(i),1);assert(p);
         p->serial=i;
     }
+    table_reads=0;
     for(unsigned pass=0;pass<3;++pass)for(unsigned i=1;i<=3000;++i){
         nvn_program_state *p=program_find(key(i),0);
         assert(p && p->serial==i && p->program==key(i));
     }
-    // Find two distinct keys mapping to the same direct-mapped slot.
+    assert(table_reads<9000*32);
+    // Find two distinct keys in the same bucket.
     unsigned a=1,b=2;
     uintptr_t target=((uintptr_t)key(a)>>4)^((uintptr_t)key(a)>>13);
     for(;b<3000;++b){uintptr_t hash=((uintptr_t)key(b)>>4)^((uintptr_t)key(b)>>13);
@@ -50,7 +57,17 @@ int main(void){
     nvn_program_state *again=program_find(key(a),1);assert(again && again!=old);
     assert(again->serial==0);again->serial=9999;
     assert(program_find(key(a),0)->serial==9999);
-    // Index validation must reject a stale cache entry after freeing the table.
+    // Recycle entries throughout the chains while preserving every survivor.
+    for(unsigned i=1;i<=1000;++i)program_find(key(i),0)->in_use=0;
+    for(unsigned i=1;i<=1000;++i){
+        nvn_program_state *p=program_find(key(6000+i),1);assert(p);p->serial=6000+i;
+    }
+    for(unsigned i=1;i<=1000;++i){
+        assert(!program_find(key(i),0));
+        assert(program_find(key(6000+i),0)->serial==6000+i);
+    }
+    for(unsigned i=1001;i<=3000;++i)assert(program_find(key(i),0)->serial==i);
+    // A released table must discard its stale bucket heads.
     nvn_object_table_free(&s_programs);
     assert(!program_find(key(4000),0));
     nvn_program_state *fresh=program_find(key(4000),1);
