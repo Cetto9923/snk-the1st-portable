@@ -723,7 +723,7 @@ struct PendingEvent {uint64_t addr;uint32_t mode,v;const void *slot;};
 std::vector<PendingEvent> pending_events,recording_events;   // recording_events: mode 2, slot not yet submitted
 int defer_events=0;uint64_t events_deferred=0,event_reads=0;
 struct IndirectTemplateBatch {bool snk_instance=false;uint64_t address=0,bytes=0;std::vector<XbgIndirectTemplateRow> rows;std::shared_ptr<OwnedIndirectBuffer> owned;};
-struct IndirectTemplateInput {bool snk_instance=false,snk_particle=false,snk_grass=false,snk_particle_update=false,metadata_exclusive=false;uint64_t metadata_address=0,metadata_bytes=0,metadata_modified_bytes=0;uint32_t params[4]{};bool params_valid=false;std::vector<uint32_t> words;uint64_t address=0,bytes=0,modified_bytes=0;};
+struct IndirectTemplateInput {bool snk_instance=false,snk_particle=false,snk_grass=false,snk_particle_update=false,metadata_exclusive=false;uint64_t metadata_address=0,metadata_bytes=0,metadata_modified_bytes=0;uint32_t params[4]{};bool params_valid=false;std::vector<uint32_t> words;uint64_t address=0,bytes=0,modified_bytes=0;uint64_t compact_address=0,compact_bytes=0,compact_modified_bytes=0;};
 bool indirect_proof_enabled=false,indirect_diag_enabled=false,gpu_indexed_enabled=true,texture_lifecycle_enabled=true,clear_overwrite_probe=false,owned_input_copy_enabled=true;uint64_t indirect_proof_checks=0,indirect_proof_mismatches=0,gpu_indexed_draws=0;
 struct GpuIndexedArgs {std::shared_ptr<OwnedIndirectBuffer> owned;VkDeviceSize offset=0;size_t index_bytes=0;};
 // owner denotes an independent allocation, never a view into the slot arena.
@@ -3427,6 +3427,8 @@ struct Descriptors {
                 pending_writebacks.back().snk_cull_patch=cull_metadata_patch;
             if(indirect_input && indirect_input->address==v.first.first && indirect_input->bytes==v.first.second)
                 pending_writebacks.back().modified_bytes=indirect_input->modified_bytes;
+            if(indirect_input && indirect_input->compact_address==v.first.first && indirect_input->compact_bytes==v.first.second)
+                pending_writebacks.back().modified_bytes=indirect_input->compact_modified_bytes;
             if(indirect_input && indirect_input->metadata_exclusive &&
                indirect_input->metadata_address==v.first.first && indirect_input->metadata_bytes==v.first.second){
                 pending_writebacks.back().snk_cull_metadata=true;
@@ -3447,7 +3449,7 @@ void capture_cull_copy_indices(Descriptors &d,const p_dispatch &p,bool indirect)
     if(indirect || !state.shader[5] || !state.shader[5]->snk_metadata_copy ||
        p.x<=0 || p.y!=1 || p.z!=1)return;
     uint64_t source=0,source_bytes=0,destination=0,destination_bytes=0;
-    uint32_t params[2]{};bool params_valid=false;
+    uint32_t params[3]{};bool params_valid=false;
     for(const auto &binding:state.shader[5]->bindings){
         if(binding.count!=1 || binding.slot>=16)return;
         if(binding.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && binding.source==XBG_SOURCE_STORAGE){
@@ -3457,9 +3459,9 @@ void capture_cull_copy_indices(Descriptors &d,const p_dispatch &p,bool indirect)
         }
         if(binding.binding==35 && binding.source==XBG_SOURCE_UNIFORM){
             auto range=state.ub[nvn_stage[5]][binding.slot];
-            if(range.size>=8 && indirect_cpu_clean(range.address,8)){
-                evguard::EngineRead read(reinterpret_cast<const void*>(range.address),8);
-                std::memcpy(params,reinterpret_cast<const void*>(range.address),8);params_valid=true;
+            if(range.size>=sizeof(params) && indirect_cpu_clean(range.address,sizeof(params))){
+                evguard::EngineRead read(reinterpret_cast<const void*>(range.address),sizeof(params));
+                std::memcpy(params,reinterpret_cast<const void*>(range.address),sizeof(params));params_valid=true;
             }
         }
     }
@@ -3487,8 +3489,10 @@ void capture_cull_copy_indices(Descriptors &d,const p_dispatch &p,bool indirect)
     patch->address=destination;patch->bytes=destination_bytes;patch->first=params[1];
     const auto *records=reinterpret_cast<const uint32_t*>(source);
     patch->records.reserve(params[0]);
-    for(uint32_t row=0;row<params[0];++row)
-        patch->records.push_back({records[size_t(row)*20+1],records[size_t(row)*20+2]});
+    for(uint32_t row=0;row<params[0];++row){
+        const uint32_t *record=records+size_t(row)*20;
+        patch->records.push_back({record[1],record[2],uint32_t(record[0]+params[2]),record[7]});
+    }
     d.cull_metadata_patch=std::move(patch);
     static unsigned notes=0;
     if(notes++<4)xbg_logf("NVN Falcom metadata copy captured cull indices count=%u first=%u bytes=%llu",
@@ -3575,6 +3579,32 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
                 static unsigned notes=0;
                 if(notes++<8)xbg_logf("NVN Falcom cull write bounds descriptor=%llu modified=%llu records=%u",
                     (unsigned long long)i.bytes,(unsigned long long)written,i.params[0]);
+            }
+            // Binding35 is the compact 128-byte instance output. Other GPU
+            // writers may alias it, so require one exact isolated destination.
+            uint64_t compact_address=0,compact_bytes=0;
+            for(const auto &binding:state.shader[5]->bindings)
+                if(binding.binding==35 && binding.source==XBG_SOURCE_STORAGE && binding.count==1 && binding.slot<16){
+                    const auto range=state.sb[nvn_stage[5]][binding.slot];
+                    compact_address=range.address;compact_bytes=range.size;
+                }
+            unsigned compact_matches=0;
+            for(const auto &write:d.written)if(xbg_wb_overlaps(compact_address,compact_bytes,write.first.first,write.first.second)){
+                if(write.first.first!=compact_address || write.first.second!=compact_bytes){compact_matches=2;break;}
+                ++compact_matches;
+            }
+            if(compact_matches==1 && compact_address!=i.address && compact_address!=i.metadata_address){
+                if(copied_indices.empty())
+                    xbg_snk_cull_index_snapshot(pending_writebacks,reinterpret_cast<const uint32_t*>(i.metadata_address),
+                        i.metadata_address,metadata_bytes,copied_indices);
+                const uint64_t compact_written=xbg_snk_cull_output_writeback_bytes(copied_indices,i.words,
+                    uint32_t(p.x),compact_bytes,rejected_flags);
+                if(compact_written && compact_written<compact_bytes){
+                    i.compact_address=compact_address;i.compact_bytes=compact_bytes;i.compact_modified_bytes=compact_written;
+                    static unsigned notes=0;
+                    if(notes++<8)xbg_logf("NVN Falcom compact write bounds descriptor=%llu modified=%llu records=%u",
+                        (unsigned long long)compact_bytes,(unsigned long long)compact_written,i.params[0]);
+                }
             }
         }
     }

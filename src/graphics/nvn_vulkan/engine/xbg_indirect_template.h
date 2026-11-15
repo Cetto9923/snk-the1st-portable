@@ -116,7 +116,7 @@ bool xbg_snk_cull_indices_readable(const Pending &pending,uint64_t address,uint6
 
 // CPU-known index/flag fields copied by the exact 978a metadata upload.
 // These accompany the GPU result without changing the guest CPU mirror.
-struct XbgCullIndexRecord {uint32_t index,flags;};
+struct XbgCullIndexRecord {uint32_t index,flags,output_base=0,lod_stride=0;};
 struct XbgCullMetadataPatch {
     uint64_t address=0,bytes=0;
     uint32_t first=0;
@@ -140,7 +140,8 @@ bool xbg_snk_cull_index_snapshot(const Pending &pending,const uint32_t *baseline
            uint64_t(patch->first)+patch->records.size()>write.bytes/80)return false;
     }
     out.reserve(size_t(bytes/80));
-    for(size_t i=0;i<bytes/80;++i)out.push_back({baseline[i*20+1],baseline[i*20+2]});
+    for(size_t i=0;i<bytes/80;++i)
+        out.push_back({baseline[i*20+1],baseline[i*20+2],baseline[i*20],baseline[i*20+7]});
     for(const auto &write:pending)if(xbg_wb_overlaps(address,bytes,write.addr,write.bytes) && write.snk_cull_patch){
         const auto &patch=*write.snk_cull_patch;
         if(patch.first>=out.size())continue;
@@ -160,6 +161,40 @@ inline uint64_t xbg_snk_copied_index_writeback_bytes(const std::vector<XbgCullIn
         if(uint64_t(record.index)+((record.flags&0x300u)?1:0)>=rows)return 0;
     }
     return rows*20;
+}
+
+// The exact 1618 kernel writes one 128-byte output per surviving invocation.
+// Its destination is base + LOD*stride + atomicAdd(argument[row+LOD].count,1).
+// Count every eligible invocation for both possible LODs. This upper bound also
+// covers visibility decisions made from GPU-only inputs and nonzero seed counts.
+inline uint64_t xbg_snk_cull_output_writeback_bytes(const std::vector<XbgCullIndexRecord> &records,
+    const std::vector<uint32_t> &arguments,uint32_t groups,uint64_t bytes,uint32_t rejected_flags){
+    if(records.empty() || !groups || uint64_t(records.size())>uint64_t(groups)*1024 ||
+       arguments.size()<5 || arguments.size()>65536/4 || !bytes || bytes%128)return 0;
+    struct OutputRow {uint64_t base=0;uint32_t count=0;};
+    std::vector<OutputRow> rows(arguments.size()/5);
+    for(const auto &record:records){
+        if(record.flags&rejected_flags)continue;
+        const unsigned lods=(record.flags&0x300u)?2:1;
+        if(uint64_t(record.index)+lods>rows.size())return 0;
+        for(unsigned lod=0;lod<lods;++lod){
+            auto &row=rows[record.index+lod];
+            ++row.count;
+            row.base=std::max(row.base,uint64_t(record.output_base)+uint64_t(lod)*record.lod_stride);
+        }
+    }
+    uint64_t end=0;
+    for(size_t index=0;index<rows.size();++index){
+        const auto &row=rows[index];
+        if(!row.count)continue;
+        const uint64_t count=uint64_t(arguments[index*5+1])+row.count;
+        const uint64_t limit=row.base+count;
+        // Reject counter overflow and signed byte-address overflow in the
+        // original kernel before excluding any output-buffer tail bytes.
+        if(count>UINT32_MAX || limit>uint64_t(INT32_MAX)/128 || limit>bytes/128)return 0;
+        end=std::max(end,limit);
+    }
+    return end*128;
 }
 
 // The audited 42866 kernel copies each enabled particle record's index count

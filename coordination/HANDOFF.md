@@ -748,3 +748,23 @@
 
 - 临时大块写回诊断包238a9faf构建/覆盖安装成功，Continue7直接读回真实场景。probe3三秒后finally恢复0。rg-large-writeback-diagnostic.log第1491帧显示1618写回12,800,000B未裁剪的压缩实例输出、4,000,000B元数据（已裁剪1,491,600B），342e写回4,194,304B状态、68d3写回2,654,208B。没有附加GPU读取。诊断代码已从源码撤掉，单独patch保留.local。当前设备仍诊断包238a9faf、cache0/probe0。
 - T63源码检查点只保留有界可选cache与C1拒绝flags范围证明。下一步精确审计1618的binding35输出索引范围，减少12.8MB整段完成写回。全设备显示与稳定30仍未验收。
+
+## T64 压缩实例输出范围候选
+
+- 基线a44417f，分支task/T64-cull-writeback-bounds。原1618优化SPV行1806-1815确认binding35输出记录下标为metadata.word0 + LOD*metadata.word7 + atomicAdd(args[row+LOD].word1,1)，每记录128B，LOD最多0/1，flag0x300为0时固定0。原kernel active与C1 mask先退出。仍运行原GPU模块。
+- 在有序978a元数据patch中增加word0+参数word2（uint32原加法）与word7。C5参数现在要求CPU-clean的完整12B，保留word1索引和word2 flags覆盖。原1618仅修改metadata.byte60，其他地址字段可复用。
+- 新helper按每个可能row+LOD统计最多参与的invocation数，加CPU-clean初始计数，取每条record的base/stride/计数上界。拒绝行越界、uint32计数回绕、原int32字节地址溢出和输出范围越界。GPU独占输出binding35要求唯一完整写区，无其他写区重叠，未知元数据/参数保留全量写回。完整GPU descriptor不裁剪，仅记录已证明CPU完成写回prefix。
+- 新test_snk_cull_output_bounds编译实际helper，ASan/UBSan覆盖非零seed、两LOD、mask退出、padding、坏行/溢出/边界，以及2000组随机可见性/LOD/原子顺序模拟。真实batch覆盖有序上传输出地址、无效base、写区别名和未知metadata writer。元数据真实捕获覆盖word0调整/uint32回绕、word7和12B常量完整性。目标组件七项通过，完整回归与构建进行中，尚无真机命中或提速结论。
+
+- build-cull-output-bounds.log退出0，候选APK 28efb4efc96531557cb188930ab9a546e8d0448dbf846985882c492f1936175a。完整图形78项77通过1私有fixture跳过，运行时9通过。忽略动态参与数的负控SIGABRT -6被拒绝。provenance记录a44417f dirty与源码SHA。当前准备同save007/cache0覆盖安装验证，暂无真机收益结论。
+
+- 首候选28efb4ef已覆盖装机并正常Continue7，原场景人物/花盆/墙体截图正常。运行时实际命中compact descriptor12800000→552960B（2160记录）。600帧移动flower-cull-output-motion为601不同工作帧26.831333FPS、p95 46.110ms、max69.106ms，失败0/重复0/>100ms0，较cache0旧26.710没有可确认端到端收益。末尾写回29.6-30.7MB/帧、约2.7ms，旧36.5MB/约3.45ms；移动路径相机稍漂移，不作严格逐帧归因。
+- simpleperf当前8177样本丢失0，rg-cull-output-profile.txt中memcpy9.94%、hash_memory3.30%。原纹理页追踪入口实际为0。下一步在相同28ef APK仅试gfx-tex-dirty1，cache仍0、native540、async0，重启Continue7测移动。源码另把helper按输出row合并最大base，从两轮metadata扫描降为一轮，测试/构建进行中，该源码尚未安装。
+
+- 原28ef包仅开启原纹理追踪marker1，flower-texdirty-motion为25.255203FPS、p95 55.114ms、max102.385ms、>100ms1，601不同工作帧、无失败重复。后续pipeline354/布局123，和前一轮345/122不同，路径自然漂移，未作严格因果结论。未证明收益，已恢复tex-dirty0。
+- 单轮metadata聚合helper构建build-cull-output-onepass.log退出0，APK4e313a767f13030f609b143bb39e0c16cef3ef3cbf5dd8f588185ad9b7837738，图形78项77通过1私有fixture跳过、运行时9通过。负控初次字符串替换误改++row.count导致编译失败，已限定替换完整seed表达式，正确负控编译后SIGABRT -6被拒绝。未更改产品断言。
+- 接下来单轮helper包与storage-cache1/tex-dirty0/540/async0覆盖安装，Continue7后测600帧。provenance cull-output-onepass-provenance.json记录准确源码SHA与dirty输入。
+
+- onepass APK4e313a76已覆盖装机，PID12400，rg-cull-output-onepass-first.png为真实Continue7场景。flower-cull-onepass-cache1-motion事先600帧，601不同工作帧26.642139FPS、p50 36.063ms、p95 46.851ms、p99 53.877ms、max62.501ms，失败0/重复0/>100ms0。末尾画面rg-cull-onepass-motion-end.png两主角/NPC/墙体/路面正常，why4多窗口0、写回29.6MB/约2.75ms。独立SF短历史27.5943FPS，不能称稳定30或T64端到端提速。
+- 当前唯一设备477M，cache1/tex-dirty0/540/底座1/async0/defer2/vcache1/wtrack0/probe0，FFRS无进程。未运行输入脚本。普通save00745:23保留。荣耀暂停，其他机型与高端真1080仍未实测，公开release仍a35c458。
+- 下一步采集CPU热点中的纹理哈希来源。28ef旧采样中hash_memory166条调用链均来自get_image_slow的0x395678，对当前onepass ELF addr2line指向2437普通CPU纹理校验，但输入ELF版本不同，仅作线索。需准确新包映射或有界probe核纹理是否被页追踪覆盖。

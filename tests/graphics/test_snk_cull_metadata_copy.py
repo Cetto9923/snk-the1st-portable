@@ -30,16 +30,18 @@ struct Write {
 };
 int main(){
     std::vector<uint32_t> baseline(6*20);
-    for(unsigned i=0;i<6;++i){baseline[i*20+1]=i;baseline[i*20+2]=0;}
+    for(unsigned i=0;i<6;++i){baseline[i*20+1]=i;baseline[i*20+2]=0;baseline[i*20]=20+i;baseline[i*20+7]=30+i;}
     const auto before=baseline;
     auto patch=std::make_shared<XbgCullMetadataPatch>();
     patch->address=0x1000;patch->bytes=480;patch->first=2;
-    patch->records={{8,0},{10,0x100}};
+    patch->records={{8,0,40,50},{10,0x100,60,70}};
     std::vector<Write> writes={{0x1000,480,true,{}},{0x1000,480,false,patch},{0x1000,480,true,{}}};
     std::vector<XbgCullIndexRecord> records;
     auto snapshot=[&](){return xbg_snk_cull_index_snapshot(writes,baseline.data(),0x1000,480,records);};
     assert(snapshot());assert(baseline==before);
     assert(records.size()==6 && records[0].index==0 && records[2].index==8 && records[3].flags==0x100);
+    assert(records[0].output_base==20 && records[0].lod_stride==30);
+    assert(records[2].output_base==40 && records[3].lod_stride==70);
     assert(xbg_snk_copied_index_writeback_bytes(records,1,248)==240);
     records[3].index=11;assert(!xbg_snk_copied_index_writeback_bytes(records,1,248));
     records[3].flags=0x20;
@@ -107,6 +109,7 @@ void xbg_logf(const char*,...){}
 ''' + function + r'''
 int main(){
     std::vector<uint32_t> input(2*20),output(4*20),other(4*32);
+    input[0]=4;input[7]=11;input[20]=6;input[27]=17;
     input[1]=3;input[2]=0x100;input[21]=8;input[22]=0x200;
     output[21]=3;output[22]=0x100;output[41]=8;output[42]=0x200;
     uint32_t params[3]={2,1,999};
@@ -136,6 +139,11 @@ int main(){
     output[41]=9;output[42]=0;assert(qualify());
     assert(d.cull_metadata_patch->first==1 && d.cull_metadata_patch->records.size()==2);
     assert(d.cull_metadata_patch->records[1].index==8 && d.cull_metadata_patch->records[1].flags==0x200);
+    assert(d.cull_metadata_patch->records[0].output_base==1003 && d.cull_metadata_patch->records[0].lod_stride==11);
+    assert(d.cull_metadata_patch->records[1].output_base==1005 && d.cull_metadata_patch->records[1].lod_stride==17);
+    state.ub[5][2].size=8;assert(!qualify());state.ub[5][2].size=sizeof(params);assert(qualify());
+    params[2]=UINT32_MAX;input[0]=2;assert(qualify());
+    assert(d.cull_metadata_patch->records[0].output_base==1);
     input[21]=99;assert(d.cull_metadata_patch->records[1].index==8);
 }
 ''')

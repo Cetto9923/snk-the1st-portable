@@ -67,6 +67,7 @@ struct IndirectTemplateInput {
     bool params_valid=false,metadata_exclusive=false;
     uint64_t address=0,bytes=0,metadata_address=0,metadata_bytes=0;
     uint64_t modified_bytes=0,metadata_modified_bytes=0;
+    uint64_t compact_address=0,compact_bytes=0,compact_modified_bytes=0;
     uint32_t params[4]{};
     std::vector<uint32_t> words;
 };
@@ -140,6 +141,19 @@ int main(){
     pending_writebacks.push_back({i.metadata_address,i.metadata_bytes,false,patch});
     mask=0x20;std::memcpy(shader.c1.data(),&mask,4);i.modified_bytes=0;
     assert(build() && i.modified_bytes==1280);
+    // Real compact-output path, including uploaded offsets and allocation stride.
+    i.compact_modified_bytes=0;
+    patch->records={{0,0,10,0}};records[21]=1;records[20]=20;
+    shader.bindings.push_back({1,35,2,1,2});shader.storage_writes.insert(35);
+    state.sb[5][2]={0xa000,12800};d.written.push_back({{0xa000,12800},nullptr});
+    assert(build() && i.compact_address==0xa000 && i.compact_modified_bytes==21*128);
+    patch->records[0].output_base=1000;i.compact_modified_bytes=0;
+    assert(build() && !i.compact_modified_bytes);
+    patch->records[0].output_base=10;
+    d.written.push_back({{0xa004,4},nullptr});i.compact_modified_bytes=0;
+    assert(build() && !i.compact_modified_bytes);d.written.pop_back();
+    pending_writebacks.push_back({i.metadata_address,i.metadata_bytes,false,{}});
+    i.compact_modified_bytes=0;assert(build() && !i.compact_modified_bytes);
 }
 '''
         self.compile_and_run(program)
