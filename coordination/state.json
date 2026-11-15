@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T20:21:05.580801+08:00",
-  "phase": "RG477M 无闪烁配置固化与社区预览发布，稳定30帧继续排查",
+  "updated_at": "2026-11-15T20:31:19.924790+08:00",
+  "phase": "社区预览版已发布，RG477M继续减少CPU复制与同步开销",
   "coordinator": "Codex",
-  "integration_branch": "task/T58-community-release",
+  "integration_branch": "task/T59-rg477m-frame-time",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -23,7 +23,7 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T58",
+      "task": "T59",
       "paths": [
         "src/",
         "scripts/",
@@ -144,7 +144,7 @@
     {
       "id": "T58",
       "role": "RELEASE_ANDROID",
-      "status": "in_progress",
+      "status": "passed",
       "dependencies": [],
       "pass_gates": [],
       "owner": "Codex",
@@ -174,7 +174,40 @@
         "public artifacts exclude game data and credentials",
         "RG477M install and actual-game evidence"
       ],
-      "recovery": "保留 takeover-20261114，独立 clone 社区版源仓，不修改共享 origin"
+      "recovery": "保留 takeover-20261114，独立 clone 社区版源仓，不修改共享 origin",
+      "checkpoint": "v1.0.1-preview / a35c458",
+      "evidence": "GitHub prerelease and redownload checksum verification; real RG477M save round trip; performance remains below30"
+    },
+    {
+      "id": "T59",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "dependencies": [
+        "T58"
+      ],
+      "pass_gates": [],
+      "owner": "Codex",
+      "branch": "task/T59-rg477m-frame-time",
+      "objective": "保持无闪烁显示并提升RG477M实际游戏帧率至稳定30",
+      "inputs": [
+        "a35c458 release source",
+        "RG477M save002 same scene",
+        "simpleperf CPU samples"
+      ],
+      "outputs": [
+        "minimal rendering performance fix",
+        "real motion frame-time evidence"
+      ],
+      "write_scope": [
+        "src/graphics",
+        "tests/graphics",
+        "coordination"
+      ],
+      "acceptance": [
+        "preserve graphics audio and normal game time",
+        "actual motion stable30 on RG477M"
+      ],
+      "recovery": "release v1.0.1-preview and device config-before-defaults-20261115"
     }
   ],
   "blockers": [],
@@ -190,13 +223,14 @@
     "RG477M 硬件断点捕获重叠分配；原始allocator null tests诊断通过一次新建至自由移动，未作稳定30验收",
     "用户确认关闭事件延迟后的当前版本天空无闪烁。关闭wtrack单独仍有条纹，未宣称完整根因解决。",
     "原游戏540档位真实viewport960x540已抓取验证。无闪烁配置已固化为Mali默认，MT68/MT69默认使用原始allocator null tests。",
-    "缺省/marker/env/vendor编译门禁通过。graphics64项63通过1私有fixture跳过，runtime8通过，设备profile脚本通过。"
+    "缺省/marker/env/vendor编译门禁通过。graphics64项63通过1私有fixture跳过，runtime8通过，设备profile脚本通过。",
+    "1.0.1-preview已在独立空轨仓发布，APK SHA ea32adb3d3e0fe8061dc33c5fb5ade73ca8ace9ce4cdfd2638787164fa864dc1，公开包回下载全SHA256SUMS验证通过。",
+    "缺调试marker入口正常。原游戏新建save002艾里兹街道9:08，重启覆盖安装后Continue读回同位置和两个人物，缩略图正确。"
   ],
   "unverified": [
     "RG477M稳定30帧尚未达成。组合优化曾站立29.6帧，实际移动26.38帧且会天空闪烁，已弃用事件延迟。无闪烁配置城镇约10至20帧。",
-    "当前源码默认配置包已覆盖安装，正在复测缺少调试marker的正常入口与存档。",
     "除RG477M外的天玑机型仍待逐机验证，荣耀真机继续暂停。",
-    "GitHub source tag与预览Release尚待发布。"
+    "T59诊断轮询逐帧缓存候选正在同点对照。性能目标保持进行中。"
   ],
   "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",

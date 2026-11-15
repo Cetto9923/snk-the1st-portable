@@ -508,3 +508,16 @@
 - PID6411缺marker正常入口日志rg-defaults-boot.log确认pointer1、defer0、cached1、fold1/temps1、wtrack0、async0。原版Ver1.07标题截图rg-defaults-start.png。最新读档列表只有auto5:48布莱特家户外、两个人工槽，用户说已保存的城镇槽未出现，已明确告知并继续查保存。未覆盖旧存档。
 - normal Load Game载入auto后真实户外rg-defaults-game.png人物和亮度正常，约21-23帧。还需重新到城镇并正常新建槽、重启读回，做无闪烁配置移动/音频回归。
 - 借鉴主源https://github.com/seedds/nxnative/issues/2112，上游Metal已处理事件拆分造成renderpass/loadstore增加。该游戏/Metal帧率不能代替本项目Mali验收。当前优先保证正确同步，另查安全减少提交与snapshot。
+
+
+## T58 发布完成与 T59 CPU 开销继续
+
+- 正确独立仓已push task/T58-community-release、标签v1.0.1-preview→a35c458ce2248e459e96134e116214f4d05d4754。发布https://github.com/Cetto9923/snk-the1st-portable/releases/tag/v1.0.1-preview ，prerelease=true、draft=false。版本1.0.1-preview/code2、Mali540p、自有几何图标为本轮自主选择，发布说明已披露。
+- 构建build-release-a35c458.log退出0、构建源clean，APK ea32adb3d3e0fe8061dc33c5fb5ade73ca8ace9ce4cdfd2638787164fa864dc1。社区ZIP含APK、中文安装/免责声明、完整许可证、sourcecommit及SHA清单。公开内容经脚本排除游戏输入。
+- 中文文件名作为GitHub独立asset会被服务端归一化成相同名称，首次create422后CLI回滚了草稿。已用install-guide.zh-CN.md和copyright-notice.zh-CN.md重试成功，ZIP内保留中文文件名。回下载release-redownload中全部SHA256SUMS条目与ZIP成员一致。
+- 用户明确“现在不在玩，随时可以重启，不要问”。设备仍ONLY RG477M01445122，荣耀继续暂停。
+- 保存回归正常经游戏camp→save→新建→选是生成save002，艾里兹街道9:08，rg-defaults-save-created.png。完整备份device-backup/saves-new-slot002.tar。覆盖安装发布APK后Continue可见该记录，rg-release-continue.png；正常读回两人同位置rg-release-readback-game.png。用户此前城镇记录缺失的原因仍未确定，当前正常写入和读回已验证。
+- T59分支task/T59-rg477m-frame-time从发布提交新建。系统simpleperf可在run-as app上下文采样，无需root或放开内核符号。原记录rg-simpleperf-record.log/rg-simpleperf-report.txt/callgraph与rg-probe-before-profile.txt，后者独占memcpy21.29%CPU采样、descriptors_build2.80%、programinfo1.77%。
+- 调用栈显示prepare_read→probe_image_read_barrier反复fopen。gfx-codex-probe0仍让probe.waiting=true，默认关闭状态下每次observer均读取文件。新增probe_request把同帧请求共享一次读取，保留下一帧观察标记变化与renderer重初始化。没有改图形同步、shader、分辨率或游戏时间。真实helper ASan/UBSan用例通过，1000次同帧调用只open1次，缺文件/文件变化/重置均验证。
+- build-probe-poll.log退出0，APK5eb5a46e07b12d89fce191fdb32c80adfa9ca081d5e4e64609a0358b5a6afe66，rg-probe-poll-install.log覆盖安装退出0，当前正在正常Load同save002做同点profile。发布附件保持ea32原包。
+- 下一步观测新包标题和Continue9:08读回，simpleperf同点10s采样并保留CSV。优先核减少CPU复制与安全同步，未达到30不标记目标complete。
