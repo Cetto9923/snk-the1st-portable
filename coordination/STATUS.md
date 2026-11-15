@@ -1,6 +1,6 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T04:45:45.478597+08:00
+状态事件时间：2026-11-16T04:58:06.229305+08:00
 阶段：T69可选原生呈现时间戳实机对照
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
@@ -30,7 +30,7 @@
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T69", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "src/graphics/nvn_device/nvn_backend_vulkan.c", "tests/graphics/", "coordination/"]}
+- 无
 
 ## 阻塞
 
@@ -75,13 +75,14 @@
 - T67官方Swappy2.1.3实验入口默认关闭，完整JNI引用、扩展/队列/交换链生命周期、固定30目标、无SDK/失败回退测试。81图形80通过1私有fixture跳过，运行时9通过，2个生命周期负控预期断言失败。450p同存档601工作帧，SDK开物理30.144FPS/p95 33.147ms，关物理30.020FPS/p95 49.614ms。继续2400间隔SDK开物理29.748FPS/p95 33.301ms/p99 49.697ms/max99.192ms，仍偶发长帧，未验收稳定30。
 - T67最终撤回Swappy产品接线和依赖，实验源码完整哈希核验备份failed-swappy-experiment-source.tar与patch。真实APK7b7fac89已覆盖装，ELF符号和APK内容均确认无SDK。保留本应用present-mode路径、Vulkan统一清理与后台清按键保留手柄连接修复。图形81项80通过1私有fixture跳过，运行时9通过，输入生命周期1通过及2负控。477M从实际游戏场景连续3轮HOME3秒再回前台10秒，均同PID10246恢复实际draw与present，最后截图人物和场景可见。
 - T68临时9类诊断009091ef显示静止城门每帧约181次image_revision，storage约22，driver0、uniform_buffer不足1。2bdf1bd2细分后texture serial仅约8.6，memory0，其他约154.5。原始日志与两份诊断patch和provenance保留。不能把这些失败视为UBO句柄问题。
+- T68最终6c94ef1c同save008各2400间隔，CPU提交均值15.956→15.491ms，工作29.822→29.876FPS，SF p95仍49.6ms。图形82项81通过1私有fixture跳过、运行时9通过、3负控及同PID2797三轮HOME通过。
+- T69原生VK_GOOGLE_display_timing默认关闭，APKedb78e86在477M marker1/FIFO真实移动，save008物理29.749FPS/p95 33.249ms，save007物理29.798FPS/p95 33.323ms，均2400间隔和完整SF覆盖。同PID24721三轮HOME恢复真实draw/present，图形85项84通过1私有fixture跳过、运行时9通过，4个实际断言负控通过。仍有100ms以上长停顿，稳定30未达成。
 
 ## 未验证
 
 - RG477M长流程稳定30仍未达到。T66同save007的540/Android摇杆移动29.682888FPS、p95 42.028ms、max57.551ms、无失败重复和>100ms。540保留，4槽/cache1/texdirty1仍为设备marker，显示呈现节奏还待优化。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
 - 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
-- T67后台测试发现PID19809在onPause后SIGABRT，另一次PID25775保持存活但返回后ShowControllerSupport忙循环，原publishPad在后台上报断开。当前修正始终保留原虚拟手柄连接、暂停清除触摸输入，1项Java测试及2负控通过。c450 SDK开一次启动在libc格式化路径signal11，保留原始日志，SDK原因尚未确认。正在SDK关对照与线程级JNI连接候选验证，不可默认启用SDK或声明后台恢复通过。
-- Swappy候选aeb891f6保留线程JNI连接仍在首轮HOME时退出，SIGABRT/随后signal11，libc格式化路径pc0xa4224与mutex.cc文本，根因未证实。此前前台450短窗口p95改善不能抵消生命周期失败，当前产品已移除该候选。低帧率与物理16/50ms波动仍未修复，下一步拆描述符memo失效原因。
+- Swappy2.1.3实验SIGABRT/signal11根因仍未确认，产品已完整移除。当前原生呈现候选T69已通过三轮HOME，但GPU间接调度参数CPU回读触发全批同步的长停顿仍待优化。两帧呈现余量约66ms是当前实验选择，实际端到端输入延迟尚未测量，默认未固化到其他设备。
 
 具体恢复命令与未完成修改见 HANDOFF.md。
