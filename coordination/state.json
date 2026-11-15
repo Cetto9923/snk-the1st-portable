@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T05:10:55.826318+08:00",
+  "updated_at": "2026-11-16T05:21:22.842816+08:00",
   "phase": "T70间接调度参数CPU同步回退诊断",
   "coordinator": "Codex",
   "integration_branch": "task/T70-indirect-dispatch-sync",
@@ -627,7 +627,7 @@
         "完整构建/真实函数回归及真机恢复记录"
       ],
       "recovery": "0b5fb6c / apk-native-timing-candidate.apk edb78e86 / 底座450 slots4 cache1 texdirty1 async0 FIFO present-timing1 / save008",
-      "checkpoint": "0b5fb6c dirty / 4b3a1318独立日志证实c5bc8b44a9224e7a storage17跨旧槽262160B，参数已在当前槽 / 临时诊断已撤，Mali复用OwnedInputCopy候选d19bad24覆盖装并截图确认真实save008 / 图形86项85通过1私有fixture跳过、运行时9通过、4实际断言负控 / 正在2400移动间隔长测"
+      "checkpoint": "ccb4b41 / d19bad24同save008移动2400间隔工作29.783FPS/p95 39.562ms/max87.834ms，工作>100ms0；完整SF29.786FPS/p95 33.262ms/max115.716ms，物理>100ms2；同PID13677三轮HOME通过 / 仍有offset+60的op27回退与70–90ms长帧 / 22851b1e诊断3已构建，覆盖装启动采集中，产品改动未增加"
     }
   ],
   "blockers": [],
