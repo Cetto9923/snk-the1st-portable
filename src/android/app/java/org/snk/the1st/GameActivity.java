@@ -86,9 +86,8 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
     }
 
     private void publishPad() {
-        boolean touchOn = touchPad != null && touchPad.shown;
-        boolean connected = resumed && (padConnected || touchOn || padButtons != 0 || true);
-        GameWindowNative.setPadState(connected, padButtons | axisButtons | touchButtons,
+        // Android focus changes release input while the native controller stays attached.
+        GameWindowNative.setPadState(true, padButtons | axisButtons | touchButtons,
                 touchLx != 0 ? touchLx : padLx, touchLy != 0 ? touchLy : padLy,
                 touchRx != 0 ? touchRx : padRx, touchRy != 0 ? touchRy : padRy);
     }
@@ -767,6 +766,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         resumed = false;
         padButtons = axisButtons = 0;
         padLx = padLy = padRx = padRy = 0;
+        if (touchPad != null) touchPad.clearInput();
         publishPad();
         GameWindowNative.setFocusState(3);
         super.onPause();
@@ -774,7 +774,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
-        GameWindowNative.setFramePacingActivity(this, true);
         dataInstaller = DataBundleInstaller.get(this);
         dataInstaller.attach(this);
         audioManager = (AudioManager)getSystemService(AUDIO_SERVICE);
@@ -1547,7 +1546,6 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override protected void onDestroy() {
         Log.i(TAG, "lifecycle onDestroy");
-        GameWindowNative.setFramePacingActivity(this, false);
         try { unregisterReceiver(padReceiver); } catch (Throwable ignored) {}
         exitHandler.removeCallbacks(this);
         if (dataInstaller != null) dataInstaller.detach(this);

@@ -20,10 +20,6 @@ static uint64_t s_target_frame_ns=33333333,s_next_present_ns,fake_now=1000000000
 static uint32_t s_pace_check_counter;
 static unsigned refreshes,sleeps;
 static bool interrupt_next;
-static int (*nvn_android_pacing_target)(uint64_t)=nullptr;
-static bool sdk_active;
-static uint64_t sdk_target_ns;
-static int sdk_target(uint64_t interval){sdk_target_ns=interval;return sdk_active && interval;}
 static void xbg_refresh_target_fps(){++refreshes;}
 static int clock_read(clockid_t,struct timespec *time){time->tv_sec=fake_now/1000000000;time->tv_nsec=fake_now%1000000000;return 0;}
 static int sleep_for(const struct timespec *request,struct timespec *remaining){
@@ -47,16 +43,6 @@ int main(){
     s_target_frame_ns=0;unsigned before=sleeps;assert(xbg_frame_pace()==0 && sleeps==before);
     for(unsigned i=0;i<60;++i)xbg_frame_pace();
     assert(refreshes==2);
-    nvn_android_pacing_target=sdk_target;
-    s_target_frame_ns=33333333;s_next_present_ns=0;
-    before=sleeps;assert(xbg_frame_pace()==0 && sleeps==before);
-    assert(s_next_present_ns==fake_now+s_target_frame_ns && sdk_target_ns==s_target_frame_ns);
-    sdk_active=true;
-    assert(xbg_frame_pace()==0 && sleeps==before && s_next_present_ns==0);
-    s_target_frame_ns=0;
-    assert(xbg_frame_pace()==0 && sleeps==before && sdk_target_ns==0);
-    sdk_active=false;s_target_frame_ns=33333333;
-    assert(xbg_frame_pace()==0 && s_next_present_ns==fake_now+s_target_frame_ns);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

@@ -834,3 +834,20 @@
 - 实验APK0b33250dcae2bacd58ceedd9d77fb1981d9f6887fe31fa69d2bdbac32f58834e，profile540+SDK首次移动工作29.486FPS、物理29.335FPS/p95 49.611ms/max82.653ms。450+SDK工作30.142822FPS、物理30.144290FPS/p95 33.146707ms/p99 33.558218ms/max66.161769ms，593/599物理间隔在25至42ms。继续2400间隔工作29.810062FPS、物理29.748022FPS/p95 33.300965ms/p99 49.696744ms/max99.191615ms。原始gate-swappy-native450-motion和gate-swappy-native450-long-motion文件全保留。两轮均SF连续历史完整覆盖，无呈现失败/重复，长窗口工作回调有1次101.326ms，全部保留。
 - 同APK、同save008重新加载、450、SDK关且FIFO，真实场景复测工作30.002193FPS，物理30.019872FPS/p95 49.614466ms/max49.695ms，46个<25ms、55个42至58ms。短窗口开SDK物理节奏更均匀，但长窗口仍有掉帧。gate-fifo-native450-motion-valid为有效对照。第一次gate-fifo-native450-motion在读档确认页误开始，已经SIGINT中止并归零输入，作废，不用于验收。
 - 私有测量脚本现实时核已安装APK SHA、native render日志、SDK初始化状态和Vulkan实际present mode，新增结果记录实际APK哈希。当前设备仍实验0b33250d、native450、SDK marker0、FIFO marker0，PID7760，已完成有效关闭对照。731包源码只提前无marker检查、限制第二设备与加入固定依赖/许可证，下一步安装731包开启SDK，回到save007花盆慢点做更长窗口。荣耀继续暂停，公开release未更新。
+
+### T67 生命周期后续，仍未完成
+
+- b99ac44已推送任务分支。731e4bf6安装并核实际设备APK SHA。save007花盆慢点2400间隔工作29.433808FPS、物理29.361657FPS/p95 49.597200ms/p99 66.117544ms/max99.192923ms，无失败/重复/>100ms。原始flower-swappy-pinned-native450-long-motion文件保留，仍不稳30。15秒simpleperf12535样本丢失0、错误调用链53条，rg-flower-swappy-profile/callgraph/callees与原data保留，精确731ELF为libffrs-swappy-pinned.so。memcpy10.31% self，descriptors_build3.43% self/11.69%累计。memo命中约487、重建约361每帧，dynbuf这个合并原因约258，尚未拆原因，不能先假设全是buffer变更。
+- 后端复用destroy_window_surface进行新建前清理、设备销毁和setup失败恢复，等待GPU后先清SDK再释放呈现资源，新增真实函数提取ASan/UBSan测试。图形82项81通过1私有fixture跳过，graphics-tests-swappy-lifecycle-final.log。4a89d1d5包可前台运行。
+- 4a89后台测试一次PID19809在onPause后SIGABRT，重启后PID21057。复测PID25775后台和恢复均存活，但游戏ShowControllerSupport忙循环。已诊断原publishPad用resumed控制连接，后台把始终存在的虚拟手柄上报断开。当前Java修改始终连接，onPause复用touchPad.clearInput清掉触摸，pad-lifecycle-tests.log1通过、两个负控断言失败。源码HLE未改。PID25775后来由我force-stop终止忙循环。
+- c45037d7包含以上输入修改，SDK开启动一次signal11，libc pc offset0xa4224，x6/x7含mutex.cc文本，原因尚未确认。完整rg-swappy-pad-lifecycle-first.log保留，不能认定JNI连接就是根因。当前SDK marker0重启对照中，SDK可能影响未知，保持默认关闭。候选把渲染线程JNI连接保持到线程退出，ThreadAttachment真实源码mock含worker thread退出验证，2项通过，build-swappy-thread-attachment.log构建中，尚未装。
+- 原后台诊断日志因控制器忙循环增长很大，完整本地rg-sdk-home-resume-original.log约1.1GB，设备原始guest_boot-home-25775.log保留。已改私有home/resume脚本只读取最后3000行，并在测试前重命名诊断日志保留原进程内容，避免新进程启动覆盖。未动游戏数据和存档。下一步先验证SDK关的暂停恢复，再验证候选SDK开。测试脚本.local/publication/test-home-resume.py，必须先看真实场景再运行。
+
+### T67 撤回不合格SDK，保留实际通过的恢复修复
+
+- 原生控制器在后台保持连接，暂停清理按键及触摸，c450包SDK关连续3轮HOME/恢复同PID32217，真实draw/present继续。aeb891f6候选保持JNI连接至线程退出后，SDK开首轮HOME仍退出，PID4124，原始rg-pad-connection-sdk-on-resume-tail.log与rg-sdk-on-resume-pid4124.log保留。根因未知，不能声称已修复SDK崩溃。
+- 当前已完整撤回Swappy产品文件、构建入口、JNI hooks、头文件与许可证附带项。撤回前以failed-swappy-experiment-source.tar逐文件SHA校验全部实验源码，failed-swappy-experiment.patch保留，研究AAR仍在.local。b99ac44提交历史保留。当前仅保留本应用呈现配置修复、Vulkan统一等待/释放流程、后台手柄连接修复及对应真实源函数测试。
+- 最终构建build-sdk-removed-stable.log exit0，APK7b7fac893db68fe4d164d6da5b935c4cc6b118d6db385c0d432c4713fef0112f。副本apk-sdk-removed-stable.apk、精确ELF libffrs-sdk-removed-stable.so、sdk-removed-stable-provenance.json。源码和ELF没有Swappy或nvn_android_pacing接口，APK没有SDK许可/组件。
+- 图形81项80通过1私有fixture跳过，graphics-tests-sdk-removed-final.log。运行时9通过runtime-tests-sdk-removed-final.log。输入1通过pad-lifecycle-tests-sdk-removed-final.log及两个断言负控pad-lifecycle-negative-controls.log。Vulkan生命周期真实函数提取ASan/UBSan验证等待顺序、重复清理无double-destroy和创建失败统一回收。
+- 已装最终包，真实城门场景通过连续3轮HOME3秒/前台10秒，均同PID10246，实际draw与present递增，rg-sdk-removed-stable-resume-cycles.json、三轮截图和最后3000行日志保留。没有把后台窗口当FPS验收。当前仍为底座/native450/4槽/cache1/texdirty1/async0/FIFO，SDK marker0已失去产品作用。Continue8，save007/008全槽备份仍在，荣耀继续暂停，公开release未更新。
+- 平均FPS和物理16/50ms节奏仍未解决。下一步T68按12535样本拆分descriptor memo失效类型，先诊断，避免把dynbuf合并计数直接解释为VkBuffer变化。若是动态UBO/driver buffer导致反复重建，再把实际buffer身份纳入memo键并保留原校验/失效/租约。

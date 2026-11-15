@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T02:56:19.769003+08:00",
+  "updated_at": "2026-11-16T03:37:14.186051+08:00",
   "phase": "T67本应用呈现配置与Android帧节奏对照",
   "coordinator": "Codex",
   "integration_branch": "task/T67-android-frame-pacing",
@@ -520,7 +520,7 @@
         "保留游戏时间与正常资源/存档"
       ],
       "recovery": "02eab71 / APK9c412fe4 / 540 slots4 cache1 texdirty1 async0 / save007",
-      "checkpoint": "ad4edfb dirty / pinned Swappy APK731e4bf6已构建未安装 / 实验APK0b33250d移动450p物理30.144FPS p95 33.147ms / 长窗口29.748FPS p95 33.301ms / 81图形9运行时"
+      "checkpoint": "b99ac44 dirty / SDK候选已撤回 / APK7b7fac89 / 图形81项80通过1跳过、运行时9、输入1及2负控 / 原生后台恢复3轮同PID10246"
     }
   ],
   "blockers": [],
@@ -559,12 +559,15 @@
     "T65正常ec3e71c源码包5576b32b、slot4/cache1/texdirty1/540/async0，Continue7真实移动601不同工作帧28.617652FPS、p95 43.559ms、max88.746ms，失败0/重复0/>100ms0。RSS从6336436kB降4394512kB，纹理哈希退出采样热点，仍未稳定30。",
     "T66状态和纹理查找桶链及局部性回归，79图形78通过1私有fixture跳过、运行时9通过，旧全表遍历/破坏链与取消局部性负控均SIGABRT -6被拒绝。APK9c412fe4真实540触屏移动29.131FPS，450触屏29.328FPS，450 Android摇杆路由29.992FPS，三窗口各601不同工作帧，无失败重复/>100ms。输入/路径条件不同，不作严格单变量归因。",
     "T67本应用present-mode路径修复，图形80项79通过1私有fixture跳过，运行时9通过。477M底座540p/4槽/cache1/texdirty1/async0，同save008摇杆各601不同工作帧，FIFO30.000FPS、MAILBOX29.883FPS。连续SF历史覆盖完整窗口，物理29.994/29.896FPS、p95均49.6ms，仍有16/50ms节奏。原始gate-fifo-native540-motion和gate-mailbox-native540-motion文件保留，未达到稳定物理30。",
-    "T67官方Swappy2.1.3实验入口默认关闭，完整JNI引用、扩展/队列/交换链生命周期、固定30目标、无SDK/失败回退测试。81图形80通过1私有fixture跳过，运行时9通过，2个生命周期负控预期断言失败。450p同存档601工作帧，SDK开物理30.144FPS/p95 33.147ms，关物理30.020FPS/p95 49.614ms。继续2400间隔SDK开物理29.748FPS/p95 33.301ms/p99 49.697ms/max99.192ms，仍偶发长帧，未验收稳定30。"
+    "T67官方Swappy2.1.3实验入口默认关闭，完整JNI引用、扩展/队列/交换链生命周期、固定30目标、无SDK/失败回退测试。81图形80通过1私有fixture跳过，运行时9通过，2个生命周期负控预期断言失败。450p同存档601工作帧，SDK开物理30.144FPS/p95 33.147ms，关物理30.020FPS/p95 49.614ms。继续2400间隔SDK开物理29.748FPS/p95 33.301ms/p99 49.697ms/max99.192ms，仍偶发长帧，未验收稳定30。",
+    "T67最终撤回Swappy产品接线和依赖，实验源码完整哈希核验备份failed-swappy-experiment-source.tar与patch。真实APK7b7fac89已覆盖装，ELF符号和APK内容均确认无SDK。保留本应用present-mode路径、Vulkan统一清理与后台清按键保留手柄连接修复。图形81项80通过1私有fixture跳过，运行时9通过，输入生命周期1通过及2负控。477M从实际游戏场景连续3轮HOME3秒再回前台10秒，均同PID10246恢复实际draw与present，最后截图人物和场景可见。"
   ],
   "unverified": [
     "RG477M长流程稳定30仍未达到。T66同save007的540/Android摇杆移动29.682888FPS、p95 42.028ms、max57.551ms、无失败重复和>100ms。540保留，4槽/cache1/texdirty1仍为设备marker，显示呈现节奏还待优化。",
     "高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。",
-    "新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。"
+    "新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。",
+    "T67后台测试发现PID19809在onPause后SIGABRT，另一次PID25775保持存活但返回后ShowControllerSupport忙循环，原publishPad在后台上报断开。当前修正始终保留原虚拟手柄连接、暂停清除触摸输入，1项Java测试及2负控通过。c450 SDK开一次启动在libc格式化路径signal11，保留原始日志，SDK原因尚未确认。正在SDK关对照与线程级JNI连接候选验证，不可默认启用SDK或声明后台恢复通过。",
+    "Swappy候选aeb891f6保留线程JNI连接仍在首轮HOME时退出，SIGABRT/随后signal11，libc格式化路径pc0xa4224与mutex.cc文本，根因未证实。此前前台450短窗口p95改善不能抵消生命周期失败，当前产品已移除该候选。低帧率与物理16/50ms波动仍未修复，下一步拆描述符memo失效原因。"
   ],
   "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",

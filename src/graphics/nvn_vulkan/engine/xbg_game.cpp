@@ -9,7 +9,6 @@
 #include <fcntl.h>
 #include <time.h>
 #include "xbg_game_internal.h"
-#include "../../nvn_device/nvn_android_frame_pacing.h"
 #include "xbg_spirv_vertex.h"
 #include "xbg_shader_archive.h"
 #ifdef XBG_HAVE_SPIRV_OPT
@@ -7681,10 +7680,6 @@ static void xbg_refresh_target_fps() {
 static uint64_t xbg_frame_pace() {
     if ((s_pace_check_counter++ % 60) == 0) {
         xbg_refresh_target_fps();
-    }
-    if (nvn_android_pacing_target && nvn_android_pacing_target(s_target_frame_ns)) {
-        s_next_present_ns = 0;
-        return 0;
     }
     if (s_target_frame_ns == 0) return 0;
 
