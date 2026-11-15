@@ -565,3 +565,11 @@
 - 修改poll_retire按slot_index起始的环形提交顺序，只退休连续完成前缀，遇到未完成或仍录制的最老槽停止。xbg_legacy_wait最终wait-all回退也改为相同顺序，保留原超时预算。其他退休点已检查，原有oldest_pending与submit_slots(true)本来按提交顺序。
 - 新增提取真实poll_retire函数的ASan/UBSan回归，以2/4/16槽所有回绕点验证写回/完成值递增、未完成首槽阻断、部分前缀退休、录制槽、通知和空轮询。单项通过retirement-order-test.log。完整图形测试进行中，构建build-retirement-order.log退出0。
 - 下一步保存旧defer1视频rg-before-retirement-order.mp4后装新包，marker保持defer1、wtrack0、无guard、无pass-profile、无SPV覆盖，Continue同save00310:35，观察墙/柱/天空与帧时间。显示未过前保持公开Mali默认defer0。
+
+## T59 写回顺序真机初步结果
+
+- 修复提交e7c1052，build-retirement-order.log APK3083dc9fdb738bafab0f51b28eb12bfad0f7cedb13e98ff3032252614a0a179f，覆盖安装退出0。graphics67项66通过1跳过。旧物理顺序循环负控因越过未完成前缀被断言拒绝，retirement-order-negative-control.log。
+- PID22131同save00310:35、defer1/wtrack0。rg-retirement-order-scene.png与10秒录像rg-after-retirement-order.mp4中城墙/金属柱体持续显示，2fps共20张采样拼图rg-after-retirement-order-sheet.png保持。旧defer1录像rg-before-retirement-order-sheet.png缺失城墙。此为城门流程的初步显示证据，未覆盖道路天空和长时移动。
+- 同点预热后约25.2-25.6FPS，submitCPU21.2ms、GPU24.6-25.3ms，sync_wb0、why_access0；此前错误退休defer1约20.2-20.8FPS、submit35-36ms、sync_wb30/60frames。仍未稳30，未改公开默认defer0。
+- 再核诊断配置发现gfx-live-off=wtrack一直保留，会在启动30帧后关闭wtrack。此前与pass-profile叠加的实验均不作为单变量wtrack证据。现在已把live-off移动到config-before-defaults-20261115/gfx-live-off-wtrack，再将gfx-wtrack1单独重启，保留defer1/新退休顺序、无guard、无pass-profile、无SPV覆盖。当前启动脚本session67121。
+- 下一步确认新PID、wtrack enabled及region/mismatch/fallback数据、同点FPS，再做草叶/开阔天空与原游戏保存回读。若无改善或出现异常，恢复gfx-wtrack0。后续启用Mali默认defer1需要更长画面回归，荣耀设备继续暂停。
