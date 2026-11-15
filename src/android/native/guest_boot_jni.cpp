@@ -21,6 +21,7 @@
 #include <unistd.h>
 #include <malloc.h>
 #include <sys/prctl.h>
+#include <sys/system_properties.h>
 
 #ifndef M_BIONIC_SET_HEAP_TAGGING_LEVEL
 #define M_BIONIC_SET_HEAP_TAGGING_LEVEL -204
@@ -142,7 +143,10 @@ void* GuestThreadMain(void* opaque) {
                 operation_mode, operation_source, operation_marker.c_str());
         const std::string pointer_marker = path + "/hle-original-pointer-tests";
         FILE *pointer_file = fopen(pointer_marker.c_str(), "rb");
-        const bool original_pointer_tests = pointer_file && fgetc(pointer_file) == '1';
+        char platform[PROP_VALUE_MAX] = {};
+        __system_property_get("ro.board.platform", platform);
+        bool original_pointer_tests = !strncmp(platform, "mt68", 4) || !strncmp(platform, "mt69", 4);
+        if (pointer_file) original_pointer_tests = fgetc(pointer_file) == '1';
         if (pointer_file) fclose(pointer_file);
         setenv("SNK_ORIGINAL_POINTER_TESTS", original_pointer_tests ? "1" : "0", 1);
         fprintf(stderr, "[port] original_allocator_pointer_tests=%d\n", original_pointer_tests);

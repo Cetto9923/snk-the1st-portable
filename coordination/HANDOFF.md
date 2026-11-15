@@ -494,3 +494,17 @@
 - 当前重启对照组合为540、async0、cached1、wtrack1、ldc-fold1、forward-temps1、defer-events1、render-cpu=-1。仅RG设备诊断marker，尚未固化APK默认。标题截图rg-540-opt-title.png待查看，再正常Continue确认加载。
 - runtime7项通过，新增编译真实native配置函数的ASan/UBSan覆盖build不匹配、未初始化、边界、无关字段保留、540/720与一次性应用。Mali门禁2项通过，编译真实配置vendor门禁和present调用，ARM按marker生效，Adreno/NVIDIA/未知与缺marker保持原路径。原始日志runtime-tests-render-profile.log / mali-render-gates.log。
 - 屏幕system brightness110、manual0、night_display_activated0，仅查询，未调整设备屏幕设置。
+
+
+## T58 天空闪烁回退与默认配置固化
+
+- 用户反馈天空闪烁。组合540/async0/cached1/wtrack1/fold1/temps1/defer-events1在站立预热约29.6FPS，实际移动40.899秒仅26.382 distinct-work FPS，p95 44.244ms，p99 49.915ms，最大136.075ms，重复呈现0。原始rg-opt-motion.csv/rg-opt-motion-metrics.json，未达到稳定30。
+- rg-sky-flicker-before.png有天空粉/蓝细线。live关闭wtrack后rg-sky-wtrack-off.mp4逐秒帧仍有细线。随后defer-events0且wtrack0重启，保留fold/temps，用户明确确认“这个版本没闪烁”。这是配置回退的现场结果，完整事件/写回根因仍待审计。当前默认不启用事件延迟。
+- 用户随后在城门/城里游玩。rg-sky-nodefer-stable.log、rg-sky-stable-city.log/csv记录复杂场景约10-20FPS，不能用早先户外29.6宣称城镇30。最新UI教程背景城镇截图rg-stable-current.png。
+- 未安装的sky ROI诊断构建已停止，xbg_probe.inc临时4行已精确还原，不进入发布源码。
+- 源码将Mali默认配置设为原生960x540、cached readback1、fold1、temps1、async0、wtrack0。defer-events保留默认0。MT68/MT69默认原始allocator pointer tests。标记保留显式覆盖，Adreno路径经编译门禁保留旧默认。
+- build-mali-defaults.log退出0，APK SHA256 25b98d5ed43c0a350be167df91e5a624912cd5d2aaa30f2858ca2a1801913952，RG覆盖安装退出0，rg-defaults-install.log。测试graphics64项63通过1私有fixture跳过、runtime8通过、deviceprofile通过。
+- 用户已授权随时重启并停止游玩。重启前全部存档备份device-backup/saves-city-before-defaults.tar。设备缺省验证时把本会话性能marker移动到config-before-defaults-20261115，可恢复，保留game-directory及帧时间诊断。
+- PID6411缺marker正常入口日志rg-defaults-boot.log确认pointer1、defer0、cached1、fold1/temps1、wtrack0、async0。原版Ver1.07标题截图rg-defaults-start.png。最新读档列表只有auto5:48布莱特家户外、两个人工槽，用户说已保存的城镇槽未出现，已明确告知并继续查保存。未覆盖旧存档。
+- normal Load Game载入auto后真实户外rg-defaults-game.png人物和亮度正常，约21-23帧。还需重新到城镇并正常新建槽、重启读回，做无闪烁配置移动/音频回归。
+- 借鉴主源https://github.com/seedds/nxnative/issues/2112，上游Metal已处理事件拆分造成renderpass/loadstore增加。该游戏/Metal帧率不能代替本项目Mali验收。当前优先保证正确同步，另查安全减少提交与snapshot。

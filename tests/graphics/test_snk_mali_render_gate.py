@@ -42,7 +42,12 @@ int main(int argc,char **argv) {
             if(enabled)assert(requested==height);
         }
     }
-    remove(marker.c_str());properties.vendorID=0x13b5;configure();assert(!mali_render_height);
+    remove(marker.c_str());
+    for(uint32_t vendor:{0x13b5u,0x5143u,0x10deu,0u}) {
+        properties.vendorID=vendor;calls=0;configure();present_boundary();
+        assert(mali_render_height==(vendor==0x13b5?540u:0u));
+        assert(calls==unsigned(vendor==0x13b5));
+    }
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
