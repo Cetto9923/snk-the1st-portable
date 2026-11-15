@@ -521,3 +521,13 @@
 - 调用栈显示prepare_read→probe_image_read_barrier反复fopen。gfx-codex-probe0仍让probe.waiting=true，默认关闭状态下每次observer均读取文件。新增probe_request把同帧请求共享一次读取，保留下一帧观察标记变化与renderer重初始化。没有改图形同步、shader、分辨率或游戏时间。真实helper ASan/UBSan用例通过，1000次同帧调用只open1次，缺文件/文件变化/重置均验证。
 - build-probe-poll.log退出0，APK5eb5a46e07b12d89fce191fdb32c80adfa9ca081d5e4e64609a0358b5a6afe66，rg-probe-poll-install.log覆盖安装退出0，当前正在正常Load同save002做同点profile。发布附件保持ea32原包。
 - 下一步观测新包标题和Continue9:08读回，simpleperf同点10s采样并保留CSV。优先核减少CPU复制与安全同步，未达到30不标记目标complete。
+
+
+## T59 CPU 分析与递归锁候选
+
+- probe缓存候选已装机正常进入原版标题，正常Continue9:08。graphics65项64通过1跳过，日志graphics-tests-probe-poll.log。之后截图rg-probe-poll-loaded.png已在道路向城镇移动。前后CPU采样的画面/剧情状态发生变化，不能写成严格同点FPS提升。
+- 新发现正常save003在12:33:21记录艾里兹街道城门10:35，rg-city-save-list.png；run-as目录确有save003。已备份device-backup/saves-city-slot003.tar。原save002与以前槽保持。
+- 取得可操作camp后B退回城门站立，rg-rmutex-before.png。simpleperf同场景10秒记录perf-rmutex-before.data，输出rg-rmutex-before-profile.txt：memcpy26.69%、snk_recursive_mutex_lock2.52%、unlock1.49%、program_info2.24%。该场景日志rg-rmutex-before.log约11.44FPS、GPU46.18ms、提交CPU69.66ms，672draw/34dispatch，复杂城镇仍重。
+- snk_libcxx.c每次递归锁lock/unlock在全局链表线性查找。改为256bucket地址散列，仍使用同一table锁与原pthread递归锁，guest对象内容保持。实际实现提取用例以4096对象验证碰撞、重复构造、同线程递归、跨线程trylock、4线程80000次互斥递增、析构重建与guest字节保持，ASan/UBSan通过。runtime9项通过。
+- build-rmutex-buckets.log构建退出0，rg-rmutex-install.log覆盖安装退出0，当前PID24948，待Continue最新10:35后做同点CPU采样和真实移动。该候选还没更新公开Release。
+- 注意原生540档只per-process应用一次。城镇GPU46ms需复核过图是否恢复900p，尚无证据，不能先当原因。可以用现有probe1抓capture.txt的实际viewport，或读native cfg，不能仅按附件尺寸推断。

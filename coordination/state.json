@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T20:31:19.924790+08:00",
-  "phase": "社区预览版已发布，RG477M继续减少CPU复制与同步开销",
+  "updated_at": "2026-11-15T20:38:06.698335+08:00",
+  "phase": "RG477M CPU诊断轮询修正已安装，继续验证递归锁查找优化",
   "coordinator": "Codex",
   "integration_branch": "task/T59-rg477m-frame-time",
   "baseline": {
@@ -200,7 +200,9 @@
       ],
       "write_scope": [
         "src/graphics",
+        "src/runtime/hle/snk_libcxx.c",
         "tests/graphics",
+        "tests/runtime",
         "coordination"
       ],
       "acceptance": [
@@ -225,7 +227,8 @@
     "原游戏540档位真实viewport960x540已抓取验证。无闪烁配置已固化为Mali默认，MT68/MT69默认使用原始allocator null tests。",
     "缺省/marker/env/vendor编译门禁通过。graphics64项63通过1私有fixture跳过，runtime8通过，设备profile脚本通过。",
     "1.0.1-preview已在独立空轨仓发布，APK SHA ea32adb3d3e0fe8061dc33c5fb5ade73ca8ace9ce4cdfd2638787164fa864dc1，公开包回下载全SHA256SUMS验证通过。",
-    "缺调试marker入口正常。原游戏新建save002艾里兹街道9:08，重启覆盖安装后Continue读回同位置和两个人物，缩略图正确。"
+    "缺调试marker入口正常。原游戏新建save002艾里兹街道9:08，重启覆盖安装后Continue读回同位置和两个人物，缩略图正确。",
+    "T59轮询缓存候选通过graphics65项64通过1私有输入跳过。载入户外与城门人物正常。先后采样含移动/剧情状态变化，不作为严格同点FPS提升证据。"
   ],
   "unverified": [
     "RG477M稳定30帧尚未达成。组合优化曾站立29.6帧，实际移动26.38帧且会天空闪烁，已弃用事件延迟。无闪烁配置城镇约10至20帧。",

@@ -128,11 +128,18 @@ struct snk_recursive_mutex {
 };
 
 static pthread_mutex_t s_rmutex_lock = PTHREAD_MUTEX_INITIALIZER;
-static struct snk_recursive_mutex *s_rmutexes;
+enum { SNK_RMUTEX_BUCKETS = 256 };
+static struct snk_recursive_mutex *s_rmutexes[SNK_RMUTEX_BUCKETS];
+
+static size_t rmutex_bucket(const void *object) {
+    const uintptr_t address = (uintptr_t)object;
+    return ((address >> 4) ^ (address >> 13)) & (SNK_RMUTEX_BUCKETS - 1);
+}
 
 static struct snk_recursive_mutex *rmutex_entry(void *object, bool create) {
     pthread_mutex_lock(&s_rmutex_lock);
-    struct snk_recursive_mutex *entry = s_rmutexes;
+    const size_t bucket = rmutex_bucket(object);
+    struct snk_recursive_mutex *entry = s_rmutexes[bucket];
     while (entry && entry->object != object) entry = entry->next;
     if (!entry && create) {
         entry = (struct snk_recursive_mutex *)calloc(1, sizeof(*entry));
@@ -143,8 +150,8 @@ static struct snk_recursive_mutex *rmutex_entry(void *object, bool create) {
             pthread_mutex_init(&entry->native, &attributes);
             pthread_mutexattr_destroy(&attributes);
             entry->object = object;
-            entry->next = s_rmutexes;
-            s_rmutexes = entry;
+            entry->next = s_rmutexes[bucket];
+            s_rmutexes[bucket] = entry;
         }
     }
     pthread_mutex_unlock(&s_rmutex_lock);
@@ -158,7 +165,7 @@ static uint64_t snk_recursive_mutex_ctor(void *object) {
 
 static uint64_t snk_recursive_mutex_dtor(void *object) {
     pthread_mutex_lock(&s_rmutex_lock);
-    struct snk_recursive_mutex **slot = &s_rmutexes;
+    struct snk_recursive_mutex **slot = &s_rmutexes[rmutex_bucket(object)];
     while (*slot && (*slot)->object != object) slot = &(*slot)->next;
     struct snk_recursive_mutex *entry = *slot;
     if (entry) *slot = entry->next;
