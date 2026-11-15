@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T04:38:31.738647+08:00",
-  "phase": "T68描述符缓存失效原因与重建开销优化",
+  "updated_at": "2026-11-16T04:45:45.478597+08:00",
+  "phase": "T69可选原生呈现时间戳实机对照",
   "coordinator": "Codex",
-  "integration_branch": "task/T68-descriptor-memo-inputs",
+  "integration_branch": "task/T69-native-display-timing",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -23,7 +23,18 @@
     "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T69",
+      "paths": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_device/nvn_backend_vulkan.c",
+        "tests/graphics/",
+        "coordination/"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -543,6 +554,43 @@
       ],
       "recovery": "61a167c / APK7b7fac89 / native450 slots4 cache1 texdirty1 async0 FIFO / save007与008备份",
       "checkpoint": "d3c6b58 / APK6c94ef1c / 图形82项81通过1私有fixture跳过，运行时9通过，3负控预期断言失败 / 同save008各2400移动间隔及连续SF完整覆盖 / CPU均值15.956→15.491ms / 3轮HOME同PID2797恢复"
+    },
+    {
+      "id": "T69",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T69-native-display-timing",
+      "dependencies": [
+        "T58",
+        "T68"
+      ],
+      "pass_gates": [],
+      "objective": "复用原CPU限帧时钟并通过可选VK_GOOGLE_display_timing改善物理呈现节奏",
+      "inputs": [
+        "5d8802a / APK6c94ef1c",
+        "save008与007及全槽备份",
+        "477M Vulkan扩展inventory与官方API时间定义"
+      ],
+      "outputs": [
+        "默认关闭的本应用时间戳入口及能力回退",
+        "生产函数测试和负控",
+        "同场景连续SF、移动帧时间与HOME恢复实测"
+      ],
+      "write_scope": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_device/nvn_backend_vulkan.c",
+        "tests/graphics",
+        "coordination"
+      ],
+      "acceptance": [
+        "不改变游戏更新与CPU限帧频率",
+        "不支持或关闭时保留原呈现路径",
+        "真实场景完整SF历史改善16/50ms且无显示回归",
+        "同进程三轮HOME恢复"
+      ],
+      "recovery": "5d8802a / apk-memo-semantic-final.apk / native450 slots4 cache1 texdirty1 async0 FIFO / save008备份",
+      "checkpoint": "5d8802a dirty / APKedb78e86 / 图形85项84通过1私有fixture跳过，运行时9通过，4负控预期断言失败 / save008移动600间隔物理29.9947FPS/p95 33.163ms，完整SF覆盖 / 正在2400间隔长测，HOME尚未测"
     }
   ],
   "blockers": [],

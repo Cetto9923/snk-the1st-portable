@@ -7729,6 +7729,12 @@ static uint64_t xbg_frame_pace() {
     return now_ns > start_ns ? (now_ns - start_ns) : 0;
 }
 
+extern "C" uint64_t xbg_desired_present_time_ns() {
+    if (!s_target_frame_ns || !s_next_present_ns ||
+        s_next_present_ns > UINT64_MAX - s_target_frame_ns) return 0;
+    return s_next_present_ns + s_target_frame_ns;
+}
+
 // gfx-flame-diag: copy a fixed ROI of the presented image and of the frame's flame render target into persistent
 // staging buffers, so the log can say what the GPU actually drew in that frame (no compositor in between).
 VkBuffer fdiag_roi_buf{},fdiag_rt_buf{};VkDeviceMemory fdiag_roi_mem{},fdiag_rt_mem{};

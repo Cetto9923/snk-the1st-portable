@@ -33,6 +33,7 @@ static int sleep_for(const struct timespec *request,struct timespec *remaining){
 int main(){
     assert(xbg_frame_pace()==0 && sleeps==0 && refreshes==1);
     assert(s_next_present_ns==1033333333);
+    assert(xbg_desired_present_time_ns()==1066666666);
     fake_now+=10000000;interrupt_next=true;
     assert(xbg_frame_pace()==23333333 && sleeps==2);
     assert(fake_now==1033333333 && s_next_present_ns==1066666666);
@@ -43,6 +44,12 @@ int main(){
     s_target_frame_ns=0;unsigned before=sleeps;assert(xbg_frame_pace()==0 && sleeps==before);
     for(unsigned i=0;i<60;++i)xbg_frame_pace();
     assert(refreshes==2);
+    assert(xbg_desired_present_time_ns()==0);
+    s_target_frame_ns=33333333;s_next_present_ns=0;
+    assert(xbg_desired_present_time_ns()==0);
+    s_next_present_ns=UINT64_MAX-s_target_frame_ns;
+    assert(xbg_desired_present_time_ns()==UINT64_MAX);
+    ++s_next_present_ns;assert(xbg_desired_present_time_ns()==0);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

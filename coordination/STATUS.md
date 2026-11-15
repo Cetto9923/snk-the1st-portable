@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T04:38:31.738647+08:00
-阶段：T68描述符缓存失效原因与重建开销优化
+状态事件时间：2026-11-16T04:45:45.478597+08:00
+阶段：T69可选原生呈现时间戳实机对照
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -26,10 +26,11 @@
 | T66 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T66-object-lookup-chains |
 | T67 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T67-android-frame-pacing |
 | T68 | GRAPHICS | passed | Codex | T58 | 无额外门禁 | task/T68-descriptor-memo-inputs |
+| T69 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T69-native-display-timing |
 
 ## 独占写入
 
-- 无
+- {"owner": "Codex", "task": "T69", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "src/graphics/nvn_device/nvn_backend_vulkan.c", "tests/graphics/", "coordination/"]}
 
 ## 阻塞
 

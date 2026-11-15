@@ -872,3 +872,18 @@
 - 最终花盆save007移动2400间隔工作29.656FPS/p95 41.007ms，完整SF29.652FPS/p95 49.629ms，flower-memo-semantic-final-long-motion-*。无失败、重复工作帧或100ms以上间隔，SF仍有16/50ms。内存VmRSS4366924kB/VmSwap17480kB。
 - 最终APK真实游戏连续3轮HOME3秒/前台10秒，同PID2797，实际draw和present递增且present_result0，rg-memo-semantic-final-resume-cycles.json、三截图与tail日志。第三图人物和场景可见。当前仍花盆位置，原用户新地点save008已正常保存并全槽备份，冷重启Continue8可恢复。荣耀暂停，公开release未更新。
 - 下一步原生Vulkan可选display timing候选，复用现有CPU pacer时间线。先核官方扩展与设备支持，默认关闭，477M实机长窗口SF与HOME验证。Swappy保持移除。
+
+## T69 原生Vulkan呈现时间戳候选
+
+- 基线5d8802a，独立分支task/T69-native-display-timing，总控独占后端、xbg_game与相关测试。默认关闭，本应用gfx-present-timing=1且设备扩展支持和FIFO时使用。复用现有CPU pacer的next deadline加一个interval，约两帧显示余量，原CPU sleep/catchup和游戏更新不变。此余量是实验选择，需检查延迟和真实SF。
+- 官方VkPresentTimeGOOGLE以CLOCK_MONOTONIC纳秒定义最早显示时间，https://docs.vulkan.org/refpages/latest/refpages/source/VkPresentTimeGOOGLE.html 。477M inventory实际支持VK_GOOGLE_display_timing。未支持/无marker/禁用/无getter/非FIFO均走旧路，扩展开启失败重试原设备配置。Swappy保持移除，荣耀暂停。
+- 后端现契约一个present path/device，HOME内部重建可能使上层传回旧SC句柄。计划始终释放当前tracked句柄并以真实函数测试验证旧参数不会二次销毁。
+
+### T69 构建与短窗口检查点
+
+- 已接可选扩展与两处vkQueuePresentKHR pNext，保留wait semaphore/SC/index/原pNext。每SC独立ID、重建清零。marker仅本应用FFRS_APP_FILES_DIR，缺省关闭；设备缺扩展/无engine getter不启用，非FIFO不调度。扩展是列表最后一项，建device失败移除该项再走原features/扩展请求。后台销毁只释放当前tracked句柄，拒绝重复销毁上层陈旧句柄。
+- 生产pacer getter仅返回原next+interval，未改sleep/目标/catchup。生产函数提取测试包含CLOCK逻辑、0/overflow、marker边界、可选engine、原pNext和同步对象保留、present ID回绕。实际设备扩展协商代码ASan/UBSan跑完8种支持组合×2marker×3失败路径，验证feature链和扩展顺序/重试。过期句柄生命周期真实函数回归通过。macOS无定义weak符号测试使用宿主weak_import及-U适配，Android产品保留weak。
+- 图形85项84通过1私有fixture跳过，graphics-tests-native-timing-final85.log。运行时9通过runtime-tests-native-timing.log。丢失原pNext、忽略关闭、保留失败扩展、销毁陈旧SC四个负控均实际断言失败，native-timing-negative-controls.log/json。
+- build-native-timing.log exit0。APKedb78e86fa0a571ce43b437651c52f9b31d915ffc88e2da5b97d3c4a981b3c4d、apk-native-timing-candidate.apk、精确ELF libffrs-native-timing-candidate.so和native-timing-candidate-provenance.json。477M覆盖安装成功，Continue8真实城门人物/场景/亮度可见。实际log扩展supported1/enabled1、FIFO2、active1、desired比now约66ms。没有Swappy。
+- 底座450/4槽/cache1/texdirty1/async0/FIFO/PAD可见，save008摇杆600间隔，601不同工作帧29.9967FPS，工作p95 35.830ms/max53.332ms，失败/重复/>100ms均0。完整SF覆盖物理29.9947FPS，p95 33.163ms/p99 49.587ms/max49.699ms，589个25–42ms/10个42–58ms，无<25或58+。gate-native-timing-600-motion-*。
+- 当前从Continue8冷重载并截图确认，正在gate-native-timing-long-motion-*的2400间隔测试。后台恢复与花盆仍待验收，默认不启用其他机型，荣耀暂停。整体稳定30任务继续。

@@ -43,6 +43,21 @@
 /* How long the wait for a swapchain image may take. */
 #define NVN_PRESENT_ACQUIRE_TIMEOUT_NS 1000000000ull
 
+extern uint64_t xbg_desired_present_time_ns(void) __attribute__((weak));
+
+static int nvn_vulkan_present_timing_requested(void) {
+    const char *directory = getenv("FFRS_APP_FILES_DIR");
+    if (!directory || !directory[0]) return 0;
+    char path[PATH_MAX];
+    int length = snprintf(path, sizeof(path), "%s/gfx-present-timing", directory);
+    if (length < 0 || (size_t)length >= sizeof(path)) return 0;
+    FILE *file = fopen(path, "rb");
+    if (!file) return 0;
+    int enabled = fgetc(file) == '1';
+    fclose(file);
+    return enabled;
+}
+
 /* The Android shell supplies its own files directory before guest startup. */
 static FILE *nvn_vulkan_present_mode_marker(void) {
     const char *directory = getenv("FFRS_APP_FILES_DIR");
@@ -72,6 +87,9 @@ typedef struct {
     uint32_t storage_image_write_supported;   /* the device can write a storage image without a format */
     uint32_t storage_image_write_enabled;     /* and it was enabled on this device */
     uint32_t swapchain_supported;             /* the device has VK_KHR_swapchain */
+    uint32_t display_timing_enabled;
+    uint32_t present_timing_active;
+    uint32_t present_timing_id;
 
     /* The present path. The backend owns all of it: one surface, one
      * swapchain, the images of that swapchain, a view and a framebuffer per
@@ -118,6 +136,29 @@ typedef struct {
     double max_fence_wait_ms;
     double total_fence_wait_ms;
 } nvn_vulkan_state;
+
+static void nvn_vulkan_schedule_present(nvn_vulkan_state *st, VkPresentInfoKHR *info,
+                                        VkPresentTimesInfoGOOGLE *timing, VkPresentTimeGOOGLE *time) {
+    if (!st->present_timing_active || !xbg_desired_present_time_ns) return;
+    uint64_t desired_ns = xbg_desired_present_time_ns();
+    if (!desired_ns) return;
+    if (++st->present_timing_id == 0) ++st->present_timing_id;
+    *time = (VkPresentTimeGOOGLE){ .presentID = st->present_timing_id, .desiredPresentTime = desired_ns };
+    *timing = (VkPresentTimesInfoGOOGLE){
+        .sType = VK_STRUCTURE_TYPE_PRESENT_TIMES_INFO_GOOGLE,
+        .pNext = info->pNext,
+        .swapchainCount = 1,
+        .pTimes = time,
+    };
+    info->pNext = timing;
+    if (st->present_timing_id <= 4) {
+        struct timespec now;
+        clock_gettime(CLOCK_MONOTONIC, &now);
+        fprintf(stderr, "[nvn] vulkan: present timing id=%u desired=%llu now=%llu\n",
+                time->presentID, (unsigned long long)desired_ns,
+                (unsigned long long)now.tv_sec * 1000000000ull + (unsigned long long)now.tv_nsec);
+    }
+}
 
 /* How long a reason may be. */
 #define NVN_VULKAN_REASON_SIZE 256
@@ -327,7 +368,8 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         requested12.shaderOutputViewportIndex=VK_TRUE;
     }
     /* Extension names remain alive through vkCreateDevice. */
-    const char *device_extensions[2];
+    const char *device_extensions[3];
+    VkBool32 display_timing_supported = VK_FALSE;
     VkBool32 fault_extension_supported = VK_FALSE;
     VkPhysicalDeviceFaultFeaturesEXT fault_features = {0};
     fault_features.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FAULT_FEATURES_EXT;
@@ -341,6 +383,7 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
             if (extension_result == VK_SUCCESS) for (uint32_t e=0;e<extension_count;e++) {
                 if (!strcmp(available[e].extensionName,VK_KHR_SWAPCHAIN_EXTENSION_NAME)) st->swapchain_supported=1;
                 if (!strcmp(available[e].extensionName,VK_EXT_DEVICE_FAULT_EXTENSION_NAME)) fault_extension_supported=VK_TRUE;
+                if (!strcmp(available[e].extensionName,VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME)) display_timing_supported=VK_TRUE;
             }
             free(available);
         }
@@ -359,12 +402,24 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         }
     }
     fprintf(stderr,"[nvn] vulkan: device fault extension=%u reporting=%u\n",fault_extension_supported,fault_features.deviceFault);
+    if (st->swapchain_supported && display_timing_supported &&
+        xbg_desired_present_time_ns && nvn_vulkan_present_timing_requested()) {
+        device_extensions[device_info.enabledExtensionCount++] = VK_GOOGLE_DISPLAY_TIMING_EXTENSION_NAME;
+        st->display_timing_enabled = 1;
+    }
     device_info.ppEnabledExtensionNames=device_info.enabledExtensionCount?device_extensions:NULL;
     fprintf(stderr,"[nvn] vulkan: swapchain supported=%u requested=%u; Vulkan12 route=%u outputLayer supported=%u requested=%u outputViewportIndex supported=%u requested=%u\n",
         st->swapchain_supported,st->swapchain_supported,core12_route,supported12.shaderOutputLayer,requested12.shaderOutputLayer,
         supported12.shaderOutputViewportIndex,requested12.shaderOutputViewportIndex);
 
     result = vkCreateDevice(st->physical, &device_info, NULL, &st->device);
+    if (result != VK_SUCCESS && st->display_timing_enabled) {
+        fprintf(stderr, "[nvn] vulkan: display timing device request failed=%d; retrying original extensions\n", (int)result);
+        --device_info.enabledExtensionCount;
+        st->display_timing_enabled = 0;
+        st->device = VK_NULL_HANDLE;
+        result = vkCreateDevice(st->physical, &device_info, NULL, &st->device);
+    }
     if (result != VK_SUCCESS) {
         fprintf(stderr, "[nvn] vulkan: vkCreateDevice failed with %d\n", (int)result);
         vkDestroyInstance(st->instance, NULL);
@@ -374,6 +429,8 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
     /* vkCreateDevice succeeded with precisely this feature request. There
      * is no logical-device feature query: retain the successful request. */
     st->enabled = st->features;
+    fprintf(stderr, "[nvn] vulkan: display timing supported=%u enabled=%u\n",
+            display_timing_supported, st->display_timing_enabled);
     st->shader_draw_parameters_enabled = draw_parameters.shaderDrawParameters;
     st->shader_output_layer_enabled = requested12.shaderOutputLayer;
     st->shader_output_viewport_index_enabled = requested12.shaderOutputViewportIndex;
@@ -950,6 +1007,10 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
         return 0;
     }
 
+    st->present_timing_active = st->display_timing_enabled && present_mode == VK_PRESENT_MODE_FIFO_KHR;
+    st->present_timing_id = 0;
+    fprintf(stderr, "[nvn] vulkan: swapchain present timing active=%u\n", st->present_timing_active);
+
     fprintf(stderr, "[nvn] vulkan: created a surface and a swapchain for the platform window: "
                     "%ux%u, format %u, colorSpace %u, %u images, present mode %d\n",
             width, height, (unsigned)format.format, (unsigned)format.colorSpace,
@@ -970,12 +1031,16 @@ static void nvn_vulkan_destroy_window_surface(nvn_device_state *device, void *su
     /* The present path is given back before the swapchain and the surface
      * it belongs to. */
     nvn_vulkan_release_present_path(st);
-    if (swapchain) vkDestroySwapchainKHR(st->device, (VkSwapchainKHR)(uintptr_t)swapchain, NULL);
-    else if (st->swapchain) vkDestroySwapchainKHR(st->device, st->swapchain, NULL);
-    if (surface) vkDestroySurfaceKHR(st->instance, (VkSurfaceKHR)(uintptr_t)surface, NULL);
-    else if (st->surface) vkDestroySurfaceKHR(st->instance, st->surface, NULL);
+    /* Upper-layer window handles can predate an internal WSI rebuild. This
+     * backend owns one current path, so only its tracked handles are live. */
+    (void)surface;
+    (void)swapchain;
+    if (st->swapchain) vkDestroySwapchainKHR(st->device, st->swapchain, NULL);
+    if (st->surface) vkDestroySurfaceKHR(st->instance, st->surface, NULL);
     st->swapchain = VK_NULL_HANDLE;
     st->surface = VK_NULL_HANDLE;
+    st->present_timing_active = 0;
+    st->present_timing_id = 0;
 }
 
 /* Step one of the present path: take the next image of the swapchain.
@@ -1330,6 +1395,9 @@ static int nvn_vulkan_present_image(nvn_device_state *device, void *image, uint3
     present_info.swapchainCount = 1;
     present_info.pSwapchains = &st->swapchain;
     present_info.pImageIndices = &index;
+    VkPresentTimesInfoGOOGLE timing;
+    VkPresentTimeGOOGLE time;
+    nvn_vulkan_schedule_present(st, &present_info, &timing, &time);
     result = vkQueuePresentKHR(st->queue, &present_info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
         nvn_vulkan_destroy_window_surface(device, st->surface, st->swapchain);
@@ -1487,6 +1555,9 @@ static int nvn_vulkan_submit_and_present(nvn_device_state *device, uint32_t inde
     present_info.swapchainCount = 1;
     present_info.pSwapchains = &st->swapchain;
     present_info.pImageIndices = &index;
+    VkPresentTimesInfoGOOGLE timing;
+    VkPresentTimeGOOGLE time;
+    nvn_vulkan_schedule_present(st, &present_info, &timing, &time);
     result = vkQueuePresentKHR(st->queue, &present_info);
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         st->present_failures++;

@@ -30,13 +30,13 @@ class VulkanSurfaceLifecycleTests(unittest.TestCase):
 using VkSwapchainKHR = uintptr_t;
 using VkSurfaceKHR = uintptr_t;
 #define VK_NULL_HANDLE 0
-struct nvn_vulkan_state { uintptr_t device, instance, swapchain, surface; };
+struct nvn_vulkan_state { uintptr_t device, instance, swapchain, surface; unsigned present_timing_active, present_timing_id; };
 struct nvn_device_state { void *backend_state; };
 static std::vector<std::string> events;
 static void vkDeviceWaitIdle(uintptr_t) { events.push_back("idle"); }
 static void nvn_vulkan_release_present_path(nvn_vulkan_state *) { events.push_back("path"); }
-static void vkDestroySwapchainKHR(uintptr_t, uintptr_t, void *) { events.push_back("swapchain"); }
-static void vkDestroySurfaceKHR(uintptr_t, uintptr_t, void *) { events.push_back("surface"); }
+static void vkDestroySwapchainKHR(uintptr_t, uintptr_t handle, void *) { assert(handle==3);events.push_back("swapchain"); }
+static void vkDestroySurfaceKHR(uintptr_t, uintptr_t handle, void *) { assert(handle==4);events.push_back("surface"); }
 static void vkDestroyDevice(uintptr_t, void *) { events.push_back("device"); }
 static void vkDestroyInstance(uintptr_t, void *) { events.push_back("instance"); }
 ''' + functions + r'''
@@ -55,6 +55,14 @@ int main() {
     assert((events == std::vector<std::string>{"idle", "path", "swapchain", "surface"}));
     events.clear();
     nvn_vulkan_destroy_window_surface(&device, nullptr, nullptr);
+    assert((events == std::vector<std::string>{"idle", "path"}));
+    events.clear();window.swapchain=3;window.surface=4;
+    window.present_timing_active=1;window.present_timing_id=9;
+    nvn_vulkan_destroy_window_surface(&device, (void *)40, (void *)30);
+    assert((events == std::vector<std::string>{"idle", "path", "swapchain", "surface"}));
+    assert(!window.present_timing_active && !window.present_timing_id);
+    events.clear();
+    nvn_vulkan_destroy_window_surface(&device, (void *)40, (void *)30);
     assert((events == std::vector<std::string>{"idle", "path"}));
 }
 '''
