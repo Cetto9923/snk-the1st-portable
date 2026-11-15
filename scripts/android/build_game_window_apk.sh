@@ -13,6 +13,9 @@ export FFRS_ANDROID_LOG_DIR="${FFRS_ANDROID_LOG_DIR:-${FFRS_ROOT}/.local/logs/an
 # Reuse the repository toolchain discovery instead of duplicating it.
 # shellcheck source=../device/android_env.sh
 source "${FFRS_ROOT}/scripts/device/android_env.sh"
+if [[ "${FFRS_ENABLE_FRAME_PACING:-0}" == "1" && -z "${FFRS_SWAPPY_ROOT:-}" ]]; then
+    FFRS_SWAPPY_ROOT="$(python3 "${FFRS_ROOT}/scripts/android/prepare_frame_pacing.py")"
+fi
 
 FFRS_APK_DIR="${FFRS_APK_DIR:-${FFRS_ROOT}/.local/android-apk}"
 FFRS_BUILD_TOOLS="${FFRS_BUILD_TOOLS:-${FFRS_SDK}/build-tools/34.0.0}"
@@ -82,7 +85,8 @@ step cmake-configure "${FFRS_CMAKE}" -S "${FFRS_ROOT}/src/android/native" -B "${
     -G 'Unix Makefiles' -DCMAKE_TOOLCHAIN_FILE="${FFRS_NDK}/build/cmake/android.toolchain.cmake" \
     -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM=android-28 -DANDROID_STL=c++_static \
     -DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-    -DFFRS_SPIRV_TOOLS_SOURCE="${FFRS_SPIRV_TOOLS_SOURCE:-}"
+    -DFFRS_SPIRV_TOOLS_SOURCE="${FFRS_SPIRV_TOOLS_SOURCE:-}" \
+    -DFFRS_SWAPPY_ROOT="${FFRS_SWAPPY_ROOT:-}"
 step cmake-build-game-window \
     "${FFRS_CMAKE}" --build "${FFRS_BUILD}" --target ffrs_game_window -j "${FFRS_BUILD_JOBS:-4}"
 step android-elf-header \
@@ -118,6 +122,9 @@ fi
 cp "${FFRS_ROOT}/NOTICE.md" "${FFRS_RUNTIME_ASSETS}/licenses/NOTICE.md"
 sed -n '1,21p' "${FFRS_ROOT}/src/graphics/nvn/include/nvn/nvn.h" > "${FFRS_RUNTIME_ASSETS}/licenses/nvn-headers-MIT.txt"
 cp "${FFRS_ROOT}/third_party/opus/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/opus.txt"
+if [[ -n "${FFRS_SWAPPY_ROOT:-}" ]]; then
+    cp "${FFRS_ROOT}/third_party/licenses/swappy-Apache-2.0.txt" "${FFRS_RUNTIME_ASSETS}/licenses/swappy-Apache-2.0.txt"
+fi
 cp "${FFRS_ROOT}/third_party/lasrecomp/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/lasrecomp.txt"
 cp "${FFRS_ROOT}/src/graphics/nvn_vulkan/engine/third_party/bcdec/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/bcdec.txt"
 FFRS_APP_ASSETS="${FFRS_RUNTIME_ASSETS}"

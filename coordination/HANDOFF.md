@@ -817,3 +817,20 @@
 
 - 基线02eab71，task/T67-android-frame-pacing。先做更小的FIFO对照。GuestThreadMain从原log_path父目录设置FFRS_APP_FILES_DIR，Vulkan后端只从该目录读取gfx-present-mode。移除旧FFRS其他包路径，保留显式FFRS_PRESENT_MODE与无marker原默认选择。尚未构建/安装，荣耀仍暂停。
 - 官方AAR games-frame-pacing2.1.3已从Google Maven下载到.local/third-party/swappy-2.1.3，7013918B，SHA256 a9f83e0cf47d694ed2cea0ae995d5cf7411060d9d4b680610430d03d6b20ea27。仅私有备查，未加入产品依赖。SDK静态arm64库元数据NDK23/API21/c++_shared，当前工程NDK26/c++_static，若后续接入必须验证链接ABI及生命周期。stats默认关闭时无需recordFrameStart。它需要JNI activity、设备扩展、queue family、swapchain/window接线。
+
+### T67 本应用路径与FIFO实机检查点
+
+- 产品提交ad4edfb，APK d8975982fce6e7d81175b8ffef2ada46887c24f0051adb567e01d9f4ae666474。build-present-mode-scope.log exit0。图形80项79通过1私有fixture跳过，运行时9通过，对应graphics-tests-present-mode-scope.log与runtime-tests-present-mode-scope.log。present-mode-scope-provenance.json保留源码指纹。
+- 用户新地点洛连特城门附近正常新建save008，Playtime1:09:53，日期2026/11/15 18:31:47，缩略图正常。先备份saves-before-fifo-test.tar，再备份saves-gate-slot008.tar，未覆盖旧槽。当前Continue8。
+- 同APK、save008起点、底座540p/4槽/cache1/texdirty1/async0，Android摇杆每向1秒、neutral0.2秒、幅度0.65，各600间隔。FIFO marker0实际mode2，工作30.000423FPS，p95 37.230ms/max51.333ms。MAILBOX marker2实际mode1，工作29.882722FPS，p95 40.001ms/max56.990ms。均601不同工作帧，无失败/重复/>100ms。
+- measure-with-surfaceflinger.py每1.5秒采SF原始JSONL，按CSV同设备单调时间窗口截取。两轮均17快照、完整历史覆盖、无命令错误、物理600不同present，无重复actual时间。FIFO物理29.994399FPS/p95 49.632ms/max66.217ms，59个<25ms、67个42至58ms、1个58ms以上。MAILBOX物理29.895802FPS/p95 49.625ms/max66.162ms，62个<25ms、72个42至58ms、2个58ms以上。仍有显示节奏抖动。原始gate-fifo-native540-motion和gate-mailbox-native540-motion文件保留。SF查询开销明确记录，不能与旧无查询窗口作严格因果比较。
+- 当前设备APK d8975982、marker2即MAILBOX，PID25674。下一步接默认关闭的Swappy2.1.3实验入口。荣耀继续暂停。
+
+### T67 Swappy可选接线与真机对照
+
+- 默认无SDK构建保留原路径。FFRS_ENABLE_FRAME_PACING=1调用prepare_frame_pacing.py下载固定Google Maven AAR2.1.3，核SHA并逐文件验证解包，链接同一个libffrs_game_window.so内的arm64静态库。当前依赖验证成功，build-swappy-pinned.log exit0，APK731e4bf6c3e88cc777e5f6c9fcbb34e2714cadfb0a45e372cc05dbe7ce49fb11，assets/licenses/swappy-Apache-2.0.txt与NOTICE存在。尚未安装731包。动态NEEDED没有libc++_shared.so，只有本项目原系统依赖。
+- 后端使用弱hook，因此独立运行时可省略Android库。Activity全局引用受锁保护，渲染线程取得局部引用并按需Attach/Detach，旧Activity不能释放新引用。设备扩展由SDK识别并去重，额外扩展创建失败重试原请求，保留原pNext。只接单个设备/队列，已有设备时新增设备走原路径。FIFO交换链成功初始化后才跳过旧软件限帧，stats关闭，auto swap和auto pipeline关闭，运行时0/60目标入口保留。SDK初始化失败清理并回退。交换链和设备先清SDK再销毁Vulkan。
+- 图形81项80通过1私有fixture跳过，日志graphics-tests-swappy-pinned-final.log。运行时9通过runtime-tests-swappy-final.log。实际wrapper ASan/UBSan测试含JNI attach/引用失败、扩展失败、去重、pNext保留、初始化异常、错误交换链、重建、旧Activity与无SDK桩。两个生命周期负控均出现预期SIGABRT，swappy-negative-controls.log/json。旧软件pace提取测试补SDK mock，原EINTR/截止与unthrottled断言仍在。
+- 实验APK0b33250dcae2bacd58ceedd9d77fb1981d9f6887fe31fa69d2bdbac32f58834e，profile540+SDK首次移动工作29.486FPS、物理29.335FPS/p95 49.611ms/max82.653ms。450+SDK工作30.142822FPS、物理30.144290FPS/p95 33.146707ms/p99 33.558218ms/max66.161769ms，593/599物理间隔在25至42ms。继续2400间隔工作29.810062FPS、物理29.748022FPS/p95 33.300965ms/p99 49.696744ms/max99.191615ms。原始gate-swappy-native450-motion和gate-swappy-native450-long-motion文件全保留。两轮均SF连续历史完整覆盖，无呈现失败/重复，长窗口工作回调有1次101.326ms，全部保留。
+- 同APK、同save008重新加载、450、SDK关且FIFO，真实场景复测工作30.002193FPS，物理30.019872FPS/p95 49.614466ms/max49.695ms，46个<25ms、55个42至58ms。短窗口开SDK物理节奏更均匀，但长窗口仍有掉帧。gate-fifo-native450-motion-valid为有效对照。第一次gate-fifo-native450-motion在读档确认页误开始，已经SIGINT中止并归零输入，作废，不用于验收。
+- 私有测量脚本现实时核已安装APK SHA、native render日志、SDK初始化状态和Vulkan实际present mode，新增结果记录实际APK哈希。当前设备仍实验0b33250d、native450、SDK marker0、FIFO marker0，PID7760，已完成有效关闭对照。731包源码只提前无marker检查、限制第二设备与加入固定依赖/许可证，下一步安装731包开启SDK，回到save007花盆慢点做更长窗口。荣耀继续暂停，公开release未更新。

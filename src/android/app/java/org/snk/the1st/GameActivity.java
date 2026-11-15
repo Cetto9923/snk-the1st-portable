@@ -774,6 +774,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        GameWindowNative.setFramePacingActivity(this, true);
         dataInstaller = DataBundleInstaller.get(this);
         dataInstaller.attach(this);
         audioManager = (AudioManager)getSystemService(AUDIO_SERVICE);
@@ -1546,6 +1547,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
 
     @Override protected void onDestroy() {
         Log.i(TAG, "lifecycle onDestroy");
+        GameWindowNative.setFramePacingActivity(this, false);
         try { unregisterReceiver(padReceiver); } catch (Throwable ignored) {}
         exitHandler.removeCallbacks(this);
         if (dataInstaller != null) dataInstaller.detach(this);

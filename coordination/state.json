@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T02:24:39.006808+08:00",
+  "updated_at": "2026-11-16T02:56:19.769003+08:00",
   "phase": "T67本应用呈现配置与Android帧节奏对照",
   "coordinator": "Codex",
   "integration_branch": "task/T67-android-frame-pacing",
@@ -519,7 +519,8 @@
         "显示帧间隔更稳定",
         "保留游戏时间与正常资源/存档"
       ],
-      "recovery": "02eab71 / APK9c412fe4 / 540 slots4 cache1 texdirty1 async0 / save007"
+      "recovery": "02eab71 / APK9c412fe4 / 540 slots4 cache1 texdirty1 async0 / save007",
+      "checkpoint": "ad4edfb dirty / pinned Swappy APK731e4bf6已构建未安装 / 实验APK0b33250d移动450p物理30.144FPS p95 33.147ms / 长窗口29.748FPS p95 33.301ms / 81图形9运行时"
     }
   ],
   "blockers": [],
@@ -556,7 +557,9 @@
     "T63 C1 mask候选4934fafa图形77项76通过1私有fixture跳过、运行时9通过。save007房屋花盆旁正常新建45:23并备份。600帧真实移动601不同工作帧27.451678FPS、p95 45.430ms、max67.202ms，失败0/重复0，超过100ms0。末尾同步等待0，仍未稳定30。",
     "T64精确1618实例输出范围命中12800000→552960B，正常移动末尾写回约29.6MB/2.75ms，旧36.5MB/3.45ms。onepass APK4e313a76与cache1，600帧移动601不同工作帧26.642139FPS、p95 46.851ms、max62.501ms，失败0/重复0/>100ms0。图形78项77通过1私有fixture跳过、运行时9通过、动态计数负控-6被拒绝。",
     "T65正常ec3e71c源码包5576b32b、slot4/cache1/texdirty1/540/async0，Continue7真实移动601不同工作帧28.617652FPS、p95 43.559ms、max88.746ms，失败0/重复0/>100ms0。RSS从6336436kB降4394512kB，纹理哈希退出采样热点，仍未稳定30。",
-    "T66状态和纹理查找桶链及局部性回归，79图形78通过1私有fixture跳过、运行时9通过，旧全表遍历/破坏链与取消局部性负控均SIGABRT -6被拒绝。APK9c412fe4真实540触屏移动29.131FPS，450触屏29.328FPS，450 Android摇杆路由29.992FPS，三窗口各601不同工作帧，无失败重复/>100ms。输入/路径条件不同，不作严格单变量归因。"
+    "T66状态和纹理查找桶链及局部性回归，79图形78通过1私有fixture跳过、运行时9通过，旧全表遍历/破坏链与取消局部性负控均SIGABRT -6被拒绝。APK9c412fe4真实540触屏移动29.131FPS，450触屏29.328FPS，450 Android摇杆路由29.992FPS，三窗口各601不同工作帧，无失败重复/>100ms。输入/路径条件不同，不作严格单变量归因。",
+    "T67本应用present-mode路径修复，图形80项79通过1私有fixture跳过，运行时9通过。477M底座540p/4槽/cache1/texdirty1/async0，同save008摇杆各601不同工作帧，FIFO30.000FPS、MAILBOX29.883FPS。连续SF历史覆盖完整窗口，物理29.994/29.896FPS、p95均49.6ms，仍有16/50ms节奏。原始gate-fifo-native540-motion和gate-mailbox-native540-motion文件保留，未达到稳定物理30。",
+    "T67官方Swappy2.1.3实验入口默认关闭，完整JNI引用、扩展/队列/交换链生命周期、固定30目标、无SDK/失败回退测试。81图形80通过1私有fixture跳过，运行时9通过，2个生命周期负控预期断言失败。450p同存档601工作帧，SDK开物理30.144FPS/p95 33.147ms，关物理30.020FPS/p95 49.614ms。继续2400间隔SDK开物理29.748FPS/p95 33.301ms/p99 49.697ms/max99.192ms，仍偶发长帧，未验收稳定30。"
   ],
   "unverified": [
     "RG477M长流程稳定30仍未达到。T66同save007的540/Android摇杆移动29.682888FPS、p95 42.028ms、max57.551ms、无失败重复和>100ms。540保留，4槽/cache1/texdirty1仍为设备marker，显示呈现节奏还待优化。",

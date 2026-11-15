@@ -34,6 +34,7 @@
 #include <android/native_window.h>
 #include <unistd.h>
 #include <vulkan/vulkan.h>
+#include "nvn_android_frame_pacing.h"
 #include "native_window.h"
 #include "nvn_vulkan_features.h"
 
@@ -363,7 +364,9 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         st->swapchain_supported,st->swapchain_supported,core12_route,supported12.shaderOutputLayer,requested12.shaderOutputLayer,
         supported12.shaderOutputViewportIndex,requested12.shaderOutputViewportIndex);
 
-    result = vkCreateDevice(st->physical, &device_info, NULL, &st->device);
+    result = nvn_android_pacing_create_device
+        ? nvn_android_pacing_create_device(st->physical, &device_info, &st->device)
+        : vkCreateDevice(st->physical, &device_info, NULL, &st->device);
     if (result != VK_SUCCESS) {
         fprintf(stderr, "[nvn] vulkan: vkCreateDevice failed with %d\n", (int)result);
         vkDestroyInstance(st->instance, NULL);
@@ -382,6 +385,7 @@ static int nvn_vulkan_create(nvn_device_state *device, const void *builder) {
         VK_VERSION_MAJOR(st->api_version),VK_VERSION_MINOR(st->api_version));
     st->storage_image_write_enabled = st->enabled.shaderStorageImageWriteWithoutFormat ? 1 : 0;
     vkGetDeviceQueue(st->device, st->queue_family, 0, &st->queue);
+    if (nvn_android_pacing_queue) nvn_android_pacing_queue(st->device, st->queue, st->queue_family);
 
     device->backend_state = st;
     snprintf(device->description, sizeof(device->description),
@@ -407,6 +411,7 @@ static void nvn_vulkan_destroy(nvn_device_state *device) {
     /* The present path belongs to the device, so it goes back before the
      * device itself. */
     nvn_vulkan_release_present_path(st);
+    if (nvn_android_pacing_destroy_device) nvn_android_pacing_destroy_device(st->device);
     if (st->swapchain) vkDestroySwapchainKHR(st->device, st->swapchain, NULL);
     if (st->surface) vkDestroySurfaceKHR(st->instance, st->surface, NULL);
     if (st->device) vkDestroyDevice(st->device, NULL);
@@ -952,6 +957,8 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
         return 0;
     }
 
+    if (nvn_android_pacing_swapchain)
+        nvn_android_pacing_swapchain(st->physical, st->device, swapchain, native_window, present_mode);
     fprintf(stderr, "[nvn] vulkan: created a surface and a swapchain for the platform window: "
                     "%ux%u, format %u, colorSpace %u, %u images, present mode %d\n",
             width, height, (unsigned)format.format, (unsigned)format.colorSpace,
@@ -972,6 +979,9 @@ static void nvn_vulkan_destroy_window_surface(nvn_device_state *device, void *su
     /* The present path is given back before the swapchain and the surface
      * it belongs to. */
     nvn_vulkan_release_present_path(st);
+    if (nvn_android_pacing_destroy_swapchain)
+        nvn_android_pacing_destroy_swapchain(st->device,
+            swapchain ? (VkSwapchainKHR)(uintptr_t)swapchain : st->swapchain);
     if (swapchain) vkDestroySwapchainKHR(st->device, (VkSwapchainKHR)(uintptr_t)swapchain, NULL);
     else if (st->swapchain) vkDestroySwapchainKHR(st->device, st->swapchain, NULL);
     if (surface) vkDestroySurfaceKHR(st->instance, (VkSurfaceKHR)(uintptr_t)surface, NULL);
@@ -1332,7 +1342,9 @@ static int nvn_vulkan_present_image(nvn_device_state *device, void *image, uint3
     present_info.swapchainCount = 1;
     present_info.pSwapchains = &st->swapchain;
     present_info.pImageIndices = &index;
-    result = vkQueuePresentKHR(st->queue, &present_info);
+    result = nvn_android_pacing_present
+        ? nvn_android_pacing_present(st->queue, &present_info)
+        : vkQueuePresentKHR(st->queue, &present_info);
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
         nvn_vulkan_destroy_window_surface(device, st->surface, st->swapchain);
         return NVN_PRESENT_SKIPPED;
@@ -1489,7 +1501,9 @@ static int nvn_vulkan_submit_and_present(nvn_device_state *device, uint32_t inde
     present_info.swapchainCount = 1;
     present_info.pSwapchains = &st->swapchain;
     present_info.pImageIndices = &index;
-    result = vkQueuePresentKHR(st->queue, &present_info);
+    result = nvn_android_pacing_present
+        ? nvn_android_pacing_present(st->queue, &present_info)
+        : vkQueuePresentKHR(st->queue, &present_info);
     if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
         st->present_failures++;
         snprintf(detail, sizeof(detail), "vkQueuePresentKHR failed with %d for image %u", (int)result, index);
