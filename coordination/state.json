@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T04:00:20.817597+08:00",
+  "updated_at": "2026-11-16T04:38:31.738647+08:00",
   "phase": "T68描述符缓存失效原因与重建开销优化",
   "coordinator": "Codex",
   "integration_branch": "task/T68-descriptor-memo-inputs",
@@ -23,17 +23,7 @@
     "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [
-    {
-      "owner": "Codex",
-      "task": "T68",
-      "paths": [
-        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
-        "tests/graphics/",
-        "coordination/"
-      ]
-    }
-  ],
+  "active_writers": [],
   "tasks": [
     {
       "id": "T00",
@@ -521,7 +511,7 @@
     {
       "id": "T68",
       "role": "GRAPHICS",
-      "status": "in_progress",
+      "status": "passed",
       "owner": "Codex",
       "branch": "task/T68-descriptor-memo-inputs",
       "dependencies": [
@@ -546,13 +536,13 @@
         "coordination"
       ],
       "acceptance": [
-        "按实测原因选择修改",
-        "保留UBO内容更新、offset、buffer生命周期和原缓存失效规则",
-        "无显示与游戏行为回归",
-        "真实移动场景减少帧耗时"
+        "实际定义/注册/验证分支ASan/UBSan及3负控通过",
+        "保留原纹理与buffer生命周期、写回与失效检查",
+        "同save008工作29.822→29.876FPS，CPU均值省0.47ms，SF p95仍49.6ms，稳定30总目标未完成",
+        "同PID2797三轮HOME恢复真实draw/present，末轮截图人物场景可见"
       ],
       "recovery": "61a167c / APK7b7fac89 / native450 slots4 cache1 texdirty1 async0 FIFO / save007与008备份",
-      "checkpoint": "61a167c dirty / 9类与纹理revision诊断完成 / APKca37879b语义复核候选安装中 / 图形82项81通过1跳过 / 3负控预期失败"
+      "checkpoint": "d3c6b58 / APK6c94ef1c / 图形82项81通过1私有fixture跳过，运行时9通过，3负控预期断言失败 / 同save008各2400移动间隔及连续SF完整覆盖 / CPU均值15.956→15.491ms / 3轮HOME同PID2797恢复"
     }
   ],
   "blockers": [],

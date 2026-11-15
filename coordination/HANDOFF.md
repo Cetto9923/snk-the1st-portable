@@ -864,3 +864,11 @@
 - 真实定义/注册函数、MemoImage构造与实际验证分支提取ASan/UBSan测试通过。覆盖A/B/A注册、真实view变化拒绝、返回等价定义复用、物理Image更换拒绝、所有纹理定义字段/active view变化、inactive payload忽略。3个负控分别错误接受新view、丢失定义副本、忽略base swizzle/stencil，均触发预期断言。texture-memo-semantic-tests.log与texture-memo-semantic-negative-controls.log/json。图形82项81通过1私有fixture跳过，graphics-tests-memo-semantic-reuse.log。
 - build-memo-semantic-reuse.log exit0，APKca37879ba2b0eeeae9d3f7ff59fda7c6eb258052c020d5c1966c35829b000cf1，memo-semantic-reuse-provenance.json。正在安装，尚未取得实际复用次数或性能结果。下一步先看首屏是否进入save008，再采实际语义复用/失败统计，取得收益后撤临时计数并完整重建回归。
 - 公开经验已查Khronos官方Descriptor and buffer management，按实际images/buffers绑定内容缓存descriptor的办法，https://docs.vulkan.org/samples/latest/samples/performance/descriptor_management/README.html 。只用于设计线索，不移用其性能结果。
+
+### T68 最终验证检查点
+
+- 已撤掉临时诊断。最终仅保存纹理定义、revision变化时完整语义复核及补齐base swizzle/stencil比较。build-memo-semantic-final.log exit0，APK6c94ef1c3283d4f9f03b477b9fd1c2730eb47fae0e8a3da73a78c8ae433eba80，精确ELF、apk-memo-semantic-final.apk和memo-semantic-final-provenance.json保留。图形82项81通过1私有fixture跳过，运行时9通过，3负控均预期断言失败，*-memo-semantic-final.log与texture-memo-semantic-final-negative-controls.log/json。
+- 同save008重载，底座450/4槽/cache1/texdirty1/async0/FIFO、可见PAD、摇杆移动，各2400间隔。7b7基线工作29.822FPS/p95 39.134ms，最终29.876FPS/p95 38.977ms。完整连续SF物理29.822→29.878FPS，p95仍49.63ms。原gate-memo-before-control-long-motion-*与gate-memo-semantic-final-long-motion-*保留。39个完整60帧批次CPU提交均值15.956→15.491ms，draws873.874→872.354，GPU23.809→23.612ms。整体节奏基本没变，未称稳定30。
+- 最终花盆save007移动2400间隔工作29.656FPS/p95 41.007ms，完整SF29.652FPS/p95 49.629ms，flower-memo-semantic-final-long-motion-*。无失败、重复工作帧或100ms以上间隔，SF仍有16/50ms。内存VmRSS4366924kB/VmSwap17480kB。
+- 最终APK真实游戏连续3轮HOME3秒/前台10秒，同PID2797，实际draw和present递增且present_result0，rg-memo-semantic-final-resume-cycles.json、三截图与tail日志。第三图人物和场景可见。当前仍花盆位置，原用户新地点save008已正常保存并全槽备份，冷重启Continue8可恢复。荣耀暂停，公开release未更新。
+- 下一步原生Vulkan可选display timing候选，复用现有CPU pacer时间线。先核官方扩展与设备支持，默认关闭，477M实机长窗口SF与HOME验证。Swappy保持移除。
