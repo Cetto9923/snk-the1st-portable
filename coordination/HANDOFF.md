@@ -573,3 +573,10 @@
 - 同点预热后约25.2-25.6FPS，submitCPU21.2ms、GPU24.6-25.3ms，sync_wb0、why_access0；此前错误退休defer1约20.2-20.8FPS、submit35-36ms、sync_wb30/60frames。仍未稳30，未改公开默认defer0。
 - 再核诊断配置发现gfx-live-off=wtrack一直保留，会在启动30帧后关闭wtrack。此前与pass-profile叠加的实验均不作为单变量wtrack证据。现在已把live-off移动到config-before-defaults-20261115/gfx-live-off-wtrack，再将gfx-wtrack1单独重启，保留defer1/新退休顺序、无guard、无pass-profile、无SPV覆盖。当前启动脚本session67121。
 - 下一步确认新PID、wtrack enabled及region/mismatch/fallback数据、同点FPS，再做草叶/开阔天空与原游戏保存回读。若无改善或出现异常，恢复gfx-wtrack0。后续启用Mali默认defer1需要更长画面回归，荣耀设备继续暂停。
+
+## T59 写跟踪槽位代际候选
+
+- 单变量wtrack1、无live-off/无pass-profile，PID26148同城门约22.7-23.3FPS、submit24-25ms、GPU25ms。tracked仅复制48.7KB/帧、dirty7.7页、mismatch0，但fallback30/60帧，较wtrack0的25.2-25.6FPS更慢。原始rg-ordered-wtrack-before-generation.log/csv、截图rg-ordered-wtrack-scene.png。
+- version_reusable只看last_slot当前pending/recording。物理槽已经退休并复用后，新一代正在录制会让旧版本被误判仍有读者，产生可避免的整缓冲回退。新增Slot.generation，recording_slot真实入口设为slot_serial。版本只有对应代际仍活跃时等待，槽已换代说明其旧读者已退休，允许复用。继续保留同代pending/recording保护，不能按串行距离猜退休。
+- 扩展现有真实helper回归，提取recording_slot的实际代际赋值语句，覆盖同代录制/在途拒绝、换代复用、再次被新一代读取后继续保护与非法索引，ASan/UBSan通过wtrack-generation-test.log。完整图形测试进行中。
+- build-wtrack-generation.log构建退出0。覆盖安装rg-wtrack-generation-install.log，脚本session31827重启并Continue同10:35。配置仍defer1/wtrack1，缺guard/pass-profile/SPV覆盖/live-off。下一步确认fallback是否降低、图形稳定性和实际移动帧率，未验证前保持公开默认wtrack0。

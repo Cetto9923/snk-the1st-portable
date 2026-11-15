@@ -851,7 +851,7 @@ struct Slot {
     // The HLE frame at submission: on retire this submission's GPU time is added to it (hud::gpu_add).
     uint64_t hud_frame=0;
     struct WaitCount{std::atomic<int> n{0};WaitCount()=default;WaitCount(const WaitCount&){}WaitCount &operator=(const WaitCount&){n.store(0);return *this;}} waiters;   // 不持引擎锁等本槽栅栏的线程数（xbg_legacy_wait）；复位栅栏前须等它们离开 | threads waiting on this slot's fence without the engine lock (xbg_legacy_wait); the fence is reset only after they leave
-    VkCommandBuffer cmd{};VkCommandPool pool{};VkFence fence{};VkQueryPool timestamps{};bool recording=false,pending=false;uint64_t ops=0,covers=0; // covers: guest fence value complete once this slot retires
+    VkCommandBuffer cmd{};VkCommandPool pool{};VkFence fence{};VkQueryPool timestamps{};bool recording=false,pending=false;uint64_t ops=0,covers=0,generation=0; // covers: guest fence value complete once this slot retires
     std::vector<VkQueryPool> occlusion_pools,timestamp_pools;uint32_t occlusion_used=0,timestamp_used=0;
     Retire retire;std::vector<std::shared_ptr<OwnedInputCopy>> copy_readers;Arena stream,readback;std::vector<VkDescriptorPool> pools;size_t pool_next=0;
     // gfx-xview-guard (recording_slot, readback_buffer): ranges of this slot's readback buffers the other slot read through
@@ -1223,7 +1223,7 @@ Slot &recording_slot(){
         if(!s.timestamps && timestamp_bits){VkQueryPoolCreateInfo q{VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO};q.queryType=VK_QUERY_TYPE_TIMESTAMP;q.queryCount=2;VK(vkCreateQueryPool(cfg.device,&q,nullptr,&s.timestamps));}
         bind_cache_reset();if(s.pool){if(s.reset_queued){poolreset::finish(s);s.reset_queued=false;VK(s.reset_result);}else VK(vkResetCommandPool(cfg.device,s.pool,0));}else{VK(vkResetCommandBuffer(s.cmd,0));if(s.pro)VK(vkResetCommandBuffer(s.pro,0));}VkCommandBufferBeginInfo b{VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO};b.flags=VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;VK(vkBeginCommandBuffer(s.cmd,&b));
         if(s.timestamps){vkCmdResetQueryPool(s.cmd,s.timestamps,0,2);vkCmdWriteTimestamp(s.cmd,VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,s.timestamps,0);}
-        s.recording=true;s.ops=0;
+        s.recording=true;s.ops=0;s.generation=slot_serial;
         const uint64_t frame=stats.presents.load()+1;
         if(pass_prof_enabled && timestamp_bits){
             if(stats.presents.load()>=pass_prof_next && stats.presents.load()<pass_prof_until && pass_prof_frame!=frame){pass_prof_frame=frame;pass_prof_next=stats.presents.load()+pass_prof_period;pass_prof_queries=pass_prof_slots=pass_prof_skipped_slots=0;}
@@ -1550,10 +1550,12 @@ void handler(int sig,siginfo_t *si,void *uc){
     signal(sig,SIG_DFL); // return and re-fault into the default crash path
 }
 struct Version{VkBuffer buffer{};VkDeviceMemory memory{};uint8_t *mapped=nullptr;bool coherent=true;uint64_t last_use=0;unsigned last_slot=UINT32_MAX;std::vector<uint8_t> stale;};
-// Serial distance alone does not retire a reader in the 16-slot queue.
+// The last reader must retire. A reused slot already retired its earlier generation.
 bool version_reusable(const Version &v){
     if(v.last_slot==UINT32_MAX)return true;
-    return v.last_slot<kMaxSlots && !slots[v.last_slot].pending && !slots[v.last_slot].recording;
+    if(v.last_slot>=kMaxSlots)return false;
+    const Slot &reader=slots[v.last_slot];
+    return reader.generation!=v.last_use || (!reader.pending && !reader.recording);
 }
 struct Tracked{uint64_t address=0;size_t bytes=0;uintptr_t pbegin=0;size_t npages=0;unsigned region=0;Version v[versions];uint64_t uses=0;size_t verify_next=0;};
 std::map<std::pair<uint64_t,size_t>,std::unique_ptr<Tracked>> tracked;bool exhausted=false;
