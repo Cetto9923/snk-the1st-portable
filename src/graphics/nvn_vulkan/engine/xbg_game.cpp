@@ -2100,6 +2100,7 @@ uint64_t memo_check_gen=1;
 static bool registered_texture_equal(const RegisteredTexture &a,const RegisteredTexture &b){
     const tex_t &x=a.texture,&y=b.texture;
     if(x.serial!=y.serial || x.mem!=y.mem || x.pool!=y.pool || x.off!=y.off ||
+       !!x.set_swz!=!!y.set_swz || (x.set_swz && x.swz!=y.swz) || !!x.stencil!=!!y.stencil ||
        x.d.target!=y.d.target || x.d.format!=y.d.format || x.d.flags!=y.d.flags || x.d.samples!=y.d.samples ||
        x.d.width!=y.d.width || x.d.height!=y.d.height || x.d.depth!=y.d.depth || x.d.levels!=y.d.levels || x.d.stride!=y.d.stride || x.d.pkg_block_h!=y.d.pkg_block_h ||
        x.L.size!=y.L.size || x.L.layer_size!=y.L.layer_size ||
@@ -2120,7 +2121,16 @@ static bool register_texture_record(RegisteredTexture &slot,const tex_t &texture
     bool changed=!slot.revision || !registered_texture_equal(slot,next);
     next.revision=slot.revision+uint64_t(changed);slot=next;if(changed)++memo_check_gen;return changed;
 }
-struct MemoImage{const tex_t *first;Image *second;const RegisteredTexture *record;uint64_t revision;};
+struct MemoImage {
+    const tex_t *first;
+    Image *second;
+    const RegisteredTexture *record;
+    uint64_t revision;
+    RegisteredTexture definition;
+
+    MemoImage(const tex_t *texture, Image *image, const RegisteredTexture *registered, uint64_t version)
+        : first(texture), second(image), record(registered), revision(version), definition(*registered) {}
+};
 using PoolKey=std::pair<uintptr_t,int64_t>;
 PoolKey pool_key(const dpool_t *p){need(p && p->pool,"Missing descriptor pool");return {uintptr_t(p->pool->mem),p->off};}
 std::map<PoolKey,std::map<int,RegisteredTexture>> textures;
@@ -3926,13 +3936,19 @@ void descriptors(Descriptors &out,Commands &commands,bool compute){
                     if(fi>=fresh.size() || fresh[fi].first!=d.order || fresh[fi].second.buffer!=d.buffer){same=false;break;}offsets.push_back(uint32_t(fresh[fi].second.offset));++fi;}
                 same=same && fi==fresh.size();
                 // 每个缓存项均核注册版本（包括 view）和存活图像；仅重建失效项。
-                // Every cached entry checks registration revision (including view) and live image identity.
+                // A registration may return to an earlier definition. Keep an immutable
+                // definition per memo entry to validate that revision transition.
                 // Repeated only when memo_check_gen moved since this entry's last pass: re-reading every record was ~12% of
                 // descriptors() in the D2R camp (a scattered load per image per draw), and in play no registration changes.
                 // A/B target hitgen repeats them on every hit, as before.
                 if(same && (m.checked_gen!=memo_check_gen || ab_off("hitgen"))){
-                    for(size_t k=0;k<m.images.size();k++){const auto &cached=m.images[k];const tex_t *t=cached.first;
-                        if(cached.record->revision!=cached.revision){same=false;break;}
+                    for(size_t k=0;k<m.images.size();k++){auto &cached=m.images[k];const tex_t *t=cached.first;
+                        if(cached.record->revision!=cached.revision){
+                            if (!registered_texture_equal(cached.definition, *cached.record)) {
+                                same=false;break;
+                            }
+                            cached.revision=cached.record->revision;
+                        }
                         if(t->serial!=m.tex_ids[k].first || t->mem!=m.tex_ids[k].second){same=false;break;}
                         if(find_image(t->serial)!=m.images[k].second){same=false;break;}}
                     if(same)m.checked_gen=memo_check_gen;}

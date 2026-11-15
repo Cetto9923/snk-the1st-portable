@@ -851,3 +851,16 @@
 - 图形81项80通过1私有fixture跳过，graphics-tests-sdk-removed-final.log。运行时9通过runtime-tests-sdk-removed-final.log。输入1通过pad-lifecycle-tests-sdk-removed-final.log及两个断言负控pad-lifecycle-negative-controls.log。Vulkan生命周期真实函数提取ASan/UBSan验证等待顺序、重复清理无double-destroy和创建失败统一回收。
 - 已装最终包，真实城门场景通过连续3轮HOME3秒/前台10秒，均同PID10246，实际draw与present递增，rg-sdk-removed-stable-resume-cycles.json、三轮截图和最后3000行日志保留。没有把后台窗口当FPS验收。当前仍为底座/native450/4槽/cache1/texdirty1/async0/FIFO，SDK marker0已失去产品作用。Continue8，save007/008全槽备份仍在，荣耀继续暂停，公开release未更新。
 - 平均FPS和物理16/50ms节奏仍未解决。下一步T68按12535样本拆分descriptor memo失效类型，先诊断，避免把dynbuf合并计数直接解释为VkBuffer变化。若是动态UBO/driver buffer导致反复重建，再把实际buffer身份纳入memo键并保留原校验/失效/租约。
+
+## T68 描述符缓存输入
+
+- 从61a167c切独立分支task/T68-descriptor-memo-inputs，当前设备APK7b7fac89、PID10246、Continue8、native450/4槽/cache1/texdirty1/async0/FIFO。总控独占xbg_game.cpp与相关测试。先对现有memo失败的driver、uniform count/order/buffer、image registration/lifecycle、texel、storage分别计数，再依据结果选择最小修复。不得把合并dynbuf计数先当成单一原因。T67实际显示节奏仍待后续方案，保持in_progress，未冒称稳定30。
+
+### T68 实测诊断与最小语义复核候选
+
+- 临时9类诊断APK009091ef046786bb17bad94a37f99ba143914bcb37b73dd54ed8b9f06ca11ff0，只计数未改变缓存策略，真实save008静止城门约image_revision181.0/帧、storage22.1、uniform_buffer0.6、driver0。rg-memo-failure-diagnostic-first.log与memo-failure-diagnostic.patch/provenance保留。
+- 12类诊断APK2bdf1bd26943ae0ed4a3004b689e7c29acce84925054aa6f27099fedc51f66f8，同场景image_revision163.1/帧，其中serial8.6、memory0、other154.5。rg-memo-revision-diagnostic-first.log与memo-revision-diagnostic.patch/provenance保留，两个诊断没有帧率收益验收。
+- 当前候选只为MemoImage保存不可变RegisteredTexture定义副本。revision改变时按现有registered_texture_equal完整比对定义，相同则更新本缓存项已检查revision，其余情况仍失败回退。原serial/mem/live Image指针、sampler memo_epoch、可变格式升级memo_epoch、池销毁和buffer/texel/写回规则均保留，未修改key或pool索引。补齐原比较函数遗漏的base texture set_swz/swz/stencil字段，避免复用不同通道/深度语义。暂保留有界每60帧聚合诊断以量化实际复用。
+- 真实定义/注册函数、MemoImage构造与实际验证分支提取ASan/UBSan测试通过。覆盖A/B/A注册、真实view变化拒绝、返回等价定义复用、物理Image更换拒绝、所有纹理定义字段/active view变化、inactive payload忽略。3个负控分别错误接受新view、丢失定义副本、忽略base swizzle/stencil，均触发预期断言。texture-memo-semantic-tests.log与texture-memo-semantic-negative-controls.log/json。图形82项81通过1私有fixture跳过，graphics-tests-memo-semantic-reuse.log。
+- build-memo-semantic-reuse.log exit0，APKca37879ba2b0eeeae9d3f7ff59fda7c6eb258052c020d5c1966c35829b000cf1，memo-semantic-reuse-provenance.json。正在安装，尚未取得实际复用次数或性能结果。下一步先看首屏是否进入save008，再采实际语义复用/失败统计，取得收益后撤临时计数并完整重建回归。
+- 公开经验已查Khronos官方Descriptor and buffer management，按实际images/buffers绑定内容缓存descriptor的办法，https://docs.vulkan.org/samples/latest/samples/performance/descriptor_management/README.html 。只用于设计线索，不移用其性能结果。

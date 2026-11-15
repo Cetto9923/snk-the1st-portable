@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T03:37:14.186051+08:00
-阶段：T67本应用呈现配置与Android帧节奏对照
+状态事件时间：2026-11-16T04:00:20.817597+08:00
+阶段：T68描述符缓存失效原因与重建开销优化
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -25,10 +25,11 @@
 | T65 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T65-texture-check-cost |
 | T66 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T66-object-lookup-chains |
 | T67 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T67-android-frame-pacing |
+| T68 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T68-descriptor-memo-inputs |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T67", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T68", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "tests/graphics/", "coordination/"]}
 
 ## 阻塞
 
@@ -72,6 +73,7 @@
 - T67本应用present-mode路径修复，图形80项79通过1私有fixture跳过，运行时9通过。477M底座540p/4槽/cache1/texdirty1/async0，同save008摇杆各601不同工作帧，FIFO30.000FPS、MAILBOX29.883FPS。连续SF历史覆盖完整窗口，物理29.994/29.896FPS、p95均49.6ms，仍有16/50ms节奏。原始gate-fifo-native540-motion和gate-mailbox-native540-motion文件保留，未达到稳定物理30。
 - T67官方Swappy2.1.3实验入口默认关闭，完整JNI引用、扩展/队列/交换链生命周期、固定30目标、无SDK/失败回退测试。81图形80通过1私有fixture跳过，运行时9通过，2个生命周期负控预期断言失败。450p同存档601工作帧，SDK开物理30.144FPS/p95 33.147ms，关物理30.020FPS/p95 49.614ms。继续2400间隔SDK开物理29.748FPS/p95 33.301ms/p99 49.697ms/max99.192ms，仍偶发长帧，未验收稳定30。
 - T67最终撤回Swappy产品接线和依赖，实验源码完整哈希核验备份failed-swappy-experiment-source.tar与patch。真实APK7b7fac89已覆盖装，ELF符号和APK内容均确认无SDK。保留本应用present-mode路径、Vulkan统一清理与后台清按键保留手柄连接修复。图形81项80通过1私有fixture跳过，运行时9通过，输入生命周期1通过及2负控。477M从实际游戏场景连续3轮HOME3秒再回前台10秒，均同PID10246恢复实际draw与present，最后截图人物和场景可见。
+- T68临时9类诊断009091ef显示静止城门每帧约181次image_revision，storage约22，driver0、uniform_buffer不足1。2bdf1bd2细分后texture serial仅约8.6，memory0，其他约154.5。原始日志与两份诊断patch和provenance保留。不能把这些失败视为UBO句柄问题。
 
 ## 未验证
 
