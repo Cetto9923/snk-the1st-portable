@@ -115,6 +115,7 @@ typedef struct {
     char debug_label[64];
     int initialized;
     int in_use;
+    size_t lookup_next;
 } nvn_texture_state;
 
 /* The names of this family, in the order of the family table. That order is
@@ -184,55 +185,53 @@ static nvn_texture_state default_state(void) {
 /* The texture state for one guest texture address. A texture that was never
  * initialized has no state to answer with, and the functions that need one say
  * so instead of inventing one. */
-/* Texture address front cache, protected by s_texture_lock like the table.
- * Keep indices rather than pointers: table growth can move its allocation.
- * A finalized record keeps its address and can be initialized afresh; a slot
- * reused for another address fails the canonical-key check and falls back. */
-static struct {
-    void *texture;
-    size_t index;
-} s_texture_lookup_cache[512];
+/* Bucket chains store indices, protected by s_texture_lock. Table growth
+ * can move its allocation without invalidating the links. */
+static size_t s_texture_lookup[512];
 static nvn_texture_state *texture_find(void *texture, int create) {
     size_t i;
     nvn_texture_state *free_slot = NULL;
     if (!texture) return NULL;
-    size_t cache_index = (size_t)((((uint64_t)(uintptr_t)texture >> 4) * UINT64_C(11400714819323198485)) >> 55);
-    if (s_texture_lookup_cache[cache_index].texture == texture &&
-        s_texture_lookup_cache[cache_index].index < s_textures.count) {
-        nvn_texture_state *entry = (nvn_texture_state *)nvn_object_table_at(&s_textures, s_texture_lookup_cache[cache_index].index);
-        if (entry && entry->texture == texture) {
-            if (entry->in_use) return entry;
-            if (create) {
-                *entry = default_state();
-                entry->texture = texture;
-                entry->in_use = 1;
-                return entry;
+    size_t bucket = (size_t)((((uint64_t)(uintptr_t)texture >> 4) * UINT64_C(11400714819323198485)) >> 55);
+    if (!s_textures.count) memset(s_texture_lookup, 0, sizeof(s_texture_lookup));
+    size_t *link = &s_texture_lookup[bucket];
+    while (*link) {
+        size_t index = *link;
+        nvn_texture_state *entry = nvn_object_table_at(&s_textures, index - 1u);
+        if (!entry) return NULL;
+        if (entry->in_use && entry->texture == texture) {
+            // Keep the most recently used object at its bucket head.
+            if (link != &s_texture_lookup[bucket]) {
+                *link = entry->lookup_next;
+                entry->lookup_next = s_texture_lookup[bucket];
+                s_texture_lookup[bucket] = index;
             }
+            return entry;
         }
-    }
-    for (i = 0; i < s_textures.count; i++) {
-        nvn_texture_state *entry = (nvn_texture_state *)nvn_object_table_at(&s_textures, i);
-        if (!entry) continue;
-        if (entry->in_use) {
-            if (entry->texture == texture) {
-                s_texture_lookup_cache[cache_index].texture = texture;
-                s_texture_lookup_cache[cache_index].index = i;
-                return entry;
-            }
-        } else if (!free_slot) {
-            free_slot = entry;
-        }
+        link = &entry->lookup_next;
     }
     if (!create) return NULL;
-    if (!free_slot) {
-        free_slot = (nvn_texture_state *)nvn_object_table_new_entry(&s_textures, NVN_TEXTURE_MAX_OBJECTS);
+    for (i = 0; i < s_textures.count; ++i) {
+        nvn_texture_state *entry = nvn_object_table_at(&s_textures, i);
+        if (!entry->in_use) { free_slot = entry; break; }
+    }
+    if (free_slot) {
+        size_t old_bucket = (size_t)((((uint64_t)(uintptr_t)free_slot->texture >> 4) * UINT64_C(11400714819323198485)) >> 55);
+        size_t *old_link = &s_texture_lookup[old_bucket];
+        while (*old_link && *old_link != i + 1u) {
+            nvn_texture_state *entry = nvn_object_table_at(&s_textures, *old_link - 1u);
+            old_link = &entry->lookup_next;
+        }
+        if (*old_link) *old_link = free_slot->lookup_next;
+    } else {
+        free_slot = nvn_object_table_new_entry(&s_textures, NVN_TEXTURE_MAX_OBJECTS);
         if (!free_slot) return NULL;
     }
     *free_slot = default_state();
     free_slot->texture = texture;
     free_slot->in_use = 1;
-    s_texture_lookup_cache[cache_index].texture = texture;
-    s_texture_lookup_cache[cache_index].index = (size_t)((char *)free_slot - (char *)s_textures.slots) / s_textures.entry_size;
+    free_slot->lookup_next = s_texture_lookup[bucket];
+    s_texture_lookup[bucket] = ((char *)free_slot - (char *)s_textures.slots) / sizeof(*free_slot) + 1u;
     return free_slot;
 }
 
@@ -405,6 +404,7 @@ int nvnTextureInitialize(void *texture, const void *builder) {
             taken.debug_id = nvn_device_generate_debug_domain_id(taken.device, "nvnTexture");
             taken.initialized = 1;
             taken.serial = ++s_texture_serial;
+            taken.lookup_next = slot->lookup_next;
             *slot = taken;
             s_stats.initialized++;
             ready = 1;

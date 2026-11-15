@@ -19,6 +19,11 @@ class RenderStateLookupTests(unittest.TestCase):
 #include <stdint.h>
 #include <pthread.h>
 #include <assert.h>
+static unsigned table_reads;
+static void *counted_table_at(nvn_object_table *table,size_t index){
+    ++table_reads;return nvn_object_table_at(table,index);
+}
+#define nvn_object_table_at counted_table_at
 ''' + source[begin:end] + r'''
 static uint64_t objects[4002][2];
 static unsigned bucket(unsigned i,int family){
@@ -39,7 +44,12 @@ int main(void){
         ffrs_va_st raw={i%255,i*4,i%32};memcpy(objects[i],&raw,sizeof(raw));
         check_attribute(i);
     }
+    table_reads=0;
     for(unsigned pass=0;pass<3;++pass)for(unsigned i=1;i<=3000;++i)check_attribute(i);
+    assert(table_reads<9000*32);
+    check_attribute(1);table_reads=0;
+    for(unsigned pass=0;pass<100;++pass)check_attribute(1);
+    assert(table_reads==100);
     // Shadow-only auxiliary fields survive table growth and cache hits.
     metadata=state_find(objects[10],NVN_RS_MULTISAMPLE,0);
     assert(metadata->ms_sample_locations_count==2 && metadata->ms_sample_locations[0][0]==0.25f);
@@ -54,6 +64,10 @@ int main(void){
     for(;b<=3000 && bucket(a,NVN_RS_VERTEX_ATTRIB)!=bucket(b,NVN_RS_VERTEX_ATTRIB);++b){}
     assert(b<=3000);
     for(unsigned i=0;i<100;++i){check_attribute(a);check_attribute(b);}
+    // A normal defaults reset must preserve the bucket chain.
+    attribute=state_find(objects[b],NVN_RS_VERTEX_ATTRIB,0);
+    apply_defaults(attribute,NVN_RS_VERTEX_ATTRIB);
+    for(unsigned i=1;i<=3000;++i)check_attribute(i);
     nvn_rs_value *old=state_find(objects[a],NVN_RS_VERTEX_ATTRIB,0);old->in_use=0;
     changed.fmt=33;memcpy(objects[4000],&changed,sizeof(changed));
     // The original read path creates a record even with create=0.

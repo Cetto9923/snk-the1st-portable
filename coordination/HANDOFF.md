@@ -783,3 +783,28 @@
 - 正常源码ec3e71c重新构建5576b32bf01855c7f5b7e4420f5a95104549f8b0684a22f29bf8d93954f8c1ad（无临时诊断钩子）并覆盖安装，PID20127。启动仍Continue确认，补A后rg-four-slots-loaded.png才确认真实save007，未在标题测移动。
 - 4槽/cache1/tex-dirty1/540/底座1/async0/defer2/vcache1/wtrack0，flower-four-slots-motion事先600帧，601不同工作帧28.617652FPS、p50 33.553ms、p95 43.559ms、p99 51.541ms、max88.746ms，失败0/重复0/>100ms0。RSS从16槽6336436kB降4槽4394512kB，VmSwap分别17352/17284kB。末尾why4=0、GPU约23ms、submitCPU约17-18ms。配置尚未固化默认，稳定30未达到。
 - 当前同包同位置simpleperf10秒8431样本、丢失0，rg-four-slots-profile/samples.txt。精确当前ELF addr2line把state_find采样0x32f9a8等定位nvn_render_state.c:228-232，都是前端桶冲突后的全表遍历。采样state_find1.51%、nvn_texture_info_of2.10%。下一步复用已有nvn_program.c索引链方式，替换render state与texture桶冲突后的全表查找，必须覆盖表增长、原始状态复制、defaults、Finalize和地址复用。没有从旧包地址直接宣布定位成功。
+
+## T66 状态与纹理索引链候选
+
+- 基线a495e67（产品代码ec3e71c），分支task/T66-object-lookup-chains。只改nvn_render_state.c与nvn_texture.c的host对象查找，复用nvn_program.c已使用的桶+索引链方式。未改变guest对象布局或GPU调用。
+- Render state原1024项前端桶发生冲突后退全表扫描，精确真机采样已定位。现按object/family桶链查找，只有创建新对象时找可用槽，重用前从旧链摘除。每次命中仍unpack原guest packed bytes，apply_defaults保留host lookup_next，table free后空表清头。
+- Texture原512项前端冲突后同样全表扫描，现索引链处理。真实nvnTextureInitialize的整结构发布保留lookup_next，Finalize后仍失效，复用旧槽前摘旧桶链。serial/debug id、builder snapshot、桥接对象生命周期原路径继续执行。
+- Render组件ASan/UBSan通过，新增严格查找次数上限与冲突链defaults复验。Texture新组件编译真实Initialize/Finalize/info_of，覆盖3000对象、增长重定位、碰撞重初始化、serial递增、Finalize/地址复用、1000槽循环复用与table free重建。首次harness遗漏nvn_obj_ffrs.h导致类型编译失败，补头文件后实际组件通过。完整graphics/runtime、负控和APK构建进行中，暂无新包真机收益结论。
+
+- build-object-lookup-chains.log退出0，APK be2617b6b8e3526d49686e759d17e93528ff6a93d95cba05af27253949b30d32。图形79项78通过1私有fixture跳过，运行时9通过。恢复旧全表扫描的render负控与移除真实Initialize链保留的texture负控均被SIGABRT -6拒绝。provenance object-lookup-chains-provenance.json。准备覆盖安装并以相同四槽/cache1/texdirty1/540配置读回save007，尚未真机验收。
+
+- 首索引链候选be2617b6已覆盖装机，PID26093，真实Continue7后flower-object-chains-motion600帧为601不同工作帧28.052141FPS、p95 45.269ms、max418.334ms、>100ms1，失败0/重复0。末尾已走到树旁、pipeline357/images710，旧四槽345/images632，不作严格同轨迹因果结论。末尾CPU18ms/GPU23ms、why4=0，截图两主角/NPC/草叶正常，仍未稳定30。
+- 复核查找局部性，静态链可能让原来前端缓存命中的对象每次多读几个节点。改为仅在命中非头节点时提升为桶头，保持原最近访问的快路径，同时冲突只走该桶链。新增连续100次相同对象只读一个节点的严格组件断言。准备完整回归和新包，不声称此改动已提速。
+
+- 保留最近访问局部性的候选build-object-chain-locality.log退出0，APK 9c412fe48f90dec9777b3b8688f3a6706a820e00f7e71c52d85c2b575df59004。图形79项78通过1私有fixture跳过，运行时9通过，三种对象查找组件通过。仍使用4槽/cache1/texdirty1/540/async0。下一步覆盖安装Continue7，真实移动窗口，尚未装机验证此候选。
+
+- 保留桶局部性的9c412fe4覆盖装机，PID30406，真实Continue7。flower-chain-locality-motion600帧为601不同工作帧29.131393FPS、p50 32.687ms、p95 43.785ms、p99 51.185ms、max64.880ms，失败0/重复0/>100ms0。相比首链28.05含418ms加载长帧，此窗口仍不能宣称稳30。关闭局部性提升的两个负控都被严格节点次数断言SIGABRT -6拒绝，日志object-chain-locality-negative-controls.log。
+- 当前仅将原生高度marker从540改450，底座模式1与UI1080、4槽/cache1/texdirty1/async0保持。以前原生450实际800x450已抓帧确认，当前相同已审计分辨率入口必须重新核启动selector1，再同save007测600帧。如无足够收益则恢复540，尚不固化450默认。
+
+- 同9c412fe4/APK、native450 selector1与operation_mode1实际启动已核，flower-chain-native450-motion600帧为601不同工作帧29.328324FPS、p95 42.900ms、max65.457ms，失败0/重复0/>100ms0。相对540的29.131提升小，450尚未固化默认。末尾人物、NPC、墙体、光照正常，稳定30未达到。
+- 补查输入条件，之前移动都通过触屏摇杆，会使TouchPad在每次DOWN/MOVE/UP执行invalidate。设备input本地usage支持source joystick，已用input joystick motionevent MOVE -1 0并finally回0验证角色真实移动，走Activity原onGenericMotionEvent入口。该检查没有新增应用调试接口，PAD仍可见。
+- 当前单独测Android joystick±0.65、1秒/0.2秒neutral的600帧正常移动，私有measure脚本新增input-mode并在动作前写plan。它是另一输入条件，不能与触屏窗口当严格单变量后端收益。原native450触屏29.328与所有长帧保留。后续选择540或450仍以实际收益和画质为准。
+
+- flower-native450-hardware-motion为601不同工作帧29.992000FPS、p95 38.145ms、p99 42.057ms、max52.157ms，失败0/重复0/>100ms0。PAD可见，Android joystick输入经原Activity正常入口，真实人物在场景移动。该窗口平均892.8draw/34.93dispatch，对照450触屏905.5draw/33.71dispatch。路径和输入条件不同，不能把全部差异归于TouchPad重绘。独立SF站立末尾短历史30.126FPS、p95 49.613ms，有16/33/50ms节奏，未声称稳定物理30。
+- 540 marker已恢复，仍同9c APK，重启Continue7后真实rg-chain-hardware540-first.png确认初始房屋花盆位置。当前正在相同起点的540/Android joystick/PAD可见600帧测试。源码测试最终重跑graphics79项78通过1私有fixture跳过、runtime9通过。
+- 公开primary参考已核Android官方Frame Pacing指南与Vulkan接入文档。它明确30FPS与60Hz未对齐会出现49/16/33ms呈现节奏，提供Swappy的presentation timestamps和fence方案。地址https://developer.android.com/games/sdk/frame-pacing 与https://developer.android.com/games/sdk/frame-pacing/vulkan/add-functions 。目前尚未引入Swappy或新的呈现代码。设备cmd gpu vkjson实际报告VK_GOOGLE_display_timing，原始rg-vulkan-device-inventory.json保留。下一步研究在既有Vulkan呈现入口使用受支持的时间戳，不能以软件回调平均30替代显示节奏验收。

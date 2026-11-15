@@ -117,6 +117,7 @@ typedef struct {
     int vs_divisor;
 
     int in_use;
+    size_t lookup_next;
 } nvn_rs_value;
 
 /* How many render states the runtime tracks at the same time. The table grows
@@ -126,8 +127,8 @@ typedef struct {
 static pthread_mutex_t s_rs_lock = PTHREAD_MUTEX_INITIALIZER;
 static nvn_object_table s_states = { NULL, 0, 0, sizeof(nvn_rs_value) };
 static nvn_render_state_stats s_stats;
-/* Indices survive object-table growth. Revalidate the object and family
- * under s_rs_lock, and unpack the current guest bytes on every hit. */
+/* Bucket chains use indices so object-table growth preserves their links.
+ * Hold s_rs_lock and unpack current guest bytes on every hit. */
 static size_t s_state_lookup[1024];
 
 static void unpack_value(nvn_rs_value *v) {
@@ -161,12 +162,14 @@ static void apply_defaults(nvn_rs_value *v, int family) {
     void *object = v->object;
     int fam = v->family;
     int used = v->in_use;
+    size_t lookup_next = v->lookup_next;
     int i;
     int j;
     memset(v, 0, sizeof(*v));
     v->object = object;
     v->family = fam;
     v->in_use = used;
+    v->lookup_next = lookup_next;
     switch (family) {
     case NVN_RS_COLOR:
         v->color_blend_enable = 0;
@@ -218,25 +221,37 @@ static nvn_rs_value *state_find(const void *object, int family, int create) {
     if (!object) return NULL;
     uintptr_t key = (uintptr_t)object;
     size_t bucket = ((key >> 4) ^ (key >> 13) ^ (uint32_t)family) & 1023u;
-    size_t cached_index = s_state_lookup[bucket];
-    nvn_rs_value *cached = cached_index ?
-        (nvn_rs_value *)nvn_object_table_at(&s_states, cached_index - 1u) : NULL;
-    if (cached && cached->in_use && cached->object == object && cached->family == family) {
-        unpack_value(cached);
-        return cached;
-    }
-    for (i = 0; i < s_states.count; i++) {
-        nvn_rs_value *entry = (nvn_rs_value *)nvn_object_table_at(&s_states, i);
-        if (!entry) continue;
-        if (entry->in_use) {
-            if (entry->object == object && entry->family == family) {
-                s_state_lookup[bucket] = i + 1u;
-                unpack_value(entry);
-                return entry;
+    if (!s_states.count) memset(s_state_lookup, 0, sizeof(s_state_lookup));
+    size_t *link = &s_state_lookup[bucket];
+    while (*link) {
+        size_t index = *link;
+        nvn_rs_value *entry = nvn_object_table_at(&s_states, index - 1u);
+        if (!entry) return NULL;
+        if (entry->in_use && entry->object == object && entry->family == family) {
+            // Keep the most recently used object at its bucket head.
+            if (link != &s_state_lookup[bucket]) {
+                *link = entry->lookup_next;
+                entry->lookup_next = s_state_lookup[bucket];
+                s_state_lookup[bucket] = index;
             }
-        } else if (!free_slot) {
-            free_slot = entry;
+            unpack_value(entry);
+            return entry;
         }
+        link = &entry->lookup_next;
+    }
+    for (i = 0; i < s_states.count; ++i) {
+        nvn_rs_value *entry = nvn_object_table_at(&s_states, i);
+        if (!entry->in_use) { free_slot = entry; break; }
+    }
+    if (free_slot) {
+        uintptr_t old_key = (uintptr_t)free_slot->object;
+        size_t old_bucket = ((old_key >> 4) ^ (old_key >> 13) ^ (uint32_t)free_slot->family) & 1023u;
+        size_t *old_link = &s_state_lookup[old_bucket];
+        while (*old_link && *old_link != i + 1u) {
+            nvn_rs_value *entry = nvn_object_table_at(&s_states, *old_link - 1u);
+            old_link = &entry->lookup_next;
+        }
+        if (*old_link) *old_link = free_slot->lookup_next;
     }
     if (!free_slot) {
         free_slot = (nvn_rs_value *)nvn_object_table_new_entry(&s_states, NVN_RS_MAX_OBJECTS);
@@ -248,6 +263,7 @@ static nvn_rs_value *state_find(const void *object, int family, int create) {
     apply_defaults(free_slot, family);
     free_slot->in_use = 1;
     unpack_value(free_slot);
+    free_slot->lookup_next = s_state_lookup[bucket];
     s_state_lookup[bucket] = ((char *)free_slot - (char *)s_states.slots) /
         sizeof(*free_slot) + 1u;
     return free_slot;

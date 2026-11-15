@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T01:41:12.908919+08:00
-阶段：T65核对重复纹理哈希和页追踪覆盖
+状态事件时间：2026-11-16T02:08:39.044802+08:00
+阶段：T66降低状态与纹理查找冲突开销
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -23,10 +23,11 @@
 | T63 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T63-storage-cache |
 | T64 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T64-cull-writeback-bounds |
 | T65 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T65-texture-check-cost |
+| T66 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T66-object-lookup-chains |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T65", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T66", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -66,10 +67,11 @@
 - T63 C1 mask候选4934fafa图形77项76通过1私有fixture跳过、运行时9通过。save007房屋花盆旁正常新建45:23并备份。600帧真实移动601不同工作帧27.451678FPS、p95 45.430ms、max67.202ms，失败0/重复0，超过100ms0。末尾同步等待0，仍未稳定30。
 - T64精确1618实例输出范围命中12800000→552960B，正常移动末尾写回约29.6MB/2.75ms，旧36.5MB/3.45ms。onepass APK4e313a76与cache1，600帧移动601不同工作帧26.642139FPS、p95 46.851ms、max62.501ms，失败0/重复0/>100ms0。图形78项77通过1私有fixture跳过、运行时9通过、动态计数负控-6被拒绝。
 - T65正常ec3e71c源码包5576b32b、slot4/cache1/texdirty1/540/async0，Continue7真实移动601不同工作帧28.617652FPS、p95 43.559ms、max88.746ms，失败0/重复0/>100ms0。RSS从6336436kB降4394512kB，纹理哈希退出采样热点，仍未稳定30。
+- T66状态和纹理查找桶链及局部性回归，79图形78通过1私有fixture跳过、运行时9通过，旧全表遍历/破坏链与取消局部性负控均SIGABRT -6被拒绝。APK9c412fe4真实540触屏移动29.131FPS，450触屏29.328FPS，450 Android摇杆路由29.992FPS，三窗口各601不同工作帧，无失败重复/>100ms。输入/路径条件不同，不作严格单变量归因。
 
 ## 未验证
 
-- RG477M移动稳定30仍未达到。save007正常包5576b32b在4槽/cache1/texdirty1下28.618FPS，原生540。四槽配置还需更长动态及过图，尚未改APK默认。
+- RG477M更长流程稳定30仍未达到。T66在450/Android摇杆输入的一轮600帧平均29.992FPS，p95 38.145ms，物理呈现仍有16/33/50ms节奏波动。已恢复540重启save007复测，4槽/cache1/texdirty1仍为设备marker，未固化APK默认。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
 - 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
 
