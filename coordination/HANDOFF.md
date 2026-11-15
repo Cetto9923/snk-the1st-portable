@@ -664,3 +664,30 @@
 - 显示PAD后事先固定600帧左右1秒/释放0.2秒，601不同工作帧26.580273FPS、p50 34.808ms、p95 52.187ms、p99 59.105ms、max82.156ms，超过100ms0、失败0/重复0。town-particle-resident-motion全套plan/actions/csv/metrics/run.log。镜头稍漂移，和旧11.671移动窗口不作为严格单轨迹对照。
 - 移动末尾出现新同步，每两帧一次OP_UPDATE_UB/op6、why4，14200B CPU参数更新碰到14208B pending，writer1618f5e9ae2a6df7，已有710行静态模板但modified_bytes0。rg-particle-resident-write-sync-corrected.log证据，继续分析原cull模块padding证明。末尾场景人物/城门正常截图rg-particle-resident-motion-end.png，站立已降约20.6FPS，不能宣称稳30。
 - 一次通过adb shell/run-as/sh-c写probe的引号在远端丢失，实际写成换行，因此首份write-sync.log没有诊断。已改用Python subprocess把单字节送run-as tee，重采6秒并finally恢复字节0。该问题影响诊断开关，正式FPS窗口probe未启用。去掉新helper参数行边界的负控退出-6，particle-update-negative-control.log已记录。runtime-tests-particle-update.log九项通过。
+
+- 已提交并推送8b59ed8到task/T61-town-indirect-gpu，包含342e模板证明与回归，公开release仍a35c458。源码随后只添加有界临时CODEX_CULL_BOUNDS诊断，最多3次且只在args14208B时触发，输出真实params/exclusive/indices_readable与越界行/flag，未改行为。
+- build-cull-bounds-diagnostic.log退出0，APK d8b97d902a5cd79b447bf39b54e2e0f211f5d79eac42e47d50c85a7aebe7dc7a已覆盖安装，rg-cull-bounds-diagnostic-run/install/first.log/png。Continue回save005，初始约29.36FPS且尚未分配14208B参数，因此正在正常左右移动复现场景。该诊断包不作正式性能验收。
+- 原始1618私有SPV提取town-cull-1618.spv，raw SHA99cd37314a28e2ddeded7af5e4e72474ec1e5f969b9d34b6e8f1549a5ad8f843，spirv-val Vulkan1.1退出0。运行时snk_counter_rewrite后原有audited SHA a7f28d...仍module1。原模块LocalSize1024，binding53/CP_c5 byte160为active，binding59/CP_c1 byte0为拒绝flags mask，binding17记录80B。被mask命中的record在参数访问之前退出，现helper仍保守检查所有active记录，诊断会核是否因此拒绝padding范围证明。
+- 旧包移动末尾simpleperf 10秒6519样本、丢失0，memcpy18.71%、descriptors_build4.25%、hash_memory2.12%，日志rg-particle-resident-record.log/profile.txt，原data在app私有files/perf-particle-resident.data。仍先处理已复现GPU同步，再评估复制。
+
+- 首份有界诊断在14208B初次出现时active21757/gx22，exclusive1/valid1，首帧readable0、后续readable1，没有越界行。该移动窗口27.881FPS仅定位线索，未改变正式候选代码。后续改为仅在modified_bytes0时最多12次打印重叠metadata writer，build-cull-failed-diagnostic.log退出0，APK cd9b55da已安装。
+- rg-cull-failed-diagnostic-first.png实际仍停Continue确认。本轮启动输入最后A被吞，误启动的town-cull-failed-diagnostic-motion窗口已Ctrl-C中止并释放摇杆，该窗口无有效场景数据，不用于验收。补A后再确认真实场景。
+
+- 第二份诊断cd9b55da在真实Continue后复现失败，rg-cull-failed-valid-motion.log：frame5313，active21757/gx22、exclusive1/valid1、metadata 1740560/4000000B，readable0。重叠writer有已证明1618(modified1738400, audited1)和未分类978a71642064cba1(modified0,audited0)。没有在无证据时取消范围门禁。
+- 原978a模块town-metadata-978a.spv SHA97affce7b9fc1bbbcb2935e69bc87b283484fe1564a22855db21569ef11ff899，spirv-val Vulkan1.1退出0，优化反汇编552行。LocalSize64，binding35/CP_c5 uint0=count、uint1=目标起始记录、uint2=word0调整。binding11源80B记录到binding17目标(first+i)*80，每个word原样复制，只有word0加常量。另一输出binding29复制128B记录。
+- 新候选在原SPV SHA精确匹配下，使用实际count/first/gx验证源/目标边界，并比较被拷贝记录的word1索引和word2标志与原CPU目标是否相同。仅全部相同才标记目标仍可用于cull索引边界证明。初次加入/索引改变、脏源、未知目标写者、报告、源或目标与其他GPU写区重叠、间接或非一维dispatch均保留原回退。没有在CPU执行GPU任务或修改guest数据。
+- tests/graphics/test_snk_cull_metadata_copy.py编译实际preserve_cull_copy_indices，ASan/UBSan覆盖参数/尺寸/64线程覆盖、最后索引和flags变化、旧已证明/未知writer、CPU脏源、报告及源/目标别名。三项通过，去掉索引与flags比较的负控SIGABRT -6被拒绝。原342分类测试边界改为本if块结束，仍逐字校验原32字节SHA，避免后续新分支串入哈希提取。完整图形回归和build-cull-metadata-copy.log进行中。
+
+- 元数据候选build-cull-metadata-copy.log退出0，APK7f602684，完整graphics75项74通过1私有fixture跳过，runtime9通过。RG正常Continue截图rg-cull-copy-first.png/log。600帧移动601不同工作帧26.612575FPS、p95 51.615ms、max80.240ms，失败0/重复0，town-cull-copy-motion全套。末尾why4又增加至23/60帧、约21.37FPS，没有metadata copy preserves日志，尚无运行时收益，不把它当已修复。
+- 当前新代码仍保守拒绝GPU间接/非一维dispatch和非CPU-clean源。有界CODEX_COPY_GUARD诊断仅现有probe3下最多4次，输出真实indirect/xyz和params/源CPU-clean/目标可证明状态，build-cull-copy-guard-diagnostic.log退出0，APKa571fe47已开始覆盖安装，rg-cull-copy-guard-run.log。该临时诊断尚未进入commit，下一步先确认Continue真实场景，再单字节tee写probe3采样并finally恢复0。避免再次在Continue确认时开始移动。
+- 设备热状态已留rg-cull-failed-thermal-before.txt，HAL当时CPU/GPU84.754°C、SOC86.238°C、SKIN47.801°C，系统缓存Thermal Status0与HAL存在差异，未据此声称降频或修改系统性能模式。正式移动测试没有录屏。
+
+- COPY_GUARD实证：978a是direct1/1/1或3/1/1，count27或138、first21592，源2160/11040B为CPU-clean，目标4MB也可读。旧“必须与CPU目标相等”的策略没有命中，原因是上传索引确实改变。该无收益比较策略已替换，没有把它发布为修复。
+- 新方案为978a精确模块从CPU-clean源捕获每条record word1/word2，按实际count/first写入独立XbgCullMetadataPatch，不写guest CPU镜像。挂在该GPU结果的pending_writeback上，cull范围判断在CPU基线之上按命令顺序叠加所有已知patch。未知writer、移位descriptor、不足覆盖、坏patch及报告仍拒绝。GPU完整拷贝与动态实例数计算保持原调用。
+- 新测试覆盖两个顺序上传、后者覆盖前者、旧生产者先退休后CPU基线更新、未知writer/部分覆盖/坏patch/边界拒绝，并编译真实capture_cull_copy_indices校验源脏与别名。旧等值测试按新数据结构更换，原边界和未知数据拒绝仍覆盖。丢弃上传索引字段的负控-6被拒绝，日志cull-metadata-shadow-negative-control.log。graphics-tests-cull-metadata-shadow.log共75项74通过1私有fixture跳过。
+- build-cull-metadata-shadow.log退出0，APK461fa7aa76d8b98e6962c019edf73f708070d9471051108584463118769d2b46，安装启动rg-cull-shadow-run.log进行中。当前probe字节0，后续先确认实际Continue场景，再观察captured cull indices与why4，最后600帧移动。尚未声称本轮shadow真机提速。
+
+- Shadow包461fa7aa已覆盖安装，PID13287，rg-cull-shadow-first.png/log确认Continue真实场景、metadata copy captured日志（例如64行first2265）。操作前固定600帧真实左右移动，601不同工作帧27.641261FPS、p50 34.840ms、p95 43.842ms、p99 49.921ms、max79.347ms，失败0/重复0、超过100ms0，town-cull-shadow-motion全套原始证据。无录屏，无按长帧删行。
+- 移动末尾和随后站立多窗口why4为0，少数加载新对象窗口1/60仍正常保守回退。原持续每2帧一次的padding等待消除，当前站立约27.55-27.90FPS，rg-cull-shadow-idle.log。角色/城墙/天空截图正常，rg-cull-shadow-idle.png同时有两位主角和NPC。移动结束一张图只显示约修亚，后续idle图艾丝蒂尔正常出现，未凭单截图宣称角色丢失或整段动态验收。
+- cull-metadata-shadow-provenance.json记录HEAD8b59ed8 dirty、4个源码/测试文件SHA、APK、原main build与完整运行配置。runtime-tests-cull-metadata-shadow.log另行重跑九项通过。公开版仍a35c458，稳定30尚未达到。
+- 下一步在相同shadow APK上仅将gfx-async-submit由0改1，重启Continue5后确认worker与实际场景，再600帧移动，其他标记保持540/底座1/target30/defer2/vcache1/wtrack0/perf0/probe0。旧async1慢的试验早于这两处读回消除，本次重新验证当前路径。如果更慢，恢复0，不固化无收益开关。

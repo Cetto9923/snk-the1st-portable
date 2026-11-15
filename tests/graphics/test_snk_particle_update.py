@@ -85,7 +85,7 @@ struct Shader {std::vector<Binding> bindings;std::unordered_set<unsigned> storag
 struct Range {uint64_t address=0,size=0;};
 struct {Shader *shader[6]{};Range sb[6][16]{},ub[6][16]{};} state;
 unsigned nvn_stage[6]={0,1,2,3,4,5};
-struct Write {uint64_t addr,bytes;bool snk_cull_metadata;};
+struct Write {uint64_t addr,bytes;bool snk_cull_metadata;std::shared_ptr<const XbgCullMetadataPatch> snk_cull_patch;};
 struct NVNcounterData {uint64_t data[2];};
 struct Report {uint64_t addr;};
 std::vector<Write> pending_writebacks;
@@ -129,7 +129,7 @@ int main(){
     def test_exact_shader_classification_precedes_rewrites(self):
         source = (ENGINE / 'xbg_game.cpp').read_text()
         start = source.index('if(h.stage==5 && key=="342eaea42136f6fc")')
-        end = source.index('    boss_interface_rewrite(', start)
+        end = source.index('\n    }', start) + len('\n    }')
         block = source[start:end]
         self.assertIn('nvn_sha256(words.data(),words.size()*4,digest)', block)
         self.assertIn('p->snk_particle_update=std::memcmp(digest,audited,sizeof(audited))==0', block)

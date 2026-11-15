@@ -727,7 +727,7 @@ struct IndirectTemplateInput {bool snk_instance=false,snk_particle=false,snk_gra
 bool indirect_proof_enabled=false,indirect_diag_enabled=false,gpu_indexed_enabled=true,texture_lifecycle_enabled=true,clear_overwrite_probe=false,owned_input_copy_enabled=true;uint64_t indirect_proof_checks=0,indirect_proof_mismatches=0,gpu_indexed_draws=0;
 struct GpuIndexedArgs {std::shared_ptr<OwnedIndirectBuffer> owned;VkDeviceSize offset=0;size_t index_bytes=0;};
 // owner denotes an independent allocation, never a view into the slot arena.
-struct PendingWriteback {uint64_t addr,bytes;Buffer buffer;const void *slot;std::shared_ptr<IndirectTemplateBatch> indirect;std::shared_ptr<void> owner;uint64_t trace_id=0,modified_bytes=0;bool snk_cull_metadata=false;const char *writer_key=nullptr;};
+struct PendingWriteback {uint64_t addr,bytes;Buffer buffer;const void *slot;std::shared_ptr<IndirectTemplateBatch> indirect;std::shared_ptr<void> owner;uint64_t trace_id=0,modified_bytes=0;bool snk_cull_metadata=false;const char *writer_key=nullptr;std::shared_ptr<const XbgCullMetadataPatch> snk_cull_patch;};
 // Default-off CPU metadata only. The ring bounds memory independently of scene
 // duration. No GPU mapping, synchronization, or command recording is added.
 struct IndirectTraceOrigin {
@@ -2446,7 +2446,7 @@ const RegisteredTexture &null_texture(const xbg_shader_binding &b){
 std::string control_key(const void *data){char key[17];need(xbg_shader_control_key(data,key)==0,"Missing shader control segment");return key;}
 struct Shader {std::string key;uint32_t stage;VkShaderModule module{};uint32_t local[3]{}; /* declared workgroup size (LocalSize) */std::vector<xbg_shader_binding> bindings;std::vector<uint32_t> inputs,input_classes;std::vector<uint8_t> c1;
     std::set<uint32_t> storage_writes; // Vulkan bindings of storage buffers the SPIR-V may write
-    bool snk_instance_counter=false,snk_particle_arguments=false,snk_grass_arguments=false,snk_particle_update=false; // exact audited SPIR-V before optional optimizer passes
+    bool snk_instance_counter=false,snk_particle_arguments=false,snk_grass_arguments=false,snk_particle_update=false,snk_metadata_copy=false; // exact audited SPIR-V before optional optimizer passes
     bool discards=true; // fragment shader may kill/demote (conservative default)
     XbgRasterFacts raster; // position input (vertex), declared outputs and SampleMask (fragment): first_draw_covers
     std::vector<uint32_t> spv; // fragment shaders with several outputs: source of the integer-target variants
@@ -2853,6 +2853,14 @@ Shader *load_shader(const void *control){
         uint8_t digest[32];nvn_sha256(words.data(),words.size()*4,digest);
         p->snk_particle_update=std::memcmp(digest,audited,sizeof(audited))==0;
         xbg_logf("NVN Falcom particle update audited module=%u",unsigned(p->snk_particle_update));
+    }
+    if(h.stage==5 && key=="978a71642064cba1"){
+        static const uint8_t audited[32]={
+            0x97,0xaf,0xfc,0xe7,0xb9,0xfc,0x1b,0xbb,0xcb,0x29,0x35,0xe6,0x9b,0xc8,0x7b,0x28,
+            0x34,0x84,0xfe,0x15,0x64,0xa2,0x28,0x55,0xdb,0x21,0x56,0x9e,0xf1,0x1f,0xf8,0x99};
+        uint8_t digest[32];nvn_sha256(words.data(),words.size()*4,digest);
+        p->snk_metadata_copy=std::memcmp(digest,audited,sizeof(audited))==0;
+        xbg_logf("NVN Falcom metadata copy audited module=%u",unsigned(p->snk_metadata_copy));
     }
     boss_interface_rewrite(words,h.stage,key.c_str(),"runtime");snk_counter_rewrite(words,h.stage,key.c_str(),"runtime");histogram_sync_rewrite(words,h.stage,key.c_str(),"runtime");if(stencil_rewrite(words,h.stage,key.c_str(),"runtime")){for(auto &binding:p->bindings){uint32_t scalar=xbg_ffrs_integer_fact(h.stage,key.c_str(),binding.binding);if(binding.binding==xbg_ffrs_uint_binding(h.stage,key.c_str()) || binding.binding==xbg_ffrs_uint_store_binding(h.stage,key.c_str()))scalar=1;if(scalar)binding.flags=(binding.flags&~(3u<<16))|(scalar<<16);}}validate_capabilities(words,h.stage);
     if(h.stage==5 && key=="1618f5e9ae2a6df7"){
@@ -3300,6 +3308,7 @@ void prepare_rg16_proxy(Image &im,VkCommandBuffer cmd){
 }
 
 struct Descriptors {
+    std::shared_ptr<XbgCullMetadataPatch> cull_metadata_patch;
     std::shared_ptr<IndirectTemplateInput> indirect_input;
     const LayoutEntry *entry=nullptr;VkDescriptorSet set{};VkPipelineLayout pipeline_layout{};std::vector<uint32_t> dynamic_offsets;
     std::vector<Buffer> buffers;std::vector<VkBufferView> buffer_views; // buffers: reserved up front, pointers stay valid
@@ -3329,6 +3338,8 @@ struct Descriptors {
             // Shader objects and their keys live until pending writebacks are cleared.
             const Shader *writer=state.shader[compute?5:0];
             pending_writebacks.back().writer_key=writer?writer->key.c_str():nullptr;
+            if(cull_metadata_patch && cull_metadata_patch->address==v.first.first && cull_metadata_patch->bytes==v.first.second)
+                pending_writebacks.back().snk_cull_patch=cull_metadata_patch;
             if(indirect_input && indirect_input->address==v.first.first && indirect_input->bytes==v.first.second)
                 pending_writebacks.back().modified_bytes=indirect_input->modified_bytes;
             if(indirect_input && indirect_input->metadata_exclusive &&
@@ -3344,6 +3355,60 @@ struct Descriptors {
 // Per-draw descriptor records were one make_shared + vector reservations each (≈1800/frame, slow musl malloc). They live
 // until the slot's fence like before, then return to a free list with their capacity.
 std::vector<std::unique_ptr<Descriptors>> desc_all;std::vector<Descriptors*> desc_free;
+// Exact 978a upload copies word1/word2 verbatim from a CPU-clean source.
+// Keep those static index/flag values beside its pending GPU result. The GPU
+// still executes the original full record copy and all dynamic calculations.
+void capture_cull_copy_indices(Descriptors &d,const p_dispatch &p,bool indirect){
+    if(indirect || !state.shader[5] || !state.shader[5]->snk_metadata_copy ||
+       p.x<=0 || p.y!=1 || p.z!=1)return;
+    uint64_t source=0,source_bytes=0,destination=0,destination_bytes=0;
+    uint32_t params[2]{};bool params_valid=false;
+    for(const auto &binding:state.shader[5]->bindings){
+        if(binding.count!=1 || binding.slot>=16)return;
+        if(binding.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER && binding.source==XBG_SOURCE_STORAGE){
+            auto range=state.sb[nvn_stage[5]][binding.slot];
+            if(binding.binding==11){source=range.address;source_bytes=range.size;}
+            if(binding.binding==17){destination=range.address;destination_bytes=range.size;}
+        }
+        if(binding.binding==35 && binding.source==XBG_SOURCE_UNIFORM){
+            auto range=state.ub[nvn_stage[5]][binding.slot];
+            if(range.size>=8 && indirect_cpu_clean(range.address,8)){
+                evguard::EngineRead read(reinterpret_cast<const void*>(range.address),8);
+                std::memcpy(params,reinterpret_cast<const void*>(range.address),8);params_valid=true;
+            }
+        }
+    }
+    const uint64_t needed=uint64_t(params[0])*80;
+    if(!params_valid || !source || !destination || !needed || needed>1024*1024 ||
+       needed>source_bytes || uint64_t(params[0])>uint64_t(p.x)*64 || destination_bytes>4u*1024*1024 ||
+       uint64_t(params[1])+params[0]>destination_bytes/80 ||
+       !indirect_cpu_clean(source,needed))return;
+    for(const auto &report:pending_reports)
+        if(xbg_wb_overlaps(destination,destination_bytes,report.addr,sizeof(NVNcounterData)))return;
+    unsigned matches=0;
+    for(const auto &written:d.written)if(xbg_wb_overlaps(destination,destination_bytes,written.first.first,written.first.second)){
+        if(written.first.first!=destination || written.first.second!=destination_bytes || ++matches>1)return;
+    }
+    if(matches!=1)return;
+    for(const auto &binding:state.shader[5]->bindings){
+        if(!state.shader[5]->storage_writes.count(binding.binding))continue;
+        if(binding.type!=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || binding.source!=XBG_SOURCE_STORAGE)return;
+        auto range=state.sb[nvn_stage[5]][binding.slot];
+        if(xbg_wb_overlaps(source,needed,range.address,range.size))return;
+        if(binding.binding!=17 && xbg_wb_overlaps(destination,destination_bytes,range.address,range.size))return;
+    }
+    evguard::EngineRead source_read(reinterpret_cast<const void*>(source),size_t(needed));
+    auto patch=std::make_shared<XbgCullMetadataPatch>();
+    patch->address=destination;patch->bytes=destination_bytes;patch->first=params[1];
+    const auto *records=reinterpret_cast<const uint32_t*>(source);
+    patch->records.reserve(params[0]);
+    for(uint32_t row=0;row<params[0];++row)
+        patch->records.push_back({records[size_t(row)*20+1],records[size_t(row)*20+2]});
+    d.cull_metadata_patch=std::move(patch);
+    static unsigned notes=0;
+    if(notes++<4)xbg_logf("NVN Falcom metadata copy captured cull indices count=%u first=%u bytes=%llu",
+        params[0],params[1],(unsigned long long)destination_bytes);
+}
 std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,const p_dispatch &p,bool indirect){
     if(!indirect_proof_enabled || indirect || !d.indirect_input)return {};
     if(!d.indirect_input->snk_instance && !d.indirect_input->params_valid)return {};
@@ -3398,6 +3463,12 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
         i.metadata_exclusive=exclusive;
         const uint64_t metadata_bytes=uint64_t(i.params[0])*80;
         bool indices_readable=xbg_snk_cull_indices_readable(pending_writebacks,i.metadata_address,metadata_bytes);
+        std::vector<XbgCullIndexRecord> copied_indices;
+        if(!indices_readable && exclusive && i.params_valid && metadata_bytes && metadata_bytes<=i.metadata_bytes){
+            evguard::EngineRead read(reinterpret_cast<const void*>(i.metadata_address),size_t(metadata_bytes));
+            indices_readable=xbg_snk_cull_index_snapshot(pending_writebacks,
+                reinterpret_cast<const uint32_t*>(i.metadata_address),i.metadata_address,metadata_bytes,copied_indices);
+        }
         for(const auto &report:pending_reports)
             if(xbg_wb_overlaps(i.metadata_address,metadata_bytes,report.addr,sizeof(NVNcounterData)))indices_readable=false;
         if(exclusive && i.params_valid && metadata_bytes &&
@@ -3406,9 +3477,10 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
             if(uint64_t(i.params[0])<=uint64_t(p.x)*1024)
                 i.metadata_modified_bytes=metadata_bytes;
             evguard::EngineRead read(reinterpret_cast<const void*>(i.metadata_address),size_t(metadata_bytes));
-            uint64_t written=xbg_snk_instance_writeback_bytes(
+            uint64_t written=copied_indices.empty()?xbg_snk_instance_writeback_bytes(
                 reinterpret_cast<const uint32_t*>(i.metadata_address),size_t(metadata_bytes/4),
-                i.params[0],uint32_t(p.x),i.bytes);
+                i.params[0],uint32_t(p.x),i.bytes):
+                xbg_snk_copied_index_writeback_bytes(copied_indices,uint32_t(p.x),i.bytes);
             if(written && written<i.bytes){
                 i.modified_bytes=written;
                 static unsigned notes=0;
@@ -3659,6 +3731,7 @@ void tone_metadata_image(const Shader &shader,const xbg_shader_binding &binding,
 }
 void descriptors(Descriptors &out,Commands &commands,bool compute){
     out.indirect_input.reset();
+    out.cull_metadata_patch.reset();
     if(indirect_proof_enabled && compute && state.shader[5] &&
        (state.shader[5]->key=="9bee7f09d6c655c3" || state.shader[5]->snk_instance_counter || state.shader[5]->snk_particle_arguments || state.shader[5]->snk_grass_arguments || state.shader[5]->snk_particle_update)){
         out.indirect_input=std::make_shared<IndirectTemplateInput>();
@@ -5635,6 +5708,7 @@ void dispatch(p_dispatch p,uint64_t indirect_address=0){overlay_shadow={};struct
     // so their grid metadata is genuine; no guessed dimensions are published.
     if(!gpu_indirect){need(p.x>=0 && p.y>=0 && p.z>=0,"Negative compute dispatch");if(!p.x||!p.y||!p.z)return;need(uint32_t(p.x)<=properties.limits.maxComputeWorkGroupCount[0] && uint32_t(p.y)<=properties.limits.maxComputeWorkGroupCount[1] && uint32_t(p.z)<=properties.limits.maxComputeWorkGroupCount[2],"Compute dispatch exceeds device limit");}probe_dispatch_begin();
     uint64_t indirect_serial=slot_serial;Commands c;fire_trace_compute_begin();Descriptors &d=acquire_descriptors();descriptors(d,c,true);need(!gpu_indirect || (slot_serial==indirect_serial && slots[slot_index].cmd==c.command),"Indirect dispatch source slot retired during descriptor preparation");for(auto *im:storage_rg16_images)need(std::find(sampled_rg16_images.begin(),sampled_rg16_images.end(),im)==sampled_rg16_images.end(),"RG16 same-dispatch sampled/storage feedback requires explicit supported subresource semantics");VkComputePipelineCreateInfo ci{VK_STRUCTURE_TYPE_COMPUTE_PIPELINE_CREATE_INFO};ci.stage={VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO};ci.stage.stage=VK_SHADER_STAGE_COMPUTE_BIT;ci.stage.module=state.shader[5]->module;ci.stage.pName="main";ci.layout=d.pipeline_layout;PipelineLease pipeline;{CPU_SCOPE(Pipeline);XbgPipelineKey key;bool cacheable=xbg_compute_pipeline_key(key,ci,d.entry->definition.view());pipeline_lookup(pipeline,key,cacheable,nullptr,&ci);}vkCmdBindPipeline(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,pipeline.pipeline);vkCmdBindDescriptorSets(c.command,VK_PIPELINE_BIND_POINT_COMPUTE,d.pipeline_layout,0,1,&d.set,uint32_t(d.dynamic_offsets.size()),d.dynamic_offsets.data());int prof_dispatch=pass_prof_compute_begin(c.command,p);
+    capture_cull_copy_indices(d,p,gpu_indirect);
     auto indirect_proof=indirect_template_batch(d,p,gpu_indirect);probe_indirect_template(p);
     // gfx-cs-map: only 3D storage images are reported (that is what the light
     // LUTs are), and only when the (shader, grid) pair changes, so one line per

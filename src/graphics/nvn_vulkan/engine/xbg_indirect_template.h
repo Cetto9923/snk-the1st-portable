@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <climits>
 #include <vector>
+#include <memory>
 #include "xbg_writeback_policy.h"
 
 // Metadata for shader 9bee7f09d6c655c3 only. Its validated integer module writes
@@ -100,9 +101,9 @@ inline bool xbg_snk_particle_update_rows(const uint32_t *records,
     return true;
 }
 
-// Binding17 in the audited module only stores byte60 of each 80-byte record.
-// The row index at byte4 remains available in the CPU baseline while those
-// writes are pending. Unknown writers require the normal synchronization.
+// Binding17 in the audited cull module only stores byte60 of each record.
+// Its index/flags remain readable in the CPU baseline. Uploads with captured
+// fields use the ordered snapshot below. Other writers require synchronization.
 template<class Pending>
 bool xbg_snk_cull_indices_readable(const Pending &pending,uint64_t address,uint64_t bytes){
     if(!xbg_wb_range_valid(address,bytes))return false;
@@ -110,6 +111,52 @@ bool xbg_snk_cull_indices_readable(const Pending &pending,uint64_t address,uint6
         if(!write.snk_cull_metadata || write.addr!=address ||
            !xbg_wb_contains(write.addr,write.bytes,address,bytes))return false;
     return true;
+}
+
+// CPU-known index/flag fields copied by the exact 978a metadata upload.
+// These accompany the GPU result without changing the guest CPU mirror.
+struct XbgCullIndexRecord {uint32_t index,flags;};
+struct XbgCullMetadataPatch {
+    uint64_t address=0,bytes=0;
+    uint32_t first=0;
+    std::vector<XbgCullIndexRecord> records;
+};
+
+// Reconstruct only the fields used by the argument-bound proof. Apply known
+// uploads in command order over the CPU baseline. A cull write preserves those
+// fields. Any other writer, shifted descriptor or malformed patch rejects it.
+template<class Pending>
+bool xbg_snk_cull_index_snapshot(const Pending &pending,const uint32_t *baseline,
+    uint64_t address,uint64_t bytes,std::vector<XbgCullIndexRecord> &out){
+    out.clear();
+    if(!baseline || !xbg_wb_range_valid(address,bytes) || bytes>4u*1024*1024 || bytes%80)return false;
+    for(const auto &write:pending)if(xbg_wb_overlaps(address,bytes,write.addr,write.bytes)){
+        if(write.addr!=address || !xbg_wb_contains(write.addr,write.bytes,address,bytes))return false;
+        if(write.snk_cull_metadata && !write.snk_cull_patch)continue;
+        const auto &patch=write.snk_cull_patch;
+        if(!patch || patch->address!=write.addr || patch->bytes!=write.bytes || patch->records.empty() ||
+           patch->records.size()>1024*1024/80 ||
+           uint64_t(patch->first)+patch->records.size()>write.bytes/80)return false;
+    }
+    out.reserve(size_t(bytes/80));
+    for(size_t i=0;i<bytes/80;++i)out.push_back({baseline[i*20+1],baseline[i*20+2]});
+    for(const auto &write:pending)if(xbg_wb_overlaps(address,bytes,write.addr,write.bytes) && write.snk_cull_patch){
+        const auto &patch=*write.snk_cull_patch;
+        if(patch.first>=out.size())continue;
+        const size_t count=std::min(patch.records.size(),out.size()-patch.first);
+        std::copy_n(patch.records.begin(),count,out.begin()+patch.first);
+    }
+    return true;
+}
+
+inline uint64_t xbg_snk_copied_index_writeback_bytes(const std::vector<XbgCullIndexRecord> &records,
+    uint32_t groups,uint64_t bytes){
+    if(records.empty() || !groups || uint64_t(records.size())>uint64_t(groups)*1024 ||
+       bytes<40 || bytes>65536 || (bytes&3))return 0;
+    const uint64_t rows=bytes/20;
+    for(const auto &record:records)
+        if(uint64_t(record.index)+((record.flags&0x300u)?1:0)>=rows)return 0;
+    return rows*20;
 }
 
 // The audited 42866 kernel copies each enabled particle record's index count
