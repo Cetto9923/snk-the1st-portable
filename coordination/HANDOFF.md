@@ -479,3 +479,18 @@
 - 在同进程 gfx-live-sync=0，仅去掉每NVN批的complete_all，Vk sync-submit仍1。记录rg-pointer-ab-skip2.log，进入真实游戏后仍约7.5FPS，GPU81.7ms，约609draws/30dispatches。主瓶颈仍包含GPU和CPU回写，尚未30。
 - 完整graphics62项，61通过1私有fixture跳过，runtime6通过（包含编译真实textfilter、缺省旧补丁和诊断原始分支），日志graphics-tests-pointer-ab.log / runtime-tests-pointer-ab.log。
 - 当前PID17116，已进入原游戏camp，Plus打开原生存档列表，准备新建正常槽方便同点对照。后续测试cached readback，再测安全提交和shader组件fold/temporary forwarding。
+
+
+## T58 原游戏分辨率档位与性能继续
+
+- 原生cfg对象位于已审计main build 4f4fd1aed39eb96a649aba489ad3767d的+0x7251b0。main+8540每帧执行分辨率配置，+1b4/1b8为基准1600x900，+1c4/1c8为有效场景区域，+1e8为原游戏分辨率枚举，+1f1固定档位、+1f2脏标记。原表main+61901c为640x360、800x450、960x540、1280x720、1440x810、1600x900等。保留原游戏更新viewport、UV与依赖资源的流程。反汇编仅留.local/publication/disasm-render-*.
+- PID30152上在原游戏配置边界硬断点读取后，诊断写原生枚举3/固定/脏，GPU pass总和约67.2→39.0ms，但frame4913等外部调试暂停间隔不作帧率基准。RT分配仍可1600x900，不能仅靠GPASS附件extent宣称有效渲染区域。调试器已detach退出。再次attach曾启动连接失败，已按精确cmdline核对后终止本会话server4013。
+- 新增guest_process_apply_snk_render_height，在guest-side present边界、图形任务enqueue前调用，限定上述main build、镜像边界、cfg已初始化和基准尺寸，只设置原生540/720档位与dirty标记一次。gfx端仅ARM vendor解析gfx-mali-render-height诊断marker，缺省0。荣耀及其他vendor分支保持原来不调用。
+- 059136cd68c666569c1c22cde6fa13e51741ad1a2d54a8fcbf35745e4c3e9038构建和RG安装退出0，日志build-native-render-profile.log / rg-native-render-install.log。RG marker540，源日志确认native render profile height=540 selector=2。
+- 首个室内正常存档save000已建立、缩略图显示，截图rg-normal-save-created.png；设备存档备份device-backup/saves-first-play.tar。之后已有户外正常存档与auto，二者缩略图正确，截图rg-outdoor-save3.png；全部存档又备份saves-outdoor-540.tar。当前Continue实际读取最新户外档，不能把此前室内900p与户外540p当同点严格A/B。
+- 当前户外540、deferred Vulkan、gfx async0、cached readback1时，约24.4–25.3FPS。源日志rg-540-room.log（文件名旧，但截图实际户外）。画面/人物可见，未使用全局gamma，未作稳定30验收。
+- cached readback的CPU回写部分从约17ms降到0.02–0.9ms，仍有GPU与snapshot/descriptor瓶颈。旧同步诊断gfx-sync-submit1约7FPS，移除后约11FPS室内900p。
+- async1同户外约17.8–21.4FPS，额外worker调度并未稳定改善。gfx-render-cpu6写入成功，CPU6 max3200000、CPU7 max3350000，仍约19–21FPS，未固化绑核。
+- 当前重启对照组合为540、async0、cached1、wtrack1、ldc-fold1、forward-temps1、defer-events1、render-cpu=-1。仅RG设备诊断marker，尚未固化APK默认。标题截图rg-540-opt-title.png待查看，再正常Continue确认加载。
+- runtime7项通过，新增编译真实native配置函数的ASan/UBSan覆盖build不匹配、未初始化、边界、无关字段保留、540/720与一次性应用。Mali门禁2项通过，编译真实配置vendor门禁和present调用，ARM按marker生效，Adreno/NVIDIA/未知与缺marker保持原路径。原始日志runtime-tests-render-profile.log / mali-render-gates.log。
+- 屏幕system brightness110、manual0、night_display_activated0，仅查询，未调整设备屏幕设置。

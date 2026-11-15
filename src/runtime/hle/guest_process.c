@@ -121,6 +121,7 @@ struct guest_process {
     guest_charge_ticket *argument_ticket;
     int argument_committed,argument_count;
     size_t resource_quota;
+    int snk_render_profile_applied;
     uint64_t tls_allocate_callback,tls_free_callback;
     struct tls_allocation *tls_allocations;
     size_t tls_allocation_count;
@@ -132,6 +133,30 @@ static pthread_mutex_t exclusive_mutex=PTHREAD_MUTEX_INITIALIZER;
 static guest_process *exclusive_process;
 static _Thread_local guest_process *current_process;
 static _Thread_local guest_os_tls_thread *current_os_thread;
+/* Called at the guest-side present boundary, before optional graphics enqueue.
+ * Use the audited native resolution selector, so the game updates its own
+ * viewport, sampling ratios and dependent targets together on the next tick. */
+void guest_process_apply_snk_render_height(unsigned height) {
+    guest_process *p = current_process;
+    if (!p || !p->module || p->snk_render_profile_applied ||
+        (height != 540 && height != 720)) return;
+    char build[33];
+    nso_build_id(p->module, build);
+    if (strcmp(build, "4f4fd1aed39eb96a649aba489ad3767d") ||
+        nso_image_size(p->module) < 0x7253d4) return;
+    uint8_t *config = (uint8_t *)(uintptr_t)nso_base(p->module) + 0x7251b0;
+    if (!(config[0x1f0] & 1)) return;
+    uint32_t base_width, base_height, index = height == 540 ? 2 : 3;
+    memcpy(&base_width, config + 0x1b4, sizeof(base_width));
+    memcpy(&base_height, config + 0x1b8, sizeof(base_height));
+    if (base_width != 1600 || base_height != 900) return;
+    memcpy(config + 0x1e8, &index, sizeof(index));
+    config[0x1f1] = 1; /* Native fixed-resolution selector. */
+    config[0x1f2] = 1; /* Native configuration dirty flag. */
+    p->snk_render_profile_applied = 1;
+    fprintf(stderr, "[port] native render profile height=%u selector=%u build=%s\n",
+            height, index, build);
+}
 static struct guest_os_tls_invoke_result invoke_os_destructor(guest_os_tls_manager *manager,
         guest_os_tls_thread *thread,uint64_t destructor,uint64_t value,void *opaque);
 #if defined(NSO_PROFILE_IDENTITY_TESTING)

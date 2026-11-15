@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T19:28:33.640792+08:00",
-  "phase": "RG477M 原始分配器空指针判断已通过新建至自由移动一次，继续同点性能与亮度优化",
+  "updated_at": "2026-11-15T19:50:35.135463+08:00",
+  "phase": "RG477M 原生540场景档已生效，户外约24-25帧，继续减少同步和快照开销",
   "coordinator": "Codex",
   "integration_branch": "task/T58-community-release",
   "baseline": {
