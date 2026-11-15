@@ -538,3 +538,12 @@
 - 同点simpleperf10s rg-rmutex-after-profile.txt，递归锁lock/unlock均不再进入>=1%热点，memcpy27.40%仍第一，descriptors3.41%、program_info3.07%。采样比例不能直接写成绝对用时减少多少。原始data仍app私有files/perf-rmutex-before/after.data。
 - 完整帧诊断拉到rg-city-viewport-capture.txt，198个drawgroup实际viewport0,0,960,540，另47个1024阴影、14个480x270等。排除本场景恢复900p的假设。诊断帧同步开销不作FPS基准，probe已重设0。
 - 下一轮同APK只把gfx-wtrack设1，defer-events保持缺省0，另gfx-pass-profile=0 120 20000采集每120帧GPU阶段。重启后需要标题Plus、Continue10:35确认、A读回，再核wtrack mismatch、CPU副本开销、真实移动和天空。此配置为诊断，发布源码默认wtrack0保持。
+
+## T59 片元编译优化候选
+
+- wtrack1/defer0同城门更慢，约9.8FPS、提交89.55ms、GPU49ms、6submits，mismatch0仍不能据此验收。live-off wtrack后重设gfx-wtrack0，原始rg-city-wtrack-profile.log与rg-city-wtrack-off-profile.log。公开默认0继续保持。
+- 当前RG无FFRS进程，top记录空闲CPU约600%，空轨RSS6GB，未改系统热控或内核权限。
+- GPASS最新正常城门frame6961合计21.598ms，主GBuffer5.351ms/223draw，照明FS183334461b277951为1.695ms，其余shadow及后处理分散。NVN PERF整帧GPU跨度仍约48ms，二者含义不同，需继续查提交/等待空档。
+- 从实际捕获的drawgroup提取111个片元模块，使用本机spirv-opt -O，4,302,672字节缩到1,655,080字节，全部spirv-val --target-env vulkan1.1退出0。结果.local/publication/optimized-city-fragments/results.json。这仅为离线编译验证，正确显示与FPS需真机。
+- 111个私有诊断SPV在RG专属files/spv-override，哈希逐个一致，rg-opt-fragments-device-sha.txt。原NSO/RomFS/XGS保持原输入。现有spv_override正常runtime与warm入口均读取这些派生模块，仍叠加原有类型/草叶等修正。回退可将该目录改名，再重启。此目录不进入公开包。
+- 当前同APK c42db65c、wtrack0、defer0、gfx-pass-profile0/120/20000重启测试片元优化，正常标题/Continue输入脚本session32564。下一步先截图确认是否载入10:35城门，检查override加载日志、画面、GPU阶段和真实帧时间。
