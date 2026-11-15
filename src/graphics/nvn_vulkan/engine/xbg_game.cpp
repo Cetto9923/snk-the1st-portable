@@ -723,7 +723,7 @@ struct PendingEvent {uint64_t addr;uint32_t mode,v;const void *slot;};
 std::vector<PendingEvent> pending_events,recording_events;   // recording_events: mode 2, slot not yet submitted
 int defer_events=0;uint64_t events_deferred=0,event_reads=0;
 struct IndirectTemplateBatch {bool snk_instance=false;uint64_t address=0,bytes=0;std::vector<XbgIndirectTemplateRow> rows;std::shared_ptr<OwnedIndirectBuffer> owned;};
-struct IndirectTemplateInput {bool snk_instance=false,snk_particle=false,snk_grass=false,metadata_exclusive=false;uint64_t metadata_address=0,metadata_bytes=0,metadata_modified_bytes=0;uint32_t params[4]{};bool params_valid=false;std::vector<uint32_t> words;uint64_t address=0,bytes=0,modified_bytes=0;};
+struct IndirectTemplateInput {bool snk_instance=false,snk_particle=false,snk_grass=false,snk_particle_update=false,metadata_exclusive=false;uint64_t metadata_address=0,metadata_bytes=0,metadata_modified_bytes=0;uint32_t params[4]{};bool params_valid=false;std::vector<uint32_t> words;uint64_t address=0,bytes=0,modified_bytes=0;};
 bool indirect_proof_enabled=false,indirect_diag_enabled=false,gpu_indexed_enabled=true,texture_lifecycle_enabled=true,clear_overwrite_probe=false,owned_input_copy_enabled=true;uint64_t indirect_proof_checks=0,indirect_proof_mismatches=0,gpu_indexed_draws=0;
 struct GpuIndexedArgs {std::shared_ptr<OwnedIndirectBuffer> owned;VkDeviceSize offset=0;size_t index_bytes=0;};
 // owner denotes an independent allocation, never a view into the slot arena.
@@ -2446,7 +2446,7 @@ const RegisteredTexture &null_texture(const xbg_shader_binding &b){
 std::string control_key(const void *data){char key[17];need(xbg_shader_control_key(data,key)==0,"Missing shader control segment");return key;}
 struct Shader {std::string key;uint32_t stage;VkShaderModule module{};uint32_t local[3]{}; /* declared workgroup size (LocalSize) */std::vector<xbg_shader_binding> bindings;std::vector<uint32_t> inputs,input_classes;std::vector<uint8_t> c1;
     std::set<uint32_t> storage_writes; // Vulkan bindings of storage buffers the SPIR-V may write
-    bool snk_instance_counter=false,snk_particle_arguments=false,snk_grass_arguments=false; // exact audited SPIR-V before optional optimizer passes
+    bool snk_instance_counter=false,snk_particle_arguments=false,snk_grass_arguments=false,snk_particle_update=false; // exact audited SPIR-V before optional optimizer passes
     bool discards=true; // fragment shader may kill/demote (conservative default)
     XbgRasterFacts raster; // position input (vertex), declared outputs and SampleMask (fragment): first_draw_covers
     std::vector<uint32_t> spv; // fragment shaders with several outputs: source of the integer-target variants
@@ -2845,6 +2845,14 @@ Shader *load_shader(const void *control){
     if(h.stage==5 && key=="3c2b8a10818baf41"){
         p->snk_grass_arguments=snk_grass_arguments_audited(words);
         xbg_logf("NVN Falcom grass arguments audited module=%u",unsigned(p->snk_grass_arguments));
+    }
+    if(h.stage==5 && key=="342eaea42136f6fc"){
+        static const uint8_t audited[32]={
+            0xbf,0x83,0xd8,0x2a,0x41,0x41,0xcb,0x02,0xa6,0xb6,0xfd,0x15,0x2e,0xc9,0xd6,0x12,
+            0x42,0x81,0xd6,0xf0,0x6c,0x71,0x6b,0x50,0x1c,0x8a,0x74,0xd3,0xb5,0x6f,0x9b,0x35};
+        uint8_t digest[32];nvn_sha256(words.data(),words.size()*4,digest);
+        p->snk_particle_update=std::memcmp(digest,audited,sizeof(audited))==0;
+        xbg_logf("NVN Falcom particle update audited module=%u",unsigned(p->snk_particle_update));
     }
     boss_interface_rewrite(words,h.stage,key.c_str(),"runtime");snk_counter_rewrite(words,h.stage,key.c_str(),"runtime");histogram_sync_rewrite(words,h.stage,key.c_str(),"runtime");if(stencil_rewrite(words,h.stage,key.c_str(),"runtime")){for(auto &binding:p->bindings){uint32_t scalar=xbg_ffrs_integer_fact(h.stage,key.c_str(),binding.binding);if(binding.binding==xbg_ffrs_uint_binding(h.stage,key.c_str()) || binding.binding==xbg_ffrs_uint_store_binding(h.stage,key.c_str()))scalar=1;if(scalar)binding.flags=(binding.flags&~(3u<<16))|(scalar<<16);}}validate_capabilities(words,h.stage);
     if(h.stage==5 && key=="1618f5e9ae2a6df7"){
@@ -3343,7 +3351,7 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
     for(auto &w:d.written)if(xbg_wb_overlaps(i.address,i.bytes,w.first.first,w.first.second)){
         if(w.first.first!=i.address || w.first.second!=i.bytes || ++matches>1)return {};
     }
-    if(matches!=1 || p.x<=0 || p.y!=1 || p.z!=1)return {};
+    if(matches!=1 || p.x<=0 || p.y<=0 || (!i.snk_particle_update && p.y!=1) || p.z!=1)return {};
     if(i.snk_instance){
         const unsigned argument_binding=i.snk_particle?17u:i.snk_grass?41u:29u;
         for(const auto &binding:state.shader[5]->bindings){
@@ -3355,7 +3363,7 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
                 const auto range=binding.source==XBG_SOURCE_STORAGE?state.sb[nvn_stage[5]][index]:state.ub[nvn_stage[5]][index];
                 if(xbg_wb_overlaps(i.address,i.bytes,range.address,range.size) &&
                    (binding.binding!=argument_binding || element || range.address!=i.address || range.size!=i.bytes))return {};
-                if(i.snk_grass && xbg_wb_overlaps(i.metadata_address,i.metadata_bytes,range.address,range.size))return {};
+                if((i.snk_grass || i.snk_particle_update) && xbg_wb_overlaps(i.metadata_address,i.metadata_bytes,range.address,range.size))return {};
             }
         }
     }
@@ -3366,7 +3374,15 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
         if(!xbg_snk_grass_argument_rows(reinterpret_cast<const uint32_t*>(i.metadata_address),
             size_t(i.metadata_bytes/4),i.bytes))return {};
     }
-    if(i.snk_instance && !i.snk_particle && !i.snk_grass){
+    if(i.snk_particle_update){
+        const uint64_t needed=uint64_t(p.y)*144;
+        if(!i.metadata_address || needed>1024*1024 || needed>i.metadata_bytes ||
+           !indirect_cpu_clean(i.metadata_address,needed))return {};
+        evguard::EngineRead read(reinterpret_cast<const void*>(i.metadata_address),size_t(needed));
+        if(!xbg_snk_particle_update_rows(reinterpret_cast<const uint32_t*>(i.metadata_address),
+            size_t(needed/4),uint32_t(p.y),i.bytes))return {};
+    }
+    if(i.snk_instance && !i.snk_particle && !i.snk_grass && !i.snk_particle_update){
         bool exclusive=i.metadata_address && i.metadata_bytes;
         for(const auto &binding:state.shader[5]->bindings){
             if(binding.type!=VK_DESCRIPTOR_TYPE_STORAGE_BUFFER || !state.shader[5]->storage_writes.count(binding.binding))continue;
@@ -3644,11 +3660,12 @@ void tone_metadata_image(const Shader &shader,const xbg_shader_binding &binding,
 void descriptors(Descriptors &out,Commands &commands,bool compute){
     out.indirect_input.reset();
     if(indirect_proof_enabled && compute && state.shader[5] &&
-       (state.shader[5]->key=="9bee7f09d6c655c3" || state.shader[5]->snk_instance_counter || state.shader[5]->snk_particle_arguments || state.shader[5]->snk_grass_arguments)){
+       (state.shader[5]->key=="9bee7f09d6c655c3" || state.shader[5]->snk_instance_counter || state.shader[5]->snk_particle_arguments || state.shader[5]->snk_grass_arguments || state.shader[5]->snk_particle_update)){
         out.indirect_input=std::make_shared<IndirectTemplateInput>();
-        out.indirect_input->snk_instance=state.shader[5]->snk_instance_counter || state.shader[5]->snk_particle_arguments || state.shader[5]->snk_grass_arguments;
+        out.indirect_input->snk_instance=state.shader[5]->snk_instance_counter || state.shader[5]->snk_particle_arguments || state.shader[5]->snk_grass_arguments || state.shader[5]->snk_particle_update;
         out.indirect_input->snk_particle=state.shader[5]->snk_particle_arguments;
         out.indirect_input->snk_grass=state.shader[5]->snk_grass_arguments;
+        out.indirect_input->snk_particle_update=state.shader[5]->snk_particle_update;
     }
     sampled_rg16_images.clear();storage_rg16_images.clear();cs_map_images.clear();
     draw_depth_reads.clear();
@@ -3874,8 +3891,13 @@ void descriptors_build(Descriptors &out,Commands &commands,bool compute){CPU_SCO
                     out.indirect_input->metadata_address=uint64_t(data);
                     out.indirect_input->metadata_bytes=n;
                 }
+                if(out.indirect_input && out.indirect_input->snk_particle_update && b.binding==17 &&
+                   b.source==XBG_SOURCE_STORAGE && is_storage && element==0){
+                    out.indirect_input->metadata_address=uint64_t(data);
+                    out.indirect_input->metadata_bytes=n;
+                }
                 if(out.indirect_input && out.indirect_input->snk_instance &&
-                   !out.indirect_input->snk_particle && !out.indirect_input->snk_grass && element==0){
+                   !out.indirect_input->snk_particle && !out.indirect_input->snk_grass && !out.indirect_input->snk_particle_update && element==0){
                     if(b.binding==17 && b.source==XBG_SOURCE_STORAGE && is_storage){
                         out.indirect_input->metadata_address=uint64_t(data);
                         out.indirect_input->metadata_bytes=n;

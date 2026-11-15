@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-15T23:03:09.806072+08:00
-阶段：所有设备底座模式已接通，洛连特市移动发现未覆盖间接参数生产者
+状态事件时间：2026-11-15T23:25:51.034571+08:00
+阶段：T61已消除342e粒子参数读回，继续修复移动后的710行参数padding等待
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -18,10 +18,11 @@
 | T58 | RELEASE_ANDROID | passed | Codex | 无 | 无额外门禁 | task/T58-community-release |
 | T59 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T59-rg477m-frame-time |
 | T60 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T60-docked-profiles |
+| T61 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T61-town-indirect-gpu |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T60", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T61", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -54,10 +55,11 @@
 - T60源码将底座模式与内部渲染分辨率分开。RG新包ab12ac3e真实日志operation_mode1、native render540 selector2、target_fps30，保存save004洛连特市22:44并重启读回。
 - T60图形69项68通过1私有fixture跳过，运行时9通过，设备环境与底座/限帧重点5项通过，Java分档合约通过。
 - 洛连特市底座模式600帧真实移动601次queue回调且601个不同工作帧，11.670685FPS，p95 104.982ms，最大132.375ms，超过100ms70个。每帧why5 GPU读回一次，已定位未有模板证明的342eaea42136f6fc生产1280字节索引间接参数。
+- T61精确342e原模块模板证明装机3fcc2a9c，同save005站立300帧从12.606提高29.561FPS，601帧移动26.580FPS、p95 52.187ms、max82.156ms，失败0和重复0。graphics72项71通过1跳过，runtime9通过，去掉参数边界负控SIGABRT被拒绝。
 
 ## 未验证
 
-- RG477M稳定30尚未达到。最新洛连特市真实移动11.671FPS，CPU每帧等待间接参数GPU结果，继续修复。
+- RG477M实际移动尚未稳定30。最新移动26.580FPS，转动镜头后每两帧一次CPU写入14200B碰到14208B参数结果，原1618模板已有但padding写入范围证明缺失，继续分析。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
 - 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
 

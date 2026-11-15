@@ -85,6 +85,21 @@ inline bool xbg_snk_grass_argument_rows(const uint32_t *records,
     return true;
 }
 
+// The exact 342e particle-update module selects one 144-byte record per
+// WorkGroupID.y. A zero particle count exits before the argument access.
+// Otherwise its only argument write is atomicAdd at record[19]*20+4.
+// Check all dispatched records, including ones disabled by GPU flags.
+inline bool xbg_snk_particle_update_rows(const uint32_t *records,
+    size_t record_words,uint32_t groups_y,uint64_t bytes){
+    if(!records || !groups_y || uint64_t(groups_y)*144>1024*1024 ||
+       uint64_t(groups_y)*36>record_words || bytes<20 || bytes>65536 || (bytes&3))return false;
+    for(uint32_t y=0;y<groups_y;++y){
+        const uint32_t *record=records+size_t(y)*36;
+        if(record[1] && uint64_t(record[19])>=bytes/20)return false;
+    }
+    return true;
+}
+
 // Binding17 in the audited module only stores byte60 of each 80-byte record.
 // The row index at byte4 remains available in the CPU baseline while those
 // writes are pending. Unknown writers require the normal synchronization.

@@ -651,3 +651,16 @@
 - 当前慢点每帧why5同步一次，GPU约47ms/submitCPU约66ms，dispatch间接15/15均在GPU且CPU fallback0，问题来自索引间接绘制回退。6秒probe3诊断已恢复0，日志rg-town-indirect-sync-diagnostic.log。具体为op26/a.ind20B，最新GPU写回1280B，writer342eaea42136f6fc，vs b8dee80fcc1d969e、fs066dad9ed3341f65，proof0/rows0，注册索引地址可用空间约1.5GB，不能盲目整段拷贝或删除范围门禁。原始无诊断窗口也有每帧why5一次，probe3数据只作定位。
 - 未覆盖的compute342eaea42136f6fc已从私有XGS提取到town-indirect-342.spv并spirv-val Vulkan1.1退出0，反汇编town-indirect-342.spvasm。LocalSize32，常量绑定41/47/53/59，存储绑定11/17/23/29/35。下一步分析它写入20字节索引绘制参数的静态字段，扩展已有indirect_template_batch模板证明与GPU常驻路径，保留输入范围和在途副本生命周期校验。
 - 已把当前低帧率镜头位置正常新建save005，23:00时设备目录确认存在，备份device-backup/saves-town-slow-slot005.tar。下一次重启可Continue该点。当前设备仅RG477M01445122，FFRS进程不存在。公开Release仍a35c458的1.0.1-preview，新模式候选尚未发布。稳定30与全机型实测仍未完成，目标继续active。
+
+## T61 粒子更新间接绘制检查点
+
+- 分支task/T61-town-indirect-gpu，基于8e8c07c。诊断包b41fb73c已安装，PID16563，probe3仅记录最初3次342e dispatch后恢复0。诊断显示direct xyz16/64/1、binding17元数据9216B且CPU-clean、binding29绘制参数1280B且CPU-clean。启动截图仍在Continue确认，额外A后已正常读回save005洛连特市，rg-particle-update-before.png/log保留。
+- 原342e模块SPV SHA256 bf83d82a4141cb02a6b6fd152ec9d6124281d6f06c716b501c8a74d3b56f9b35，优化反汇编确认每WorkGroupID.y读取144B记录，byte4粒子数为0时在参数访问前退出，byte76为参数行，仅对binding29的row*20+4做AtomicIAdd，其他4字段不写。计算仍由原GPU着色器执行。
+- 候选在所有可选改写前匹配原模块SHA，复用原CPU-clean静态参数捕获与GPU间接绘制。只对该模块允许direct Y>1，读取Y*144有界元数据并逐行校验非零粒子数的参数行。未知间接维度、GPU脏元数据、参数不干净、其他可写绑定重叠、非零baseVertex/baseInstance等继续走原回退。临时probe_particle_update helper与调用已移除。
+- 新组件编译真实indirect_template_batch与模板helper，ASan/UBSan覆盖64行、最后一行越界、零粒子早退、padding、Y/XYZ/indirect、CPU-clean与可写别名负例。particle-update-tests.log三项通过。完整graphics-tests-particle-update.log为72项71通过1私有fixture跳过，dirty tracker真实fault2003。
+- build-particle-update-resident.log退出0，候选APK SHA256 3fcc2a9c9ca67e3f40031638a01e4cb961fe627ed6fb3ae2cf9c3bd5d12c5afa。当前仍在基线诊断包收集save005站立300帧，town-particle-baseline-plan.json在输入前固定窗口，不录屏。完成后覆盖安装候选并相同save005核对画面、GPU同步和实际帧时间。此检查点尚未声称真机提速。
+
+- 首候选3fcc2a9c已覆盖安装，PID21879，Continue正常读回save005，rg-particle-resident-first.png/log。精确342e分类module1，每帧why5等待已消除。无录屏事先固定站立300帧，基线诊断包301不同工作帧12.606317FPS、p95 95.003ms、最大100.735ms，新包301不同工作帧29.560783FPS、p95 36.429ms、最大44.496ms，均无失败/重复。两次镜头位置相同，角色idle姿态自然不同。
+- 显示PAD后事先固定600帧左右1秒/释放0.2秒，601不同工作帧26.580273FPS、p50 34.808ms、p95 52.187ms、p99 59.105ms、max82.156ms，超过100ms0、失败0/重复0。town-particle-resident-motion全套plan/actions/csv/metrics/run.log。镜头稍漂移，和旧11.671移动窗口不作为严格单轨迹对照。
+- 移动末尾出现新同步，每两帧一次OP_UPDATE_UB/op6、why4，14200B CPU参数更新碰到14208B pending，writer1618f5e9ae2a6df7，已有710行静态模板但modified_bytes0。rg-particle-resident-write-sync-corrected.log证据，继续分析原cull模块padding证明。末尾场景人物/城门正常截图rg-particle-resident-motion-end.png，站立已降约20.6FPS，不能宣称稳30。
+- 一次通过adb shell/run-as/sh-c写probe的引号在远端丢失，实际写成换行，因此首份write-sync.log没有诊断。已改用Python subprocess把单字节送run-as tee，重采6秒并finally恢复字节0。该问题影响诊断开关，正式FPS窗口probe未启用。去掉新helper参数行边界的负控退出-6，particle-update-negative-control.log已记录。runtime-tests-particle-update.log九项通过。
