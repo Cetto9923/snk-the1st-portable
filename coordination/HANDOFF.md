@@ -580,3 +580,21 @@
 - version_reusable只看last_slot当前pending/recording。物理槽已经退休并复用后，新一代正在录制会让旧版本被误判仍有读者，产生可避免的整缓冲回退。新增Slot.generation，recording_slot真实入口设为slot_serial。版本只有对应代际仍活跃时等待，槽已换代说明其旧读者已退休，允许复用。继续保留同代pending/recording保护，不能按串行距离猜退休。
 - 扩展现有真实helper回归，提取recording_slot的实际代际赋值语句，覆盖同代录制/在途拒绝、换代复用、再次被新一代读取后继续保护与非法索引，ASan/UBSan通过wtrack-generation-test.log。完整图形测试进行中。
 - build-wtrack-generation.log构建退出0。覆盖安装rg-wtrack-generation-install.log，脚本session31827重启并Continue同10:35。配置仍defer1/wtrack1，缺guard/pass-profile/SPV覆盖/live-off。下一步确认fallback是否降低、图形稳定性和实际移动帧率，未验证前保持公开默认wtrack0。
+
+## T59 代际实测与批末事件对照
+
+- 6124c21，APK45ea4d042d26786f93aa389f8f1585f7775e9a8100b0f6648ab699982f6da0c5覆盖安装成功。完整graphics67项66通过1跳过。PID31081同点实际wtrack1，无live-off，mismatch0，fallback3/60帧从此前30降低。约24.5-24.9FPS、submit21.6-22.1ms、GPU24.5-25ms，rg-wtrack-generation-scene.log/png，尚未达到30，跟踪未确证比wtrack0快。
+- 现在恢复gfx-wtrack0，改现有gfx-defer-events2。该模式保留signal到本次录制提交末尾，避免每个signal强行切开Vulkan批次，等待者poll/WaitEvent仍会推进真正提交。退休顺序已修正，因此值得单变量验证。无其他采集/覆盖，APK保持45ea不变，Continue同save00310:35。下一步核提交数、帧时间与城墙/柱/天空，不能仅以批次数减少宣称显示或30FPS通过。
+
+## T59 批末事件初步显示与实际移动采样
+
+- PID1745、defer2/wtrack0/async0，同城门预热约26.0-26.3FPS，submit19.6-19.8ms、GPU24.1ms，Vulkan提交2次/帧，sync_wb0，rg-batch-events-scene.log/png。只是该点站立数据，仍未稳30。
+- 20秒视频rg-batch-events-motion-visual.mp4检查左右旋转、仰俯视、实际前后步行。墙柱、人物、道路与天空保持显示，接触表rg-batch-events-motion-sheet.png。仰视人物靠近相机时出现原游戏的规则点阵淡出，单帧rg-batch-events-sky-85.png。天空有平滑白色云带，未见之前随机粉蓝条纹，仍需更长移动和草叶流程。
+- 开始无录屏的实际左右移动600帧采样。预先固定PID1745的frame13440至14040，未按帧时间筛选。起始宣告batch-events-motion-plan.json，输入左右各1秒、释放0.2秒，脚本session6995。结束后会输出batch-events-motion.csv/metrics.json。保存原save003不覆盖，移动只在该城门点附近。
+- 当前源码6124c21之后仅交接记录待提交。公开版本仍v1.0.1-preview/a35c458，默认defer0。下一步先完成该帧时间窗口，再比较async1，已有退休顺序修正后应重新测量，不能照搬旧版异步更慢的结论。
+
+## T59 实际移动600帧结果与异步对照
+
+- batch-events-motion-plan.json预先确定frame13440至14040，实际23.448351694秒、601次成功queue callback、601 distinct-work、重复0、失败0。25.588FPS，p50 38.158ms、p95 48.658ms、p99 56.187ms、max67.105ms，>100ms为0。原始batch-events-motion.csv、batch-events-motion-metrics.json，未筛长帧。未达到稳定30。
+- 移动结束rg-batch-motion-performance-end.png在城门内右墙边，左右输入因相机跟随有少量位置漂移，仍是真实城镇移动。后续与其他配置比较须核画面/位置，不能当逐像素同轨迹。
+- 现在保持APK45ea、defer2/wtrack0，无guard/profile/override/live-off，只新增gfx-async-submit1重启，正常Continue原save00310:35。下一步测默认调度下FPS、async drain/wait与显示，再用现有gfx-render-cpu标记作独立绑核对照，避免把旧defer0或旧写回顺序时的结果当现版结论。
