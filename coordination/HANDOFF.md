@@ -531,3 +531,10 @@
 - snk_libcxx.c每次递归锁lock/unlock在全局链表线性查找。改为256bucket地址散列，仍使用同一table锁与原pthread递归锁，guest对象内容保持。实际实现提取用例以4096对象验证碰撞、重复构造、同线程递归、跨线程trylock、4线程80000次互斥递增、析构重建与guest字节保持，ASan/UBSan通过。runtime9项通过。
 - build-rmutex-buckets.log构建退出0，rg-rmutex-install.log覆盖安装退出0，当前PID24948，待Continue最新10:35后做同点CPU采样和真实移动。该候选还没更新公开Release。
 - 注意原生540档只per-process应用一次。城镇GPU46ms需复核过图是否恢复900p，尚无证据，不能先当原因。可以用现有probe1抓capture.txt的实际viewport，或读native cfg，不能仅按附件尺寸推断。
+
+## T59 城门540确认与wtrack单变量
+
+- 递归锁候选APK c42db65c30e83cefeb4b1b37674bcb964d6f9c0bfa126cf03bca30fec989af6d正常Continue城门save00310:35，rg-rmutex-loaded.png与rg-rmutex-before.png同点。站立约12.5FPS、GPU44.82ms、submit68.22ms，未稳30。
+- 同点simpleperf10s rg-rmutex-after-profile.txt，递归锁lock/unlock均不再进入>=1%热点，memcpy27.40%仍第一，descriptors3.41%、program_info3.07%。采样比例不能直接写成绝对用时减少多少。原始data仍app私有files/perf-rmutex-before/after.data。
+- 完整帧诊断拉到rg-city-viewport-capture.txt，198个drawgroup实际viewport0,0,960,540，另47个1024阴影、14个480x270等。排除本场景恢复900p的假设。诊断帧同步开销不作FPS基准，probe已重设0。
+- 下一轮同APK只把gfx-wtrack设1，defer-events保持缺省0，另gfx-pass-profile=0 120 20000采集每120帧GPU阶段。重启后需要标题Plus、Continue10:35确认、A读回，再核wtrack mismatch、CPU副本开销、真实移动和天空。此配置为诊断，发布源码默认wtrack0保持。
