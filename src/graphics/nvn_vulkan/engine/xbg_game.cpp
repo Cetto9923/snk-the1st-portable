@@ -1987,7 +1987,8 @@ std::map<uint64_t,std::shared_ptr<Image>> images;
 bool probe_is_active();
 void probe_cpu_sync(uint64_t address,uint64_t bytes,unsigned why,uint64_t pending_address,uint64_t pending_bytes);
 bool current_pending_range(uint64_t address,uint64_t bytes,VkDeviceSize align);
-bool indirect_dispatch_inputs_resident();
+bool pin_pending_input(uint64_t address,uint64_t bytes);
+bool indirect_dispatch_inputs_resident(bool pin=false);
 void probe_guest_barrier(uint32_t bits);
 void probe_image_read_barrier(const Image &image,bool in_open,VkImageAspectFlags read_aspects);
 void probe_depth_decision(const Image &image,bool in_open,bool needs_barrier,bool keep);
@@ -5639,7 +5640,7 @@ bool current_pending_range(uint64_t address,uint64_t bytes,VkDeviceSize align){
     }
     return false;
 }
-bool indirect_dispatch_inputs_resident(){
+bool indirect_dispatch_inputs_resident(bool pin){
     if(!state.shader[5] || capture.active || capture.probe || provenance_file || pass_prof_enabled || g_ui_moff!=0)return false;
     auto clean_or_resident=[](uint64_t address,uint64_t cpu_bytes,uint64_t view_bytes,VkDeviceSize align){
         if(!address || !cpu_bytes || address+view_bytes<address)return false;
@@ -5663,7 +5664,10 @@ bool indirect_dispatch_inputs_resident(){
     std::sort(ranges.begin(),ranges.end(),[](const Range&a,const Range&b){return a.begin<b.begin;});
     for(auto r:ranges){if(!merged.empty() && r.begin<merged.back().end){merged.back().end=std::max(merged.back().end,r.end);merged.back().written|=r.written;}else merged.push_back(r);}
     for(auto r:merged){uint64_t bytes=r.end-r.begin;
-        if(!clean_or_resident(r.begin,bytes,bytes,r.written?1:properties.limits.minStorageBufferOffsetAlignment))return false;
+        const VkDeviceSize alignment=r.written?1:properties.limits.minStorageBufferOffsetAlignment;
+        if(!clean_or_resident(r.begin,bytes,bytes,alignment)){
+            if(!pin || !pin_pending_input(r.begin,bytes) || !clean_or_resident(r.begin,bytes,bytes,alignment))return false;
+        }
         if(r.written)for(auto &report:pending_reports)if(xbg_wb_overlaps(r.begin,bytes,report.addr,sizeof(NVNcounterData)))return false;
     }
     return true;
@@ -5831,7 +5835,9 @@ void dispatch(p_dispatch p,uint64_t indirect_address=0){overlay_shadow={};struct
     if(indirect_address){
         need(!(indirect_address&3) && indirect_address+12>=indirect_address,"Invalid indirect dispatch address");
         ++disp_indirect_total;
-        if(current_pending_range(indirect_address,12,4) && indirect_dispatch_inputs_resident())gpu_indirect=pending_view(indirect_address,12,4,indirect);
+        if(current_pending_range(indirect_address,12,4) &&
+            (indirect_dispatch_inputs_resident() || (properties.vendorID==0x13b5 && indirect_dispatch_inputs_resident(true))))
+            gpu_indirect=pending_view(indirect_address,12,4,indirect);
         if(!gpu_indirect){cpu_access(indirect_address,12,5);uint32_t xyz[3];memcpy(xyz,reinterpret_cast<void*>(indirect_address),12);p.x=int32_t(xyz[0]);p.y=int32_t(xyz[1]);p.z=int32_t(xyz[2]);p.ind=0;
             // #region agent log
             if(flame_diag_enabled){static unsigned dn=0;static int lx=-2,ly=-2,lz=-2;bool chg=(p.x!=lx||p.y!=ly||p.z!=lz);lx=p.x;ly=p.y;lz=p.z;if(chg||(dn++%60)==0)xbg_logf("FDIAG_IND fr=%llu shader=%s addr=%#llx xyz=%d,%d,%d pending=%d",(unsigned long long)stats.presents.load(),state.shader[5]->key.c_str(),(unsigned long long)indirect_address,p.x,p.y,p.z,int(current_pending_range(indirect_address,12,4)));}
@@ -6584,37 +6590,36 @@ bool indexed_graphics_ready(const p_draw_idx &a,size_t index_bytes,IndexedInputF
     }
     return true;
 }
-bool pin_indexed_input(const IndexedInputFailure &input){
+bool pin_pending_input(uint64_t address,uint64_t bytes){
     if(!owned_input_copy_enabled) return false;
-    if(strcmp(input.why,"texel")) return false;
-    if(input.stage!=0) return false;
-    // Accept binding 12 (D2R) or binding 30 (FFRS) or any valid stage 0 texel binding
-    if(input.binding>64) return false;
-    if(!state.shader[0]) return false;
     if(!slots[slot_index].recording) return false;
-    if(!input.address) return false;
-    if(!input.bytes || input.bytes>1048576 || (input.bytes&3) || input.address+input.bytes<input.address) return false;
+    if(!address) return false;
+    if(!bytes || bytes>1048576 || (bytes&3) || address+bytes<address) return false;
     if(!nvn_memory_pool_resolve_address) return false;
-    for(auto &r:pending_reports)if(xbg_wb_overlaps(input.address,input.bytes,r.addr,sizeof(NVNcounterData))) return false;
-    size_t available=0;void *base=nvn_memory_pool_resolve_address(input.address,&available);
-    if(uint64_t(base)!=input.address || input.bytes>available) return false;
+    for(auto &r:pending_reports)if(xbg_wb_overlaps(address,bytes,r.addr,sizeof(NVNcounterData))) return false;
+    size_t available=0;void *base=nvn_memory_pool_resolve_address(address,&available);
+    if(uint64_t(base)!=address || bytes>available) return false;
     for(auto w=pending_writebacks.rbegin();w!=pending_writebacks.rend();++w){
-        if(!xbg_wb_overlaps(input.address,input.bytes,w->addr,w->bytes))continue;
+        if(!xbg_wb_overlaps(address,bytes,w->addr,w->bytes))continue;
         Slot *producer=const_cast<Slot*>(static_cast<const Slot*>(w->slot));
-        if(input.address<w->addr || input.address+input.bytes>w->addr+w->bytes) return false;
+        if(address<w->addr || address+bytes>w->addr+w->bytes) return false;
         if(producer==&slots[slot_index]) return false;
         if(!producer->pending) return false;
         if(producer->recording) return false;
-        Buffer source=w->buffer;source.offset+=input.address-w->addr;
+        Buffer source=w->buffer;source.offset+=address-w->addr;
         if(source.offset&3) return false;
-        auto job=std::make_shared<OwnedInputCopy>(source,size_t(input.bytes));producer->copy_readers.push_back(job);slots[slot_index].retire.objects.push_back(job);
-        ++perf.submits;++submit_by[SITE_OTHER];snapshot_invalidate(input.address,input.bytes);
-        const uint64_t trace_id=indirect_trace_record("owned-copy","none",input.address,input.bytes,
-            job->owned->view,w->trace_id,input.address);
-        pending_writebacks.push_back({input.address,input.bytes,job->owned->view,&slots[slot_index],{},job,trace_id});
-        static unsigned copies=0;if(copies++<12 || !(copies%600))xbg_logf("NVN owned indexed input copy copies=%u bytes=%llu sourceSlot=%d consumerSlot=%u",copies,(unsigned long long)input.bytes,int(producer-slots),slot_index);return true;
+        auto job=std::make_shared<OwnedInputCopy>(source,size_t(bytes));producer->copy_readers.push_back(job);slots[slot_index].retire.objects.push_back(job);
+        ++perf.submits;++submit_by[SITE_OTHER];snapshot_invalidate(address,bytes);
+        const uint64_t trace_id=indirect_trace_record("owned-copy","none",address,bytes,
+            job->owned->view,w->trace_id,address);
+        pending_writebacks.push_back({address,bytes,job->owned->view,&slots[slot_index],{},job,trace_id});
+        static unsigned copies=0;if(copies++<12 || !(copies%600))xbg_logf("NVN owned pending input copy copies=%u bytes=%llu sourceSlot=%d consumerSlot=%u",copies,(unsigned long long)bytes,int(producer-slots),slot_index);return true;
     }
     return false;
+}
+bool pin_indexed_input(const IndexedInputFailure &input){
+    if(strcmp(input.why,"texel") || input.stage!=0 || input.binding>64 || !state.shader[0])return false;
+    return pin_pending_input(input.address,input.bytes);
 }
 bool gpu_draw_indexed(const p_draw_idx &a){
     if(!gpu_indexed_enabled){

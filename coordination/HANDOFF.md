@@ -897,3 +897,17 @@
 - 已覆盖回edb78e86，正常System→载入选save007，load列表缩略图与确认45:23/17:04:00正确，rg-native-timing-load-list.png/load7-confirm.png。真实花盆连续摇杆2400间隔工作29.7967FPS/p95 41.197ms/max91.907ms，无失败/重复/>100ms。完整SF物理29.7981FPS/p95 33.323ms/p99 49.624ms/max115.748ms，24个<25/2298个25–42/71个42–58/7个58+，1次>100ms。flower-native-timing-long-motion-*，末图rg-native-timing-flower-after.png人物、花叶、房屋可见。39批CPU17.309ms/GPU23.226ms，draw887.090/dispatch34.756。
 - 相同450配置旧6c94语义缓存包花盆SF p95 49.629ms，当前两帧p95 33.323ms。已有减少显示节奏波动的实测收益，仍未达到长流程稳定30。当前实际PID32059/edb78e86/花盆，Continue8保留，用户原新位置save008及全槽备份仍在。真实端到端输入延迟未测，采用约66ms呈现余量是本轮选择。荣耀暂停，公开release未更新，其他设备默认不开启。
 - 下一步T70先以不改变原GPU常驻入口的有界日志记录OP_DISPATCH回退的shader、参数/输入驻留与生产槽，再依据真实原因选择最小同步修复。查过Khronos vkCmdDispatchIndirect和Synchronization Examples，以设备读参数+原队列屏障为设计线索，https://docs.vulkan.org/refpages/latest/refpages/source/vkCmdDispatchIndirect.html ，https://docs.vulkan.org/guide/latest/synchronization_examples.html 。不删等待或伪造维度。
+
+## T70 间接调度CPU回退
+
+- 从0b5fb6c切task/T70-indirect-dispatch-sync，总控独占xbg_game.cpp/xbg_probe.inc与相关测试。先复用probe_cpu_sync既有shader/槽/驻留日志，加独立默认关闭gfx-cpu-sync-diag，不启用gfx-codex-probe，不开启capture/provenance或改变GPU快路径。仅真实why5/op27同步、游戏frame>=1200、每原因最多12条，先诊断后选择修复。临时接线应在候选固化前撤掉，patch和精确ELF/provenance留.local。
+- 当前实际edb78e86/PID32059/花盆，原用户新地点save008完好。下一步构建诊断覆盖装Continue8，先看真实城门首屏，移动窗口采CPU同步metadata与实际帧号，诊断窗口不作FPS收益验收。荣耀暂停。
+
+### T70 诊断结果与跨槽输入候选
+
+- 仅xbg_probe.inc临时独立日志，build-indirect-sync-diagnostic.log exit0，APK4b3a13187f3fb4460a851130a1d514a29b99969ce3859959c0e35911e5b950a4、精确ELF/patch/provenance保留。该包图形85项84通过1私有fixture跳过，未开启gfx-codex-probe捕获或provenance。诊断窗口gate-indirect-sync-diagnostic-long-motion-*只作定位，期间额外mid日志拷贝开销存在，不作性能收益验收。
+- rg-indirect-sync-diagnostic-final-boot-window.log真实frame3559和4001，why5/op27/12B，CS c5bc8b44a9224e7a，args writer0f9c2dd4533c2c24、3040B在当前recording槽，sourceCurrent1/inputsResident0。binding11的16B也在当前槽，binding17的262160B在上一pending槽，binding23的256B CPU-clean。原守卫拒绝跨槽输入，导致参数CPU回读→全批同步。不是参数源本身缺失。
+- 已完整撤临时诊断接线，设备gfx-cpu-sync-diag0。候选从pin_indexed_input抽出原同一GPU OwnedInputCopy与源/目标共享租约到pin_pending_input。原indexed caller保留stage0/texel/binding<=64/shader约束。compute守卫只有Mali vendor0x13b5在原检查失败后尝试pin模式，对未常驻的合并storage范围作原有界GPU拷贝，再重跑相同驻留检查。原UBO、类型、capture/provenance/profile排除、report冲突、完整覆盖、1MiB/对齐/已提交生产槽/注册内存边界全部保留。没有删除CPU回退，没有伪造调度维度，仍用vkCmdDispatchIndirect读取真实GPU参数。
+- 生产pin/current_pending_range/indirect_dispatch_inputs_resident/indexed wrapper及实际dispatch选路提取ASan/UBSan测试，覆盖真实262160B/3040B形状、只读/可写storage、范围合并、生产/消费双租约寿命、12个拒绝边界、UBO/未知描述符保守回退和Adreno保持原选路。测试中的GPU复制对象用宿主替身，实际Vulkan复制/屏障/producer copy_readers沿用原OwnedInputCopy，真机验收仍必需。禁用pin重试、移除生产租约、移除消费租约、删除Mali门禁4负控均实际断言失败，compute-input-copy-negative-controls.log/json。
+- 图形86项85通过1私有fixture跳过，graphics-tests-compute-input-copy.log。运行时9通过runtime-tests-compute-input-copy.log。build-compute-input-copy-candidate.log exit0，APK d19bad24cd0ec6b8f726da921c97e80b28b860a30638acdf833a86d98104cab8、apk-compute-input-copy-candidate.apk、libffrs-compute-input-copy-candidate.so和compute-input-copy-candidate-provenance.json。已覆盖装，rg-compute-input-copy-candidate-first.png真实save008城门人物、NPC、房屋和亮度可见。正常启动日志已有5次262160B GPU owned copy，未出现原op27同步或slot-retired错误，仍有一次加载期op26原回退。
+- 正在gate-compute-input-copy-long-motion-*，底座450/4槽/cache1/texdirty1/async0/FIFO/present-timing1/PAD可见/摇杆2400间隔。尚未取得该窗口收益、花盆与HOME验收，不能称稳定30。当前设备只操作477M，荣耀继续暂停，公开release未更新。

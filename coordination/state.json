@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T04:58:06.229305+08:00",
-  "phase": "T69可选原生呈现时间戳实机对照",
+  "updated_at": "2026-11-16T05:10:55.826318+08:00",
+  "phase": "T70间接调度参数CPU同步回退诊断",
   "coordinator": "Codex",
-  "integration_branch": "task/T69-native-display-timing",
+  "integration_branch": "task/T70-indirect-dispatch-sync",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -23,7 +23,18 @@
     "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T70",
+      "paths": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_vulkan/engine/xbg_probe.inc",
+        "tests/graphics/",
+        "coordination/"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -580,6 +591,43 @@
       ],
       "recovery": "5d8802a / apk-memo-semantic-final.apk / native450 slots4 cache1 texdirty1 async0 FIFO / save008备份",
       "checkpoint": "533576c / APKedb78e86，默认关闭，仅477M marker1/FIFO / save008物理29.749FPS/p95 33.249ms/max148.167ms，3次>100ms；save007物理29.798FPS/p95 33.323ms/max115.748ms，1次>100ms；各2400间隔完整SF覆盖 / 同PID24721三轮HOME通过 / 一帧595b4de7候选p95变差已撤回 / 稳定30总目标未完成"
+    },
+    {
+      "id": "T70",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T70-indirect-dispatch-sync",
+      "dependencies": [
+        "T58",
+        "T68"
+      ],
+      "pass_gates": [],
+      "objective": "定位真实长停顿中OP_DISPATCH的12字节GPU参数CPU回读触发全批同步的原因，并以保留生命周期与真实维度的最小修改消除可避免等待",
+      "inputs": [
+        "0b5fb6c / APKedb78e86",
+        "save008与007及全槽备份",
+        "三个106–114ms工作间隔与CPU_ACCESS_SYNC why5/op27的帧号对应"
+      ],
+      "outputs": [
+        "不禁用GPU常驻路径的有界shader/生产槽/输入驻留诊断",
+        "依据真实原因的最小候选与实际函数回归",
+        "完整SF与实际工作帧长窗口及生命周期回归"
+      ],
+      "write_scope": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_vulkan/engine/xbg_probe.inc",
+        "tests/graphics",
+        "coordination"
+      ],
+      "acceptance": [
+        "不跳过原绘制或调度，不伪造维度或CPU执行GPU任务",
+        "保留未知输入回退、边界、同步与在途资源租约",
+        "真实场景减少长停顿且无图形/游戏速度回归",
+        "完整构建/真实函数回归及真机恢复记录"
+      ],
+      "recovery": "0b5fb6c / apk-native-timing-candidate.apk edb78e86 / 底座450 slots4 cache1 texdirty1 async0 FIFO present-timing1 / save008",
+      "checkpoint": "0b5fb6c dirty / 4b3a1318独立日志证实c5bc8b44a9224e7a storage17跨旧槽262160B，参数已在当前槽 / 临时诊断已撤，Mali复用OwnedInputCopy候选d19bad24覆盖装并截图确认真实save008 / 图形86项85通过1私有fixture跳过、运行时9通过、4实际断言负控 / 正在2400移动间隔长测"
     }
   ],
   "blockers": [],
