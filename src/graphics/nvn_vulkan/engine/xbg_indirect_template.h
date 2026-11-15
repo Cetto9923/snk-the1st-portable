@@ -57,13 +57,14 @@ inline bool xbg_snk_instance_templates(std::vector<XbgIndirectTemplateRow> &out,
 // Validate every possible row before excluding descriptor alignment padding
 // from its deferred writes. The shader still receives the full descriptor.
 inline uint64_t xbg_snk_instance_writeback_bytes(const uint32_t *records,
-    size_t record_words,uint32_t active,uint32_t groups,uint64_t bytes){
+    size_t record_words,uint32_t active,uint32_t groups,uint64_t bytes,uint32_t rejected_flags=0){
     if(!records || !active || !groups || bytes<40 || bytes>65536 || (bytes&3) ||
        uint64_t(active)>uint64_t(groups)*1024 || uint64_t(active)*20>record_words)
         return 0;
     const uint64_t rows=bytes/20;
     for(uint32_t i=0;i<active;++i){
         const uint32_t *record=records+size_t(i)*20;
+        if(record[2]&rejected_flags)continue; // Exact kernel exits before reading its row.
         // Both LOD selectors are disabled unless record flags contain 0x100
         // or 0x200. The exact module then selects row+0 for this record.
         const uint64_t lod=(record[2]&0x300u)?1:0;
@@ -150,12 +151,14 @@ bool xbg_snk_cull_index_snapshot(const Pending &pending,const uint32_t *baseline
 }
 
 inline uint64_t xbg_snk_copied_index_writeback_bytes(const std::vector<XbgCullIndexRecord> &records,
-    uint32_t groups,uint64_t bytes){
+    uint32_t groups,uint64_t bytes,uint32_t rejected_flags=0){
     if(records.empty() || !groups || uint64_t(records.size())>uint64_t(groups)*1024 ||
        bytes<40 || bytes>65536 || (bytes&3))return 0;
     const uint64_t rows=bytes/20;
-    for(const auto &record:records)
+    for(const auto &record:records){
+        if(record.flags&rejected_flags)continue;
         if(uint64_t(record.index)+((record.flags&0x300u)?1:0)>=rows)return 0;
+    }
     return rows*20;
 }
 

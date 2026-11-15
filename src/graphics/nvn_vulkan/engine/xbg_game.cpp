@@ -808,6 +808,11 @@ extern bool resolving_pending,read_preflight,defer_query_preflight;
 uint64_t snap_site_bytes[6]={},snap_site_req[6]={};unsigned snap_site=0;
 std::unordered_set<uint64_t> storage_pages;uint64_t storage_snap_count=0;
 namespace wtrack{extern uint64_t copied_bytes,dirty_pages,mismatches,fallbacks;}
+namespace storage_cache {
+extern int mode;
+extern uint64_t hits,hit_bytes,copied_bytes,fallbacks,verified,mismatches,allocated_bytes;
+size_t live();
+}
 constexpr unsigned kMaxSlots=16;
 extern std::atomic<uint64_t> memo_epoch;extern uint64_t key_diff[14];extern uint64_t memo_bump[5];extern uint64_t xmemo_hits,xmemo_drops;struct PinRef{VkDescriptorSetLayout layout;uint32_t refs;};extern std::unordered_map<VkDescriptorSet,PinRef> memo_pinned[kMaxSlots];
 extern uint64_t memo_front_hits;extern uint64_t desc_memo_hits,desc_memo_misses,desc_memo_why[6],desc_ns[6],noload_passes,img_cache_hits,img_cache_misses,noload_why[8],binds_skipped,set_binds,set_bind_offsets,set_binds_offsets_only,offset_changes[10],offset_changed_at[32];
@@ -1394,6 +1399,13 @@ void perf_frame(){
     xbg_logf("NVN PERF snapfront front_hits=%.1f map_hits=%.1f invalidations=%.1f erased=%.1f",snap_front_hits/f,snap_map_hits/f,snap_invalidations/f,snap_invalidated/f);xbg_logf("NVN PERF textures bc_native=%llu bc_decoded=%llu live_images=%.1fMB bc_images=%.1fMB bc_payload=%.1fMB",(unsigned long long)native_bc_images,(unsigned long long)decoded_bc_images,image_bytes_live/1048576.0,bc_image_bytes_live/1048576.0,bc_data_bytes_live/1048576.0);snap_front_hits=snap_map_hits=snap_invalidations=snap_invalidated=0;
     if(bright::enabled){xbg_logf("NVN PERF bright applied=%.2f k=%.2f",bright::applied/f,bright::last_k);bright::applied=0;}
     if(tex_dirty){xbg_logf("NVN PERF texdirty tracked=%.1f checks=%.1f changed=%.1f",tex_dirty_tracked/f,tex_dirty_checks/f,tex_dirty_changed/f);tex_dirty_tracked=tex_dirty_checks=tex_dirty_changed=0;}
+    if(storage_cache::mode){
+        xbg_logf("NVN PERF storage_cache mode=%d hits=%.2f hit_mb=%.2f copied_mb=%.3f fallbacks=%.2f verified=%llu mismatches=%llu entries=%zu allocated_mb=%.1f",
+            storage_cache::mode,storage_cache::hits/f,storage_cache::hit_bytes/1048576.0/f,storage_cache::copied_bytes/1048576.0/f,
+            storage_cache::fallbacks/f,(unsigned long long)storage_cache::verified,(unsigned long long)storage_cache::mismatches,
+            storage_cache::live(),storage_cache::allocated_bytes/1048576.0);
+        storage_cache::hits=storage_cache::hit_bytes=storage_cache::copied_bytes=storage_cache::fallbacks=storage_cache::verified=0;
+    }
     if(vcache::enabled){xbg_logf("NVN PERF vcache hits=%.1f (%.2fMB) fills=%.1f (%.2fMB) refills=%.2f volatile=%llu untracked=%llu flushes=%llu entries=%zu arena=%.1fMB pools=%d",vcache::hits/f,vcache::hit_bytes/1048576.0/f,vcache::fills/f,vcache::fill_bytes/1048576.0/f,vcache::refills/f,(unsigned long long)vcache::volatiles,(unsigned long long)vcache::untracked,(unsigned long long)vcache::flushes,vcache::live(),vcache::arena_bytes()/1048576.0,[]{int live=0,used=0;uint64_t adds=0;if(nvn_dirty_slot_stats)nvn_dirty_slot_stats(&live,&used,&adds);return used;}());vcache::hits=vcache::hit_bytes=vcache::fills=vcache::fill_bytes=vcache::refills=0;}
     if(vcache::enabled){int live=0,used=0;uint64_t adds=0;nvn_dirty_slot_stats(&live,&used,&adds);xbg_logf("NVN PERF dirty_pools live=%d slots=%d registrations=%llu",live,used,(unsigned long long)adds);}
     {static uint64_t pm=0,pe=0;xbg_logf("NVN PERF pipelines_new=%llu evicted=%llu warm_hits=%llu created=%llu create_ms=%.1f create_max_ms=%.1f warm_built=%llu warm_failed=%llu warm_ms=%.0f async_skips=%llu async_built=%llu",(unsigned long long)(pipeline_counts.misses-pm),(unsigned long long)(pipeline_counts.evictions-pe),(unsigned long long)warm::hits,(unsigned long long)warm::creates,warm::create_ns/1e6,warm::create_max_ns/1e6,(unsigned long long)warm::built.load(),(unsigned long long)warm::failed.load(),warm::build_ns.load()/1e6,(unsigned long long)warm::async_skips.exchange(0),(unsigned long long)warm::async_built.load());warm::hits=warm::creates=warm::create_ns=warm::create_max_ns=0;pm=pipeline_counts.misses;pe=pipeline_counts.evictions;}
@@ -1695,6 +1707,78 @@ bool lookup(uint64_t address,size_t bytes,Buffer &out){
     f.buffer=b;f.stamp=stamp;f.filled=slot_serial;f.state=CACHED;++fills;fill_bytes+=bytes;out=b;return true;
 }
 }
+// Read-only storage versions share the host dirty-page tracker used by vcache.
+// A slot retains every returned owner until its fence retires. A changed version
+// can be rewritten only when the cache holds its sole shared reference.
+namespace storage_cache {
+int mode=0; // 1 caches; 2 additionally compares CPU-clean snapshots in full.
+constexpr size_t min_bytes=1u<<20,max_bytes=32u<<20,budget=128u<<20,max_entries=8;
+struct Version {std::shared_ptr<OwnedIndirectBuffer> owner;uint64_t stamp=0;};
+struct Entry {Version versions[2];bool unreliable=false;};
+std::map<std::pair<uint64_t,size_t>,Entry> entries;
+uint64_t hits=0,hit_bytes=0,copied_bytes=0,fallbacks=0,verified=0,mismatches=0,allocated_bytes=0;
+size_t live(){return entries.size();}
+void release(){entries.clear();allocated_bytes=0;}
+void drop_pool(uint64_t address,uint64_t bytes){
+    for(auto it=entries.begin();it!=entries.end();){
+        if(!xbg_wb_overlaps(address,bytes,it->first.first,it->first.second)){++it;continue;}
+        for(const auto &version:it->second.versions)if(version.owner)allocated_bytes-=it->first.second;
+        ++memo_epoch; // Persistent descriptor sets must rebind after owner destruction.
+        it=entries.erase(it); // GPU readers retain their independent owners.
+    }
+}
+bool snapshot(uint64_t address,size_t bytes,Buffer &out){
+    if(!mode || bytes<min_bytes || bytes>max_bytes || evguard::enabled)return false;
+    Slot &reader=recording_slot();
+    const void *source=reinterpret_cast<const void*>(address);
+    if(!nvn_dirty_tracked(source,bytes) || vcache::overlaps_wtrack(address,bytes)){++fallbacks;return false;}
+    auto found=entries.find({address,bytes});
+    if(found==entries.end()){
+        if(entries.size()>=max_entries){++fallbacks;return false;}
+        found=entries.emplace(std::make_pair(address,bytes),Entry{}).first;
+    }
+    Entry &entry=found->second;
+    if(entry.unreliable){++fallbacks;return false;}
+    Version *pick=nullptr;
+    for(auto &version:entry.versions)if(version.owner && !nvn_dirty_since(source,bytes,version.stamp)){
+        pick=&version;++hits;hit_bytes+=bytes;break;
+    }
+    if(!pick){
+        for(auto &version:entry.versions)if(!version.owner || version.owner.use_count()==1){pick=&version;break;}
+        if(!pick){++fallbacks;return false;}
+        if(!pick->owner){
+            if(bytes>budget-allocated_bytes){++fallbacks;return false;}
+            pick->owner=std::make_shared<OwnedIndirectBuffer>(bytes);allocated_bytes+=bytes;
+        }
+        const long configured_page_size=sysconf(_SC_PAGESIZE);
+        if(configured_page_size<=0){++fallbacks;return false;}
+        const uint64_t page_size=uint64_t(configured_page_size);
+        const uint64_t first_page=address-address%page_size;
+        const uint64_t stamp=nvn_dirty_now();
+        nvn_dirty_protect(source,bytes);
+        if(!nvn_dirty_tracked(source,bytes)){++fallbacks;return false;}
+        evguard::EngineRead read(source,bytes);
+        for(uint64_t page=first_page;page<address+bytes;page+=page_size){
+            const uint64_t begin=std::max(page,address),end=std::min(page+page_size,address+bytes);
+            if(!pick->stamp || nvn_dirty_since(reinterpret_cast<const void*>(begin),size_t(end-begin),pick->stamp)){
+                std::memcpy(static_cast<uint8_t*>(pick->owner->view.mapped)+(begin-address),
+                    reinterpret_cast<const void*>(begin),size_t(end-begin));copied_bytes+=end-begin;
+            }
+        }
+        pick->owner->view.flush();pick->stamp=stamp;
+    }
+    if(mode==2 && !nvn_dirty_since(source,bytes,pick->stamp)){
+        evguard::EngineRead read(source,bytes);++verified;
+        if(std::memcmp(pick->owner->view.mapped,source,bytes)){
+            entry.unreliable=true;++mismatches;++fallbacks;
+            xbg_logf("NVN storage cache mismatch address=%#llx bytes=%zu; range disabled",(unsigned long long)address,bytes);
+            return false;
+        }
+    }
+    reader.retire.objects.push_back(pick->owner);
+    out=pick->owner->view;return true;
+}
+}
 Buffer snapshot_slow(uint64_t address,size_t bytes,VkDeviceSize align);
 Buffer snapshot(uint64_t address,size_t bytes,VkDeviceSize align=4){CPU_SCOPE(Snapshot);
     SnapFront &f=snap_front_for(0,address,bytes);if(f.epoch==snapshot_epoch && f.address==address && f.bytes==bytes){++perf.snapshot_hits;++snap_front_hits;return f.buffer;}
@@ -1706,6 +1790,7 @@ Buffer snapshot_slow(uint64_t address,size_t bytes,VkDeviceSize align){
     {Buffer view;if(pending_view(address,bytes,align,view)){snapshots.emplace(key,view);snapshot_maxlen=std::max<uint64_t>(snapshot_maxlen,bytes);return view;}}
     ++perf.snapshot_misses;perf.snapshot_bytes+=bytes;snap_site_req[snap_site<6?snap_site:0]+=bytes;if(snap_site==3){static unsigned logged=0;if(logged<40 && bytes>=65536){++logged;xbg_logf("NVN PERF storage_snapshot addr=%#llx bytes=%zu frame=%llu",(unsigned long long)address,bytes,(unsigned long long)stats.presents.load());}++storage_snap_count;if(timing_now())for(uint64_t pg=address>>12;pg<=(address+bytes-1)>>12;pg++)storage_pages.insert(pg);}   // page union: timed frames only (~4.8k inserts per D2R frame)
     cpu_access(address,bytes,1);   // a pending GPU result that only partly covers the range (or is misaligned for a view) lands first
+    if(snap_site==3 && storage_cache::mode){Buffer cached;if(storage_cache::snapshot(address,bytes,cached)){snapshots.emplace(key,cached);snapshot_maxlen=std::max<uint64_t>(snapshot_maxlen,bytes);return cached;}}
     if(snap_site==3 && bytes>=wtrack::min_bytes && wtrack::enabled && !ab_off("wtrack")){Buffer t;if(wtrack::snapshot(address,bytes,t)){snapshots.emplace(key,t);snapshot_maxlen=std::max<uint64_t>(snapshot_maxlen,bytes);return t;}}
     if((snap_site==1 || snap_site==2) && vcache::enabled && !ab_off("vcache")){Buffer v;if(vcache::lookup(address,bytes,v)){snapshots.emplace(key,v);snapshot_maxlen=std::max<uint64_t>(snapshot_maxlen,bytes);return v;}}
     snap_site_bytes[snap_site<6?snap_site:0]+=bytes;
@@ -3477,10 +3562,14 @@ std::shared_ptr<IndirectTemplateBatch> indirect_template_batch(Descriptors &d,co
             if(uint64_t(i.params[0])<=uint64_t(p.x)*1024)
                 i.metadata_modified_bytes=metadata_bytes;
             evguard::EngineRead read(reinterpret_cast<const void*>(i.metadata_address),size_t(metadata_bytes));
+            uint32_t rejected_flags=0;
+            for(const auto &binding:state.shader[5]->bindings)
+                if(binding.binding==59 && binding.source==XBG_SOURCE_C1 && state.shader[5]->c1.size()>=4)
+                    std::memcpy(&rejected_flags,state.shader[5]->c1.data(),4);
             uint64_t written=copied_indices.empty()?xbg_snk_instance_writeback_bytes(
                 reinterpret_cast<const uint32_t*>(i.metadata_address),size_t(metadata_bytes/4),
-                i.params[0],uint32_t(p.x),i.bytes):
-                xbg_snk_copied_index_writeback_bytes(copied_indices,uint32_t(p.x),i.bytes);
+                i.params[0],uint32_t(p.x),i.bytes,rejected_flags):
+                xbg_snk_copied_index_writeback_bytes(copied_indices,uint32_t(p.x),i.bytes,rejected_flags);
             if(written && written<i.bytes){
                 i.modified_bytes=written;
                 static unsigned notes=0;
@@ -7193,7 +7282,11 @@ extern "C" int xbg_game_initialize(const xbg_game_config *c,char *error,size_t b
      }{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-async-pool-reset").c_str(),"rb");poolreset::enabled=false;if(w){poolreset::enabled=fgetc(w)!='0';fclose(w);}else if(const char *e=getenv("DM_GFX_ASYNC_POOL_RESET"))poolreset::enabled=atoi(e)!=0;poolreset::start();xbg_logf("NVN async command pool reset=%d (marker gfx-async-pool-reset)",int(poolreset::enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-bindcache").c_str(),"rb");if(w){bind_cache_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-imgcache").c_str(),"rb");if(w){img_cache_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-pass-profile").c_str(),"rb");if(w){pass_prof_enabled=true;unsigned long long from=0,period=0,count=0;if(fscanf(w,"%llu %llu %llu",&from,&period,&count)>=2){pass_prof_next=from;pass_prof_period=period?period:1;if(count)pass_prof_until=from+count;}fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-descmemo").c_str(),"rb");if(w){desc_memo_enabled=false;fclose(w);}xbg_logf("NVN descmemo enabled=%d",int(desc_memo_enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-dynpartial").c_str(),"rb");if(w){dyn_partial_enabled=false;fclose(w);}}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-xmemo").c_str(),"rb");if(w){xmemo_enabled=false;fclose(w);}xbg_logf("NVN cross-frame memo enabled=%d",int(xmemo_enabled));}{auto marker=[&](const char *name){FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+name).c_str(),"rb");int c=-1;if(w){c=fgetc(w);fclose(w);}return c;};persistent_fb_enabled=marker("/gfx-no-persistent-fb")<0;slot_pools_enabled=marker("/gfx-no-slot-pools")<0;{const int cached_marker=marker("/gfx-readback-cached");
         const char *cached_env=getenv("DM_GFX_READBACK_CACHED");
         readback_cached=cached_marker>=0?cached_marker=='1':cached_env?*cached_env=='1':properties.vendorID==0x13b5;}texel_memo_enabled=marker("/gfx-no-texel-memo")<0;no_occlusion_queries=marker("/gfx-no-occlusion")=='1';occlusion_force_visible=marker("/gfx-occlusion-visible")=='1';samples_report_seen=false;open_occlusion=OpenOcclusion{};occlusion_queries_started=0;occlusion_batch_enabled=marker("/gfx-query-per-draw")!='1' && marker("/gfx-no-query-batch")<0;heavy_timestamps=marker("/gfx-heavy-timestamps")=='1';xbg_logf("NVN persistent framebuffers=%d slot command pools=%d cached readback=%d texel memo=%d no_occlusion=%d occlusion_visible=%d (markers gfx-no-persistent-fb, gfx-no-slot-pools, gfx-readback-cached, gfx-no-texel-memo, gfx-no-occlusion, gfx-occlusion-visible)",int(persistent_fb_enabled),int(slot_pools_enabled),int(readback_cached),int(texel_memo_enabled),int(no_occlusion_queries),int(occlusion_force_visible));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-wtrack").c_str(),"rb");wtrack::marker=properties.vendorID==0x13b5?0:-1;if(w){wtrack::marker=fgetc(w)=='1'?1:0;fclose(w);}wtrack::enabled=wtrack::marker==1;}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-no-wtrack").c_str(),"rb");if(w){wtrack::enabled=false;wtrack::marker=0;fclose(w);}xbg_logf("NVN wtrack enabled=%d (markers gfx-no-wtrack, gfx-wtrack=0)",int(wtrack::enabled));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mutable-images").c_str(),"rb");no_mutable_images=true;if(w){no_mutable_images=fgetc(w)!='1';fclose(w);}xbg_logf("NVN mutable-format images=%d (marker gfx-mutable-images)",int(!no_mutable_images));}{FILE *w=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-mutable-test").c_str(),"rb");mutable_test=0;if(w){if(fscanf(w,"%u",&mutable_test)!=1)mutable_test=0;fclose(w);}if(mutable_test)xbg_logf("NVN mutable upgrade test every %u images (marker gfx-mutable-test)",mutable_test);}
-     xbg_dirty_enable(properties.vendorID==0x13b5 && vcache::enabled);
+     {FILE *storage_marker=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-storage-cache").c_str(),"rb");
+      storage_cache::mode=0;
+      if(storage_marker){const int request=fgetc(storage_marker);if(properties.vendorID==0x13b5)storage_cache::mode=request=='1'?1:request=='2'?2:0;fclose(storage_marker);}
+      xbg_logf("NVN storage cache mode=%d",storage_cache::mode);}
+     xbg_dirty_enable(properties.vendorID==0x13b5 && (vcache::enabled || storage_cache::mode));
      xbg_logf("NVN host geometry tracker=%d",int(properties.vendorID==0x13b5 && vcache::enabled));
      /* Android: no guest memory remapping probe. */
      {FILE *m=fopen(((cut==std::string::npos?dir:dir.substr(0,cut))+"/gfx-pipe-stats").c_str(),"rb");if(m){fclose(m);pstat_props=reinterpret_cast<PFN_vkGetPipelineExecutablePropertiesKHR>(vkGetDeviceProcAddr(cfg.device,"vkGetPipelineExecutablePropertiesKHR"));
@@ -7337,13 +7430,13 @@ extern "C" int xbg_game_profile_cpu(uint64_t first_frame,uint32_t frame_count){
     xbg_logf("NVN CPU_TIMING armed first=%llu count=%u maxSeconds=60 clock=steady elapsed-not-thread-cpu",(unsigned long long)first_frame,frame_count);
     if(first_frame==1)timing_start();return 0;
 }
-extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();recent_indirect_batches.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;xbg_dirty_enable(0);vcache::release();wtrack::release();destroy_slots();clear_pipeline_objects();cache_save_join();warm::shutdown();bright::shutdown();shutdown_rg16_proxy();clear_descriptor_caches();clear_render_pass_cache();images.clear();++images_epoch;for(auto &f:persistent_framebuffers)vkDestroyFramebuffer(cfg.device,f.second,nullptr);persistent_framebuffers.clear();image_index.clear();image_index_dirty=true;program_cache.clear();shaders.clear();textures.clear();texture_pool_cache=nullptr;samplers.clear();null_textures.clear();texture_pool_cache=nullptr;pools.clear();host_segments.clear();host_ranges.clear();host_bytes=0;cmd_range_lo=0;cmd_range_bytes=0;vkDestroyPipelineCache(cfg.device,pipeline_cache,nullptr);pipeline_cache=VK_NULL_HANDLE;vkDestroyCommandPool(cfg.device,command_pool,nullptr);command_pool=VK_NULL_HANDLE;if(submit_sem_inited && cfg.device){for(unsigned i=0;i<kMaxSlots;i++){if(submit_semaphores[i]!=VK_NULL_HANDLE)vkDestroySemaphore(cfg.device,submit_semaphores[i],nullptr);submit_semaphores[i]=VK_NULL_HANDLE;submit_sem_signaled[i]=false;}submit_sem_inited=false;last_signal_sem=VK_NULL_HANDLE;last_signal_slot=-1;}initialized=false;return 0;}
+extern "C" int xbg_game_shutdown(){gfx_drain();gfx_async_stop();std::lock_guard<std::recursive_mutex> lock(mutex);if(!initialized)return 0;timing_report("shutdown-partial");provenance_close("SHUTDOWN");resolve_pending();submit_slots(true);save_pipeline_cache();pending_writebacks.clear();recent_indirect_batches.clear();pending_reports.clear();pending_events.clear();recording_events.clear();epochs.clear();VkResult r=vkQueueWaitIdle(cfg.queue);if(r!=VK_SUCCESS)return r;xbg_dirty_enable(0);vcache::release();storage_cache::release();wtrack::release();destroy_slots();clear_pipeline_objects();cache_save_join();warm::shutdown();bright::shutdown();shutdown_rg16_proxy();clear_descriptor_caches();clear_render_pass_cache();images.clear();++images_epoch;for(auto &f:persistent_framebuffers)vkDestroyFramebuffer(cfg.device,f.second,nullptr);persistent_framebuffers.clear();image_index.clear();image_index_dirty=true;program_cache.clear();shaders.clear();textures.clear();texture_pool_cache=nullptr;samplers.clear();null_textures.clear();texture_pool_cache=nullptr;pools.clear();host_segments.clear();host_ranges.clear();host_bytes=0;cmd_range_lo=0;cmd_range_bytes=0;vkDestroyPipelineCache(cfg.device,pipeline_cache,nullptr);pipeline_cache=VK_NULL_HANDLE;vkDestroyCommandPool(cfg.device,command_pool,nullptr);command_pool=VK_NULL_HANDLE;if(submit_sem_inited && cfg.device){for(unsigned i=0;i<kMaxSlots;i++){if(submit_semaphores[i]!=VK_NULL_HANDLE)vkDestroySemaphore(cfg.device,submit_semaphores[i],nullptr);submit_semaphores[i]=VK_NULL_HANDLE;submit_sem_signaled[i]=false;}submit_sem_inited=false;last_signal_sem=VK_NULL_HANDLE;last_signal_slot=-1;}initialized=false;return 0;}
 extern "C" void xbg_game_get_stats(xbg_game_stats *out){if(out)*out={stats.submissions.load(),stats.draws.load(),stats.dispatches.load(),stats.presents.load(),stats.shader_loads.load()};}
 extern "C" void xbg_game_frame_counters(xbg_frame_counters *out){if(out)*out={hud::pipelines.load(),hud::pipeline_ns.load(),hud::shaders.load(),hud::shader_ns.load(),hud::uploads.load(),hud::reuploads.load(),hud::upload_bytes.load(),hud::upload_ns.load()};}
 extern "C" void xbg_game_set_frame(uint64_t frame){hud::frame.store(frame,std::memory_order_relaxed);}
 extern "C" double xbg_game_gpu_ms(uint64_t frame){const hud::Gpu &g=hud::gpu[frame%64];if(g.frame.load(std::memory_order_acquire)!=frame)return -1;return double(g.ns.load(std::memory_order_acquire))/1e6;}
 static void xbg_legacy_pool_add_now(void *p,size_t n){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&n,"Invalid NVN pool");pools[uintptr_t(p)]=n;cmd_range_lo=0;cmd_range_bytes=0;auto epoch=provenance.pool(uint64_t(p),true);provenance_log("POOL_ADD mem=%p bytes=%zu epoch=%llu",p,n,epoch);}
-static void xbg_legacy_pool_del_now(void *p){std::lock_guard<std::recursive_mutex> lock(mutex);provenance_log("POOL_DEL mem=%p epoch=%llu",p,provenance.epoch(uint64_t(p)));provenance.pool(uint64_t(p),false);{auto pit=pools.find(uintptr_t(p));if(pit!=pools.end())vcache::drop_pool(uintptr_t(p),pit->second);}pools.erase(uintptr_t(p));cmd_range_lo=0;cmd_range_bytes=0;}
+static void xbg_legacy_pool_del_now(void *p){std::lock_guard<std::recursive_mutex> lock(mutex);provenance_log("POOL_DEL mem=%p epoch=%llu",p,provenance.epoch(uint64_t(p)));provenance.pool(uint64_t(p),false);{auto pit=pools.find(uintptr_t(p));if(pit!=pools.end()){vcache::drop_pool(uintptr_t(p),pit->second);storage_cache::drop_pool(uintptr_t(p),pit->second);}}pools.erase(uintptr_t(p));cmd_range_lo=0;cmd_range_bytes=0;}
 static void xbg_register_texture_now(const dpool_t *p,int id,const tex_t *t,const view_t *v){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&id>=0&&id<p->n&&t,"Invalid texture registration");auto &slot=textures[pool_key(p)][id];if(register_texture_record(slot,*t,v))++memo_bump[0];}
 static void xbg_register_sampler_now(const dpool_t *p,int id,const samp_par *s){std::lock_guard<std::recursive_mutex> lock(mutex);need(p&&id>=0&&id<p->n&&s,"Invalid sampler registration");auto &slot=samplers[pool_key(p)][id];if(memcmp(&slot,s,sizeof(*s))){++memo_epoch;++memo_bump[1];}slot=*s;}
 static void xbg_legacy_tex_release_now(tex_t *t){std::lock_guard<std::recursive_mutex> lock(mutex);if(t){auto i=images.find(t->serial);if(i!=images.end()){provenance_image("RELEASE",t,*i->second);retire_object(i->second);++memo_bump[2];}images.erase(t->serial);image_index_dirty=true;++images_epoch;++memo_check_gen;}}

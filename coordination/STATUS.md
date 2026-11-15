@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T00:24:02.996307+08:00
-阶段：T62低分辨率未达稳定30，恢复540并准备只读storage逐页缓存
+状态事件时间：2026-11-16T01:06:36.729889+08:00
+阶段：T63新位置C1范围验证与只读storage缓存同存档对照
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -20,10 +20,11 @@
 | T60 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T60-docked-profiles |
 | T61 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T61-town-indirect-gpu |
 | T62 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T62-rg477m-30fps |
+| T63 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T63-storage-cache |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T62", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T63", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 
@@ -60,10 +61,11 @@
 - T61有序捕获978a上传索引/flags后，原每两帧padding读回等待消除。shadow APK461fa7aa，600帧真实移动27.641FPS、p95 43.842ms、max79.347ms、601不同工作帧、无失败重复。graphics75项74通过1私有fixture跳过、runtime9通过。
 - T62用户新地点save006正常新建，缩略图正常并完整备份。540p同点站立async1为23.887FPS，async0为30.004FPS，独立SF短呈现历史30.007FPS。540p600帧移动26.726FPS，尚未稳定30。
 - T62原生450入口运行日志selector1/operation_mode1，PID26798单帧capture END3156，3D viewport800x450、UI1920x1080，画面人物/餐桌正常。graphics75项74通过1私有fixture跳过、runtime9通过，正在测600帧移动。
+- T63 C1 mask候选4934fafa图形77项76通过1私有fixture跳过、运行时9通过。save007房屋花盆旁正常新建45:23并备份。600帧真实移动601不同工作帧27.451678FPS、p95 45.430ms、max67.202ms，失败0/重复0，超过100ms0。末尾同步等待0，仍未稳定30。
 
 ## 未验证
 
-- RG477M移动稳定30仍未达到。540p新位置26.726FPS，450p27.534FPS，450未固化默认，恢复540后继续减少内存复制。
+- RG477M移动稳定30仍未达到。新位置save007在C1修正/cache1下27.452FPS，准备同存档cache0对照，原生540保持。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
 - 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
 

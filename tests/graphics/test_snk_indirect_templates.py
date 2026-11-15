@@ -258,6 +258,11 @@ int main(){
     assert(!xbg_snk_instance_writeback_bytes(records.data(),records.size(),452,1,6609));
     records.resize(1025*20);
     assert(!xbg_snk_instance_writeback_bytes(records.data(),records.size(),1025,1,6608));
+    records.assign(2*20,0);records[1]=UINT32_MAX;records[2]=0x20;records[21]=328;
+    assert(!xbg_snk_instance_writeback_bytes(records.data(),records.size(),2,1,6608));
+    assert(xbg_snk_instance_writeback_bytes(records.data(),records.size(),2,1,6608,0x20)==6600);
+    records[21]=329;records[22]=0x100;
+    assert(!xbg_snk_instance_writeback_bytes(records.data(),records.size(),2,1,6608,0x20));
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

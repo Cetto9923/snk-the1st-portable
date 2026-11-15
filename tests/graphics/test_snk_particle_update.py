@@ -79,9 +79,9 @@ struct Descriptors {
     std::vector<std::pair<std::pair<uint64_t,uint64_t>,void*>> written;
 };
 struct p_dispatch {int x=16,y=64,z=1;};
-constexpr unsigned VK_DESCRIPTOR_TYPE_STORAGE_BUFFER=1,XBG_SOURCE_STORAGE=2,XBG_SOURCE_UNIFORM=3;
+constexpr unsigned VK_DESCRIPTOR_TYPE_STORAGE_BUFFER=1,XBG_SOURCE_STORAGE=2,XBG_SOURCE_UNIFORM=3,XBG_SOURCE_C1=4;
 struct Binding {unsigned type=1,binding=29,source=2,count=1,slot=0;};
-struct Shader {std::vector<Binding> bindings;std::unordered_set<unsigned> storage_writes;};
+struct Shader {std::vector<Binding> bindings;std::unordered_set<unsigned> storage_writes;std::vector<uint8_t> c1;};
 struct Range {uint64_t address=0,size=0;};
 struct {Shader *shader[6]{};Range sb[6][16]{},ub[6][16]{};} state;
 unsigned nvn_stage[6]={0,1,2,3,4,5};
@@ -122,6 +122,24 @@ int main(){
     state.sb[5][1]={0x9000,4};assert(build());
     d.written.push_back({{i.address+4,4},nullptr});assert(!build());d.written.pop_back();
     i.words.clear();assert(!build());
+    // The exact cull module rejects C1-masked records before using their row.
+    // Exercise the real batch builder for both CPU and uploaded index fields.
+    p.y=1;i.snk_particle_update=false;i.params_valid=true;i.params[0]=2;
+    i.bytes=1288;state.sb[5][0].size=1288;d.written[0].first.second=1288;
+    i.words.assign(322,0);for(unsigned row=0;row<64;++row)i.words[row*5]=6;
+    records.assign(64*36,0);i.metadata_address=uint64_t(records.data());
+    records[1]=UINT32_MAX;records[2]=0x20;records[21]=1;
+    shader.bindings.push_back({1,59,XBG_SOURCE_C1,1,0});shader.c1.resize(4);
+    uint32_t mask=0x20;std::memcpy(shader.c1.data(),&mask,4);
+    i.modified_bytes=0;assert(build() && i.modified_bytes==1280);
+    mask=0;std::memcpy(shader.c1.data(),&mask,4);i.modified_bytes=0;
+    assert(build() && !i.modified_bytes);
+    auto patch=std::make_shared<XbgCullMetadataPatch>();
+    patch->address=i.metadata_address;patch->bytes=i.metadata_bytes;patch->first=0;
+    patch->records={{UINT32_MAX,0x20}};records[1]=0;records[2]=0;
+    pending_writebacks.push_back({i.metadata_address,i.metadata_bytes,false,patch});
+    mask=0x20;std::memcpy(shader.c1.data(),&mask,4);i.modified_bytes=0;
+    assert(build() && i.modified_bytes==1280);
 }
 '''
         self.compile_and_run(program)

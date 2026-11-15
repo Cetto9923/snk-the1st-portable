@@ -715,3 +715,36 @@
 - 450候选600帧移动601不同工作帧27.534035FPS、p95 49.790ms、p99 54.422ms、max95.012ms，无失败重复/超过100ms0，cafe-native450-motion全套。末尾SF短历史126不同actualPresentTime29.769FPS、p95 49.633ms、max66.133ms，不是完整移动物理窗口。截图rg-cafe-native450-motion-end.png人物/餐桌/颜色正常。
 - 相对540的26.726FPS只有约3%均值提升，未稳30，未将450固化RG默认。原生450支持保留作已验证诊断档位，Java/JNI分档默认540。现在marker恢复540，覆盖同一18854 APK并重启Continue6，rg-restore540-run.log进行中。不得把当前恢复540前后当新代码性能提升。
 - 下一步读取实际profile定位CPU复制。既有hostdirty.c的find_span有thread-local last_range，每页nvn_dirty_since查询可复用范围查找，可用现有API实现只读storage双副本逐页刷新，无需新增信号处理器或脏页API。复用OwnedIndirectBuffer与Slot.retire.objects，owner.use_count==1证明无在途读者，unchanged副本可多槽只读复用，有写入时只改无读者副本。未实现之前不改变默认。
+
+## T63 只读storage逐页缓存实现检查点
+
+- 分支task/T63-storage-cache，基于b54abe6，当前未提交。cache缺省0，只在Mali且gfx-storage-cache1/2启用。重用现有nvn_dirty_tracked/now/protect/since，没有新增故障处理器、脏页API或改动hostdirty.c。
+- storage_cache每个范围最多两个OwnedIndirectBuffer，范围1-32MiB、最多8项、逻辑分配预算128MiB。Slot.retire.objects保留所有返回的owner直到fence退休。未改变内容时可多槽共享只读，改变时只有owner.use_count()==1的版本可逐页重写，否则保守走原stream snapshot。先取得recording_slot，再检查缓存/复制，避免中间退休失效。
+- 使用sysconf实际页大小，对首尾非整页裁剪，stamp在protect前取得，之后写入必更新页代际，下次读取会刷新。GPU pending_view与cpu_access先执行原处理，cache仅snap_site3只读storage。拒绝旧wtrack保护范围和evguard诊断，pooldel清entry时增加memo_epoch迫使旧持久descriptor重绑，GPU在途引用继续持有独立allocation。shutdown在GPUidle后释放cache。
+- 模式2在追踪未报告后续写入时对整个源与副本memcmp，遇到不一致禁用该范围并回退原snapshot，不编辑仍有GPU读者的副本。模式1只做逐页刷新。统计每60帧输出hits/hit_mb/copied_mb/fallbacks/verified/mismatches/entries/allocated_mb。
+- tests/graphics/test_snk_storage_cache.py编译实际namespace，ASan/UBSan覆盖4K/16K逻辑页与非整页首尾、两个GPU读者阻止覆写、旧副本退休后逐页更新、保护时发生写入、pooldel后owner存活至fence/descriptor epoch、保护失败/未追踪/旧tracker冲突、验证发现未报告写入、128MiB预算与8项上限。storage-cache-final-tests.log两项通过。忽略use_count直接重写的负控-6被拒绝，storage-cache-negative-control.log。
+- 首版build-storage-cache.log退出0，APK9357798a，但随后补了pooldel descriptor epoch，935版本未安装。graphics-tests-storage-cache.log共77项76通过1私有fixture跳过。最新build-storage-cache-epoch.log与graphics-tests-storage-cache-epoch.log正在运行，必须等它们完成取新SHA再装机。
+- 设备恢复540的18854 APK已重新Continue到save006，rg-restore540-first.log真实operation_mode1/native540 selector2。下一步新cache包先marker2做真实动态全字节比对，确认mismatches0/命中复制量，然后marker1重启同存档做600帧正常移动和SF呈现记录。未知之前不固化缺省、不声称稳定30。
+
+- 最新cache-epoch build退出0，APKe029d680c5ba914b4c4130c4710f3a7396ce47336f17cf6999cfd5ea66903b90已安装，provenance storage-cache-provenance.json记录b54abe6 dirty与cpp/test SHA。graphics-tests-storage-cache-epoch.log为77项76通过1私有fixture跳过，真实dirty faults2018。cache组件4K/16K与lease负控均通过。
+- 模式2真机正常Continue6，rg-storage-verify-first.png/log。随后站立与6次1秒横向移动，rg-storage-verify-motion.png/log。73个60帧窗口共8628次完整缓冲区memcmp，累计mismatches0。图中两位主角、NPC、餐桌和草叶正常。mode2完整读取GPU映射做memcmp约10FPS属于校验开销，没有作正常性能结论。
+- 模式2稳态命中8.85MB/帧、逐页复制约0.010MB/帧；entries8/allocated23.6MB，fallback0.67/帧，8项容量已满，保守回退原snapshot。暂不在观察正常模式FPS之前扩大容量或增加LRU。实机显示有真实缓存收益所需复制量证据，端到端帧率尚待mode1。
+- 现在唯一gfx-storage-cache已设1并重启相同e029 APK，rg-storage-fast-run.log进行中（tool session39696已完成，新的fast启动session见工具最新返回）。待完成先观察是否确实Continue6，必要时补A，再600帧正常移动与SF呈现记录。其他标记540/async0/底座1/target30/defer2/vcache1/wtrack0/probe0。
+
+## T63 新位置同步范围修正检查点
+
+- 当前HEAD b54abe6，task/T63-storage-cache脏树。cache模式1移动601不同工作帧25.562803FPS、p95 55.467ms、max328.136ms、超过100ms1次，未证明端到端收益。后续probe3移动复现OP6 CPU更新14520B与1618 pending14528B重叠，旧范围证明失败。原始rg-storage-moving-sync.log保留。
+- 精确1618模块原SPV先判断record.flags & binding59/CP_c1.word0，再读取参数行号。新增从当前Shader.c1反射绑定读取拒绝mask，CPU基线和有序上传索引路径共同跳过被原GPU模块拒绝的记录。缺mask使用0保守检查，未硬编码私有mask，未取消padding边界。
+- particle-cull-mask-runtime-tests.log三项通过，copy-cull-mask-tests.log三项通过，cull-flags-tests.log七项通过，均真实编译相关函数。覆盖mask为0的坏行拒绝、未被mask拒绝的LOD越界、当前C1与上传patch组合。该修正尚未真机验证。
+- 用户授权继续操作，当前RG477M PID17581，自由场景房屋花盆旁，rg-new-location-current.png/log。荣耀保持暂停。准备正常新建save007保存此慢位置，再构建并覆盖安装验证。稳定30仍未达到。
+
+- C1修正构建build-cull-c1-mask.log退出0，APK 4934fafa3a1ecbdbfbe0abf7e0728d8c6e3b4f819c744203005cf32b2fffa50c。图形77项76通过1私有fixture跳过，运行时9通过。当前新地点正常新建save007、Playtime45:23、缩略图正常，saves-town-flower-slot007.tar已备份，旧槽全部保留。准备覆盖安装并真实Continue7验证。
+
+- C1候选4934fafa覆盖安装成功，PID27512，Continue7确认45:23后读回真实场景rg-cull-c1-loaded.png。flower-cull-c1-motion事先600帧移动，601不同工作帧27.451678FPS、p50 34.817ms、p95 45.430ms、p99 52.776ms、max67.202ms，失败0/重复0/>100ms0。末尾多窗口why4为0，但路径与上一cache25.56窗口不同，尚未证明C1修正消除了上一位置等待。独立SF短历史28.0047FPS。当前仍未稳定30。
+- 接下来仅marker storage-cache改0，重启同4934fafa/Continue7，对照同类移动。cache1的复制量和一致性已证实，端到端收益仍待同存档对照。两次移动相机有自然漂移，不能宣称逐像素轨迹一致。
+
+- 同4934fafa/Continue7/cache0的600帧移动601不同工作帧26.710339FPS、p95 46.295ms、max69.413ms，失败0/重复0/>100ms0。cache1前一轮27.452FPS，只有小幅差异，轨迹自然漂移，尚未宣称稳定收益。cache0末尾原始日志rg-flower-cache0-end.log，写回36.5MB/帧耗时约3.45ms。
+- 当前cache0场景10秒simpleperf8836样本、丢失0，rg-flower-cache0-profile/callgraph.txt。apply_writeback含子调用占8.61%采样，主要memcpy。下一诊断仅probe3下一帧打印已完成的大块writeback来源、范围与已审计标记，不增加GPU读回或等待。临时代码在xbg_probe.inc，完成来源定位后撤掉。
+
+- 临时大块写回诊断包238a9faf构建/覆盖安装成功，Continue7直接读回真实场景。probe3三秒后finally恢复0。rg-large-writeback-diagnostic.log第1491帧显示1618写回12,800,000B未裁剪的压缩实例输出、4,000,000B元数据（已裁剪1,491,600B），342e写回4,194,304B状态、68d3写回2,654,208B。没有附加GPU读取。诊断代码已从源码撤掉，单独patch保留.local。当前设备仍诊断包238a9faf、cache0/probe0。
+- T63源码检查点只保留有界可选cache与C1拒绝flags范围证明。下一步精确审计1618的binding35输出索引范围，减少12.8MB整段完成写回。全设备显示与稳定30仍未验收。

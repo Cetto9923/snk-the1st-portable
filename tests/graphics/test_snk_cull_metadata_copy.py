@@ -42,6 +42,10 @@ int main(){
     assert(records.size()==6 && records[0].index==0 && records[2].index==8 && records[3].flags==0x100);
     assert(xbg_snk_copied_index_writeback_bytes(records,1,248)==240);
     records[3].index=11;assert(!xbg_snk_copied_index_writeback_bytes(records,1,248));
+    records[3].flags=0x20;
+    assert(xbg_snk_copied_index_writeback_bytes(records,1,248,0x20)==240);
+    records[2].index=UINT32_MAX;records[2].flags=0;
+    assert(!xbg_snk_copied_index_writeback_bytes(records,1,248,0x20));
     auto newer=std::make_shared<XbgCullMetadataPatch>(*patch);newer->first=3;newer->records={{7,0}};
     writes.push_back({0x1000,480,false,newer});assert(snapshot());assert(records[3].index==7 && records[3].flags==0);
     // Retiring an older producer first updates the CPU baseline. Keeping only

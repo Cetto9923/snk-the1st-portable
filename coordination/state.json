@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T00:24:02.996307+08:00",
-  "phase": "T62低分辨率未达稳定30，恢复540并准备只读storage逐页缓存",
+  "updated_at": "2026-11-16T01:06:36.729889+08:00",
+  "phase": "T63新位置C1范围验证与只读storage缓存同存档对照",
   "coordinator": "Codex",
-  "integration_branch": "task/T62-rg477m-30fps",
+  "integration_branch": "task/T63-storage-cache",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -26,7 +26,7 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T62",
+      "task": "T63",
       "paths": [
         "src/",
         "scripts/",
@@ -333,6 +333,43 @@
       ],
       "recovery": "467f656 / 461fa7aa APK / 保存save006与原槽完整备份",
       "checkpoint": "467f656 + native450诊断入口 / APK18854 / 450试验27.534FPS后恢复540"
+    },
+    {
+      "id": "T63",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T63-storage-cache",
+      "dependencies": [
+        "T58"
+      ],
+      "pass_gates": [],
+      "objective": "在540p底座模式下减少只读storage复制并保留在途GPU副本",
+      "inputs": [
+        "b54abe6",
+        "hostdirty页代际与OwnedIndirectBuffer/Slot.retire.objects",
+        "save00632:36与540p移动26.726FPS"
+      ],
+      "outputs": [
+        "有界双副本逐页刷新缓存",
+        "所有权与增量刷新回归",
+        "真机校验模式与正常FPS记录"
+      ],
+      "write_scope": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_vulkan/engine/xbg_indirect_template.h",
+        "tests/graphics",
+        "coordination"
+      ],
+      "acceptance": [
+        "使用实际宿主页大小",
+        "只改没有在途读者的副本",
+        "GPU写结果先按原路径处理",
+        "池销毁与退出不留下悬空GPU引用",
+        "真实场景显示正常并改善帧时间"
+      ],
+      "recovery": "b54abe6 / APK18854 / marker540 async0 / save006完整备份",
+      "checkpoint": "b54abe6 dirty / APK4934fafa / C1范围修正77图形9运行时 / save007移动27.452FPS"
     }
   ],
   "blockers": [],
@@ -365,10 +402,11 @@
     "T61精确342e原模块模板证明装机3fcc2a9c，同save005站立300帧从12.606提高29.561FPS，601帧移动26.580FPS、p95 52.187ms、max82.156ms，失败0和重复0。graphics72项71通过1跳过，runtime9通过，去掉参数边界负控SIGABRT被拒绝。",
     "T61有序捕获978a上传索引/flags后，原每两帧padding读回等待消除。shadow APK461fa7aa，600帧真实移动27.641FPS、p95 43.842ms、max79.347ms、601不同工作帧、无失败重复。graphics75项74通过1私有fixture跳过、runtime9通过。",
     "T62用户新地点save006正常新建，缩略图正常并完整备份。540p同点站立async1为23.887FPS，async0为30.004FPS，独立SF短呈现历史30.007FPS。540p600帧移动26.726FPS，尚未稳定30。",
-    "T62原生450入口运行日志selector1/operation_mode1，PID26798单帧capture END3156，3D viewport800x450、UI1920x1080，画面人物/餐桌正常。graphics75项74通过1私有fixture跳过、runtime9通过，正在测600帧移动。"
+    "T62原生450入口运行日志selector1/operation_mode1，PID26798单帧capture END3156，3D viewport800x450、UI1920x1080，画面人物/餐桌正常。graphics75项74通过1私有fixture跳过、runtime9通过，正在测600帧移动。",
+    "T63 C1 mask候选4934fafa图形77项76通过1私有fixture跳过、运行时9通过。save007房屋花盆旁正常新建45:23并备份。600帧真实移动601不同工作帧27.451678FPS、p95 45.430ms、max67.202ms，失败0/重复0，超过100ms0。末尾同步等待0，仍未稳定30。"
   ],
   "unverified": [
-    "RG477M移动稳定30仍未达到。540p新位置26.726FPS，450p27.534FPS，450未固化默认，恢复540后继续减少内存复制。",
+    "RG477M移动稳定30仍未达到。新位置save007在C1修正/cache1下27.452FPS，准备同存档cache0对照，原生540保持。",
     "高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。",
     "新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。"
   ],
