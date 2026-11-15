@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T05:21:22.842816+08:00
-阶段：T70间接调度参数CPU同步回退诊断
+状态事件时间：2026-11-16T07:13:20.389306+08:00
+阶段：T71提交阶段长帧与上传既有计数诊断
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -28,10 +28,11 @@
 | T68 | GRAPHICS | passed | Codex | T58 | 无额外门禁 | task/T68-descriptor-memo-inputs |
 | T69 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T69-native-display-timing |
 | T70 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T70-indirect-dispatch-sync |
+| T71 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T71-submit-stall-counters |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T70", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "src/graphics/nvn_vulkan/engine/xbg_probe.inc", "tests/graphics/", "coordination/"]}
+- {"owner": "Codex", "task": "T71", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "src/graphics/nvn_vulkan/engine/xbg_probe.inc", "tests/graphics/", "coordination/"]}
 
 ## 阻塞
 

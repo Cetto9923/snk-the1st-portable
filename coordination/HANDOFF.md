@@ -921,3 +921,26 @@
 - 4472e6ee诊断2在ccb上仅恢复独立CPU sync metadata，构建退出0，APK/精确ELF/provenance保留，未安装。为同时量化copy准备和retire等待，继续构建22851b1eda07274a39388d610119015ebee417e15a161a99dea27ec643a15e50诊断3。OwnedInputCopy前16次记录allocation/prepare/record+submit纳秒，wait>5ms最多16次记录。其原GPU调用顺序、等待timeout、共享所有权不变。独立CPU sync日志仍只op27/why5/frame>=1200，未开启capture/provenance或阶段profile。该窗口仅作诊断，禁止作为FPS收益验收。
 - build-compute-input-copy-diagnostic3.log exit0，apk-compute-input-copy-diagnostic3.apk、精确ELF libffrs-compute-input-copy-diagnostic3.so、compute-input-copy-diagnostic3.patch/provenance.json保留。正在安装启动Continue8并等待首屏，gfx-cpu-sync-diag1；gfx-codex-probe0/其他参数同d19。源工作区是ccb4b41加两个文件的临时诊断，之后须撤回临时接线。图形诊断3回归日志graphics-tests-compute-input-copy-diagnostic3.log进行中。
 - 下一步先看rg-compute-input-copy-diagnostic3-first.png确认真实场景，然后同save008移动2400间隔采独立metadata与copy计时，读取有限boot窗口。若新回退或copy准备/等待耗时有明确原因再做最小修复。恢复包为apk-compute-input-copy-candidate.apk(d19)，稳定显示时序基线apk-native-timing-candidate.apk(edb)，全槽备份与Continue8保留。荣耀暂停，公开release未更新，所有主流芯片实测与高端原生1080仍未完成。
+
+### T70 诊断3/4结论与T71交接
+
+- 22851b1e诊断3覆盖装Continue8实景截图确认，图形86项85通过1私有fixture跳过。长移动gate-compute-input-copy-diagnostic3-motion-*仅诊断，工作29.881FPS/max81.852ms、完整SF29.884FPS/p95 33.265ms/max115.731ms。只有一次后续owned copy frame4251，准备0.126ms，下一工作间隔61.381ms；其余80.917/81.852ms帧没有copy。初始化准备0.046–0.580ms。整个捕获未见CODEX_COPY_WAIT>5ms，也未重现剩余op27回退。不能把这些长帧归因GPU拷贝分配或等待。事后logcat ring已覆盖该窗口，未把它作为完整时序证据。
+- 60218be13dc67be5e6a611716feb04d4885c933d4fede1ce7bf5db502a73edad诊断4，在3基础上只为frame-trace已开启、frame>=1200且间隔>60ms的前16帧记录原perf submit累计差值和present/pace elapsed。build-compute-input-copy-diagnostic4.log exit0，86图形85通过1跳过。APK/精确ELF/patch/provenance保留。真实Continue8首图人物、NPC、房屋可见。
+- gate-compute-input-copy-diagnostic4-motion-*为2400间隔诊断，工作29.844FPS/p95 40.443ms/max85.436ms，完整SF29.847FPS/p95 33.226ms/max99.303ms，均无失败/重复/>100ms。新增measure-with-logcat.py在命令期间持续采main/PID/monotonic并finally终止logger，原logcat完整保留。不能把有额外诊断/日志拷贝的窗口当产品FPS验收。
+- 慢帧2925总66.709ms/submit44.854ms/present0.565ms，3301总85.398ms/submit63.878ms/present0.736ms，3369总74.363ms/submit54.953ms/present0.629ms，pace均<0.001ms。未出现独立CPU同步或copy wait>5ms。主要超额时间已经定位在图形提交路径，仍需区分具体步骤。3300末尾新GPU_INDEXED_SHADER_PAIR 79a2e1562e16c4be/7aded7305f9bb12e，不能仅凭新pair宣称shader编译慢。
+- 同时观察到Mali实际bc_native0/bc_decoded557→603，BC展开图像约1493MB、原BC payload约233MB。这是资源表示/内存事实，尚未量化它对该慢帧的耗时贡献。现有hud已有upload_ns/shader_ns/pipeline_ns/upload_bytes累计计数，下一步直接按帧差值记录，不先引入异步解码或改写格式。
+- 已只读查看FFRS当前OwnedInputCopy、copy_readers和current-slot守卫，同样采用源槽copy fence等待；未修改该基线。T70产品ccb4b41及报告a319195保留，未知69e39f offset+60回退与花盆专门验收仍待完成，T70状态继续in_progress。
+
+## T71 提交长帧既有计数诊断
+
+- 从a319195携带临时两文件诊断创建task/T71-submit-stall-counters，总控转独占相同文件。仅扩展慢帧日志，附加原hud累计upload/shader/pipeline耗时与上传字节差值。目标是从原有计数定位提交超额的实际步骤。正常限帧、调度、资源、同步与NVN原调用未改。尚未构建，当前设备仍60218be1/Continue8移动末尾。
+- 下一步构建诊断5，封存精确ELF/APK/source hash，覆盖装Continue8看首图，再live logcat+完整SF移动2400间隔采原始数据。诊断完成后撤回临时源改动和gfx-cpu-sync-diag，基线为d19bad24。荣耀暂停，公开release未更新，稳定30总目标继续。
+
+### T71 上传临时内存复用检查点
+
+- 诊断5/6/7的APK、精确ELF、完整源码与provenance均保留.local/publication。逐张计时定位格式0x42、1024平方、11级BC兼容解码上传，单图prepare约5ms，decode约1.7ms、deswizzle约0.25ms、staging约0.33ms。临时vector初始化/增长占剩余准备时间。已有BC线程池默认关闭，本轮未增加线程或改解码算法。
+- 最终撤回所有临时诊断。产品仅12行，在原BC解码上传入口按线程复用CPU vector容量，上限32MiB，移动出缓存槽保证嵌套调用独立。clear后原resize仍清零，原数据逐层重新解码。stream_buffer同步复制到独立staging后才归还CPU容量。没有复用纹理内容。实际入口ASan/UBSan覆盖冷/热、零填充、原生格式、嵌套、异常、上限与线程隔离。4个负控均真实断言失败，upload-scratch-final-negative-controls.log/json。
+- build-upload-scratch-final.log退出0，APK9471408337ff97cbe084809f46b76d2490a2c94067c774c2a36b9a1628e5b222，apk-upload-scratch-final.apk、libffrs-upload-scratch-final.so和upload-scratch-final-provenance.json保留。图形87项86通过1私有fixture跳过，运行时9项通过。真实安装SHA与provenance一致，首图save008城门人物、NPC、房屋可见。
+- gate-upload-scratch-final-motion-*保存原CSV/输入/连续SF完整历史。底座450/4槽/cache1/texdirty1/async0/FIFO/timing1/PAD可见，摇杆2400间隔2401不同工作帧29.868626FPS/p95 39.365ms/max72.555ms，无失败、重复或工作>100ms。物理29.871523FPS/p95 33.224ms/p99 49.616ms/max99.277ms，无物理>100ms。39批CPU提交均值15.177ms/GPU23.915ms，draw874.651/dispatch34.679。NPC与时序不同，不能把整体FPS小幅变化全归因内存复用，仍未达到长流程稳定30。
+- 诊断7另抓frame15490的why5/op27/12B，shader a0d6a4fbded819b4，参数在3040B父块偏移132B，参数/16B计数/262160B数据均在旧槽3，当前槽0。原T70仅处理参数已经在当前槽的情况，下一步复用原OwnedInputCopy保留完整父参数块与输入，未知/部分覆盖仍回退CPU同步。依据Khronos vkCmdDispatchIndirect与Synchronization Examples核对设备读参数和依赖语义，保留原屏障及双租约。花盆专门窗口、默认配置固化和公开版本更新仍待完成。
+- 947产品包三轮HOME3秒/前台10秒，同PID24410，真实draw/present递增且present_result0。rg-upload-scratch-final-resume-cycles.json、三截图与tail日志保留，末图人物、房屋与花叶可见。两帧呈现余量约66ms仍启用，端到端输入延迟未测。荣耀暂停，公开release未更新。

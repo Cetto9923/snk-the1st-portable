@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T05:21:22.842816+08:00",
-  "phase": "T70间接调度参数CPU同步回退诊断",
+  "updated_at": "2026-11-16T07:13:20.389306+08:00",
+  "phase": "T71提交阶段长帧与上传既有计数诊断",
   "coordinator": "Codex",
-  "integration_branch": "task/T70-indirect-dispatch-sync",
+  "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -26,7 +26,7 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T70",
+      "task": "T71",
       "paths": [
         "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
         "src/graphics/nvn_vulkan/engine/xbg_probe.inc",
@@ -628,6 +628,43 @@
       ],
       "recovery": "0b5fb6c / apk-native-timing-candidate.apk edb78e86 / 底座450 slots4 cache1 texdirty1 async0 FIFO present-timing1 / save008",
       "checkpoint": "ccb4b41 / d19bad24同save008移动2400间隔工作29.783FPS/p95 39.562ms/max87.834ms，工作>100ms0；完整SF29.786FPS/p95 33.262ms/max115.716ms，物理>100ms2；同PID13677三轮HOME通过 / 仍有offset+60的op27回退与70–90ms长帧 / 22851b1e诊断3已构建，覆盖装启动采集中，产品改动未增加"
+    },
+    {
+      "id": "T71",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T71-submit-stall-counters",
+      "dependencies": [
+        "T58",
+        "T68"
+      ],
+      "pass_gates": [],
+      "objective": "依据慢帧原始计数区分图形提交中的上传、shader、pipeline与其他开销，修复可避免的70–90ms提交停顿",
+      "inputs": [
+        "a319195 / 产品d19bad24与临时60218be1诊断4",
+        "save008全槽备份",
+        "慢帧总85.398ms中submit63.878ms、present0.736ms、pace0.0003ms，无CPU同步或copy wait>5ms记录"
+      ],
+      "outputs": [
+        "有限慢帧与既有HUD累计计数差值诊断",
+        "依据真实热点的最小候选及实际入口回归",
+        "同场景完整SF/不同工作帧与视觉/恢复证据"
+      ],
+      "write_scope": [
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/graphics/nvn_vulkan/engine/xbg_probe.inc",
+        "tests/graphics",
+        "coordination"
+      ],
+      "acceptance": [
+        "诊断不开捕获或阶段profile以保留正常GPU路径",
+        "不改游戏资源或模拟原GPU工作",
+        "依据计数和原始日志归因，保留原生命周期与回退",
+        "真实场景减少长帧且无显示/速度回归"
+      ],
+      "recovery": "a319195 / apk-compute-input-copy-candidate.apk(d19bad24) / 450/4槽/cache1/texdirty1/async0/FIFO/timing1 / save008",
+      "checkpoint": "94714083 / BC CPU scratch <=32MiB per thread / graphics87:86 passed,1 private skipped / runtime9 passed / 4 negative assertions / save008 2400 intervals work29.869 SF29.872 p95=33.224ms max99.277ms / HOME 3 cycles same PID24410 draw/present advanced result0"
     }
   ],
   "blockers": [],

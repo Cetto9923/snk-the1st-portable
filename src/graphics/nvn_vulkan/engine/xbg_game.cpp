@@ -2460,7 +2460,12 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
             return im;
         }
         if(im.aspects!=VK_IMAGE_ASPECT_COLOR_BIT)xbg_logf("NVN depth initial upload serial=%llu format=%#x vkFormat=%u target=%d extent=%ux%ux%u levels=%u layers=%u source=%p bytes=%llu",(unsigned long long)t->serial,t->d.format,unsigned(im.fmt),t->d.target,im.width,im.height,im.depth,im.levels,im.layers,t->mem,(unsigned long long)t->L.size);
-        std::vector<uint8_t> linear;std::vector<VkBufferImageCopy> copies;
+        static thread_local std::vector<uint8_t> decoded_upload_scratch;
+        std::vector<uint8_t> linear;
+        // Moving the buffer out also keeps nested uploads independent.
+        if (im.decoded) linear.swap(decoded_upload_scratch);
+        linear.clear();
+        std::vector<VkBufferImageCopy> copies;
         for(uint32_t layer=0;layer<im.layers;layer++)for(uint32_t level=0;level<im.levels;level++){
             uint32_t w=std::max(1u,im.width>>level),h=std::max(1u,im.height>>level),depth=std::max(1u,im.depth>>level);
             if(im.aspects!=VK_IMAGE_ASPECT_COLOR_BIT){
@@ -2498,6 +2503,11 @@ Image &get_image_slow(const tex_t *t,bool upload){CPU_SCOPE(Image);
             Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);vkCmdCopyBufferToImage(c.command,staging.buffer,im.image,im.layout,copies.size(),copies.data());im.transition(c.command,VK_IMAGE_LAYOUT_GENERAL);c.finish();}
         im.uploaded=true;provenance_write(im,__LINE__);im.cpu_hash=hash_memory(t->mem,t->L.size);im.checked_submission=stats.submissions;
         if(reupload)++hud::reuploads;else ++hud::uploads;hud::upload_bytes+=linear.size();hud::upload_ns+=timing_clock()-up_t0;
+        // GPU uploads refer to staging storage, so this CPU allocation can be reused.
+        if (im.decoded && linear.capacity() <= 32u * 1024u * 1024u &&
+            linear.capacity() > decoded_upload_scratch.capacity()) {
+            linear.swap(decoded_upload_scratch);
+        }
     }
     // Canary: a 3D light LUT nobody visibly fills, forced to 1.0 once, to decide whether the black environment is decided
     // by these LUT contents (gfx-lut-canary).
