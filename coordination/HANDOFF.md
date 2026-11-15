@@ -812,3 +812,8 @@
 - 回到save007相同起点、native540/4槽/cache1/texdirty1/Android摇杆/PAD可见，flower-native540-hardware-motion600帧为601不同工作帧29.682888FPS、p50 32.897ms、p95 42.028ms、p99 49.009ms、max57.551ms，无失败重复/>100ms。当前恢复540作为后续基准，450没有足够画质收益依据。4槽及追踪缓存仍marker诊断配置，未固化APK默认。稳定30目标继续active。
 - backend实际选MAILBOX=1，VK_GOOGLE_display_timing尚未启用。Android Surface capabilities minImageCount6、请求7，driver返回12 swapchain images（不要把它与engine四个提交槽混淆）。源码nvn_backend_vulkan.c保留读取FFRS其他包present-mode marker的旧路径，SNK当前日志仍MAILBOX，后续呈现配置需改用本应用目录，避免跨项目配置。
 - 官方AndroidX当前稳定games-frame-pacing2.1.3，支持16KB页并继承API33更准确Vsync时间与显示监听销毁修复，来源https://developer.android.com/jetpack/androidx/releases/games 。下一步先下载并检查官方AAR的头文件、静态库、classes与许可证，再以默认关闭的实验入口验证Swappy真实呈现节奏。尚未添加SDK到产品或宣称成功。
+
+## T67 本应用呈现配置与帧节奏
+
+- 基线02eab71，task/T67-android-frame-pacing。先做更小的FIFO对照。GuestThreadMain从原log_path父目录设置FFRS_APP_FILES_DIR，Vulkan后端只从该目录读取gfx-present-mode。移除旧FFRS其他包路径，保留显式FFRS_PRESENT_MODE与无marker原默认选择。尚未构建/安装，荣耀仍暂停。
+- 官方AAR games-frame-pacing2.1.3已从Google Maven下载到.local/third-party/swappy-2.1.3，7013918B，SHA256 a9f83e0cf47d694ed2cea0ae995d5cf7411060d9d4b680610430d03d6b20ea27。仅私有备查，未加入产品依赖。SDK静态arm64库元数据NDK23/API21/c++_shared，当前工程NDK26/c++_static，若后续接入必须验证链接ABI及生命周期。stats默认关闭时无需recordFrameStart。它需要JNI activity、设备扩展、queue family、swapchain/window接线。

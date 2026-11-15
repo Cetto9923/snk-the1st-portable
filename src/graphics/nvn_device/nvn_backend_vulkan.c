@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <limits.h>
 #include <string.h>
 #include <time.h>
 /* The Android surface and the present bits only exist when the platform is
@@ -41,6 +42,16 @@
 #define NVN_PRESENT_FENCE_TIMEOUT_NS 2000000000ull
 /* How long the wait for a swapchain image may take. */
 #define NVN_PRESENT_ACQUIRE_TIMEOUT_NS 1000000000ull
+
+/* The Android shell supplies its own files directory before guest startup. */
+static FILE *nvn_vulkan_present_mode_marker(void) {
+    const char *directory = getenv("FFRS_APP_FILES_DIR");
+    if (!directory || !directory[0]) return NULL;
+    char path[PATH_MAX];
+    int length = snprintf(path, sizeof(path), "%s/gfx-present-mode", directory);
+    if (length < 0 || (size_t)length >= sizeof(path)) return NULL;
+    return fopen(path, "rb");
+}
 
 typedef struct {
     VkInstance instance;
@@ -852,12 +863,7 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
                 else if (env_mode && !strcmp(env_mode, "immediate") && has_immediate) present_mode = VK_PRESENT_MODE_IMMEDIATE_KHR;
                 else if (env_mode && !strcmp(env_mode, "fifo")) present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
-                FILE *pm_f = fopen("/storage/emulated/0/Android/data/org.ffrs.perfscale/files/gfx-present-mode", "rb");
-                if (!pm_f) pm_f = fopen("/sdcard/Android/data/org.ffrs.perfscale/files/gfx-present-mode", "rb");
-                if (!pm_f) pm_f = fopen("/storage/emulated/0/Android/data/org.ffrs.perfisolated/files/gfx-present-mode", "rb");
-                if (!pm_f) pm_f = fopen("/sdcard/Android/data/org.ffrs.perfisolated/files/gfx-present-mode", "rb");
-                if (!pm_f) pm_f = fopen("/storage/emulated/0/Android/data/org.ffrs.gamewindow/files/gfx-present-mode", "rb");
-                if (!pm_f) pm_f = fopen("/sdcard/Android/data/org.ffrs.gamewindow/files/gfx-present-mode", "rb");
+                FILE *pm_f = nvn_vulkan_present_mode_marker();
                 if (pm_f) {
                     int c = fgetc(pm_f);
                     fclose(pm_f);

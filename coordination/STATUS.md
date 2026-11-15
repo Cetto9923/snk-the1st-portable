@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T02:16:58.326108+08:00
-阶段：T66降低状态与纹理查找冲突开销
+状态事件时间：2026-11-16T02:24:39.006808+08:00
+阶段：T67本应用呈现配置与Android帧节奏对照
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -24,10 +24,11 @@
 | T64 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T64-cull-writeback-bounds |
 | T65 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T65-texture-check-cost |
 | T66 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T66-object-lookup-chains |
+| T67 | GRAPHICS | in_progress | Codex | T58 | 无额外门禁 | task/T67-android-frame-pacing |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T66", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
+- {"owner": "Codex", "task": "T67", "paths": ["src/", "scripts/", "tests/", "docs/release/", "NOTICE.md", "AGENTS.md", "coordination/"]}
 
 ## 阻塞
 

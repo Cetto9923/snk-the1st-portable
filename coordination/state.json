@@ -1,10 +1,10 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T02:16:58.326108+08:00",
-  "phase": "T66降低状态与纹理查找冲突开销",
+  "updated_at": "2026-11-16T02:24:39.006808+08:00",
+  "phase": "T67本应用呈现配置与Android帧节奏对照",
   "coordinator": "Codex",
-  "integration_branch": "task/T66-object-lookup-chains",
+  "integration_branch": "task/T67-android-frame-pacing",
   "baseline": {
     "repo": "/Users/yuyan9923/GitHub/ff-resonance-honor-gtpro",
     "branch": "work/honor-gtpro-30hz",
@@ -26,7 +26,7 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T66",
+      "task": "T67",
       "paths": [
         "src/",
         "scripts/",
@@ -480,6 +480,46 @@
       ],
       "recovery": "5576b32b正常APK / slots4 cache1 texdirty1 540 async0 / save007全槽备份",
       "checkpoint": "a495e67 dirty / APK9c412fe4 / 79图形9运行时 / 540触屏29.131 / 450摇杆29.992FPS"
+    },
+    {
+      "id": "T67",
+      "role": "GRAPHICS",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T67-android-frame-pacing",
+      "dependencies": [
+        "T58"
+      ],
+      "pass_gates": [],
+      "objective": "修复跨应用呈现配置路径，并按Android官方方案改善实际显示帧节奏",
+      "inputs": [
+        "02eab71产品代码与540摇杆29.683FPS",
+        "VK_GOOGLE_display_timing设备能力",
+        "Android官方Frame Pacing与Swappy2.1.3文档",
+        "save007全槽备份"
+      ],
+      "outputs": [
+        "本应用配置路径与回归",
+        "FIFO基准与物理呈现历史",
+        "必要时默认关闭的SDK实验入口与对照"
+      ],
+      "write_scope": [
+        "src/graphics/nvn_device/nvn_backend_vulkan.c",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "src/android",
+        "scripts/android",
+        "tests",
+        "NOTICE.md",
+        "coordination"
+      ],
+      "acceptance": [
+        "从本应用目录读取配置",
+        "保留无配置时的正常路径",
+        "所有启用失败均有可用回退",
+        "显示帧间隔更稳定",
+        "保留游戏时间与正常资源/存档"
+      ],
+      "recovery": "02eab71 / APK9c412fe4 / 540 slots4 cache1 texdirty1 async0 / save007"
     }
   ],
   "blockers": [],

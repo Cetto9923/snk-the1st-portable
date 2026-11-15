@@ -121,6 +121,7 @@ void* GuestThreadMain(void* opaque) {
         size_t slash = path.find_last_of('/');
         if (slash == std::string::npos) return nullptr;
         path.resize(slash);
+        setenv("FFRS_APP_FILES_DIR", path.c_str(), 1);
         // All device tiers use the requested docked game mode. Internal
         // render resolution is selected independently by the device profile.
         setenv("FFRS_OPERATION_MODE", "1", 1);
