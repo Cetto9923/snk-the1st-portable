@@ -467,3 +467,15 @@
 - 调试器已detach/kill本会话测试进程并退出，当前新进程23813运行，未留断点。旧自动软件断点未命中，SIGSEGV现场已读到自定义String指针0x501012200。调用 main+5d07c0→49d350，字符串源Default；向量行0的String在row+0x60。owner内向量begin指向owner+0x68并与自身元数据重叠，疑似生命周期/覆盖，尚无根因结论。原始反汇编 .local/publication/disasm-vfx-*.txt/bin/elf，仅本地私有。
 - 所有设备命令仍只用 RG477M01445122。FFRS已按用户授权force-stop。临时存储卡 SNK-community-v107 是本会话生成的中断副本，当前不用，后续清理需核对精确路径。原/sdcard/SNK和游戏包保持原输入。
 - 下一步先查看 rg-logo-skip.png 回到真实可操作场景并正常存档，获取同点帧时间。做gfx-live-sync=0与1单变量对照，再测cached readback，避免以剧情/封面或重复呈现替代稳定30。性能修复固化APK后复测新建、画面、声音、输入，再发布独立SNK仓。
+
+
+## T58 标题复核与分配器重叠对照
+
+- 用户澄清封面指游戏内标题。重启后两张标题截图 rg-title-check-1.png / rg-pointer-ab-title.png 均为艾丝蒂尔和约修亚原版 Ver1.07 标题，截图亮度与之前正常标题相符。3D偏暗仍需逐场景核对，未用全局gamma掩盖。
+- 新建在强同步下也复现 main+49d478 strncpy 故障，因此撤回“强同步可解决新建”推断。原日志 rg-newgame-reentry-crash.log，先前略过剧情故障另为 main+54efbc，rg-logo-current.log。
+- RG477M PID14330，main base0x6f441da000。LLDB硬件断点 main+5d05a0 条件分配返回范围与活跃owner重叠，成功命中，返回x0和owner x19均为0x6c00785270，x21=3、每行184字节。分配器把仍有vtable、特效名的owner地址再次返回。原始寄存器和头部内存保存在 .local/publication/lldb-overlap-evidence.log。未手工修复游戏对象。调试器和目标进程随后退出。
+- 旧4处allocator CBZ→TBZ bit32补丁对当前12GiB arena错误。实际arena 0x6bfa800000..0x6ecbc00000，0x6c/0x6e开头的合法地址bit32=0，会被拒绝。新增诊断marker hle-original-pointer-tests=1，经guest_boot_jni置SNK_ORIGINAL_POINTER_TESTS=1，仅跳过这4处补丁，其他源路径保持。荣耀未操作、缺省仍原设置，待477M对照充分后再固化设备范围。
+- 候选 a3caa24f8648cd00fef41371efb42f135bd745003211fb9e0ec0fb6a15c2f082，构建/覆盖安装退出0，原日志build-original-pointer-tests.log / rg-pointer-tests-install.log。单变量先保持sync1/1，正常新建进入闪回屋内，再略过闪回、播放/跳过影片进入正常布莱特家剧情，后略过到首个自由移动点，截图rg-first-play-menu.png / rg-camp-first.png。未复现上述strncpy和54efbc崩溃，但尚无多次冷启验收。
+- 在同进程 gfx-live-sync=0，仅去掉每NVN批的complete_all，Vk sync-submit仍1。记录rg-pointer-ab-skip2.log，进入真实游戏后仍约7.5FPS，GPU81.7ms，约609draws/30dispatches。主瓶颈仍包含GPU和CPU回写，尚未30。
+- 完整graphics62项，61通过1私有fixture跳过，runtime6通过（包含编译真实textfilter、缺省旧补丁和诊断原始分支），日志graphics-tests-pointer-ab.log / runtime-tests-pointer-ab.log。
+- 当前PID17116，已进入原游戏camp，Plus打开原生存档列表，准备新建正常槽方便同点对照。后续测试cached readback，再测安全提交和shader组件fold/temporary forwarding。

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T19:12:31.411265+08:00",
-  "phase": "RG477M 人物输入类型修正已显示，强同步下低帧率，正在优化实际场景稳定30Hz",
+  "updated_at": "2026-11-15T19:28:33.640792+08:00",
+  "phase": "RG477M 原始分配器空指针判断已通过新建至自由移动一次，继续同点性能与亮度优化",
   "coordinator": "Codex",
   "integration_branch": "task/T58-community-release",
   "baseline": {
@@ -186,7 +186,8 @@
     "58 项图形测试通过 57 项，缺少本地私有 UINT 输入而跳过 1 项。6 项运行时测试通过。",
     "RG477M 完整 RomFS 72360 项与 shader6611 项逐文件哈希一致。",
     "Mali人物输入整数类型修正已接正常draw与warm路径。用户确认人物已显示。",
-    "Mali vendor门禁真实分支组件用例通过，Adreno保留原shader模块。"
+    "Mali vendor门禁真实分支组件用例通过，Adreno保留原shader模块。",
+    "RG477M 硬件断点捕获重叠分配；原始allocator null tests诊断通过一次新建至自由移动，未作稳定30验收"
   ],
   "unverified": [
     "RG477M 30Hz 尚未达成，强同步诊断条件约7.2FPS。",

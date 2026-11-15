@@ -416,7 +416,10 @@ static void guest_process_text_filter(void *text, size_t bytes, void *opaque) {
      * (< 4GB) do not get dereferenced as pointers during sorted tree / free-list traversal.
      * The guard tests bit 32, not bit 36: the guest heap lives at 0x6ff8_xxxxxxxx, whose
      * bit 36 is clear, so a bit-36 test also rejected every valid subtree pointer. */
-    if (bytes > 0x569580) {
+    /* A/B diagnostic preserves the guest's original null tests. Testing one
+     * address bit rejects valid nodes when the reserved arena crosses 4 GiB. */
+    const char *original_pointer_tests = getenv("SNK_ORIGINAL_POINTER_TESTS");
+    if (bytes > 0x569580 && !(original_pointer_tests && original_pointer_tests[0] == '1')) {
         uint32_t *insns = (uint32_t *)text;
         if (insns[0x56952c / 4] == 0xb400064d) {
             insns[0x56952c / 4] = 0xb600064d; /* tbz x13, #32, 0x5695f4 */

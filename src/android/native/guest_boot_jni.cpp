@@ -140,6 +140,12 @@ void* GuestThreadMain(void* opaque) {
         setenv("FFRS_OPERATION_MODE", operation_mode ? "1" : "0", 1);
         fprintf(stderr, "[port] operation_mode=%d source=%s marker=%s\n",
                 operation_mode, operation_source, operation_marker.c_str());
+        const std::string pointer_marker = path + "/hle-original-pointer-tests";
+        FILE *pointer_file = fopen(pointer_marker.c_str(), "rb");
+        const bool original_pointer_tests = pointer_file && fgetc(pointer_file) == '1';
+        if (pointer_file) fclose(pointer_file);
+        setenv("SNK_ORIGINAL_POINTER_TESTS", original_pointer_tests ? "1" : "0", 1);
+        fprintf(stderr, "[port] original_allocator_pointer_tests=%d\n", original_pointer_tests);
         /* Heap accounting trace: same marker style, off unless the file holds
          * '1'. The runtime reads SNK_HLE_HEAP_TRACE once and then stays silent. */
         const std::string heap_trace_marker = path + "/hle-heap-trace";
