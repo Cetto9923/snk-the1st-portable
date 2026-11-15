@@ -116,6 +116,7 @@ if [[ -n "${FFRS_APP_ASSETS:-}" ]]; then
     cp -R "${FFRS_APP_ASSETS}/." "${FFRS_RUNTIME_ASSETS}/"
 fi
 cp "${FFRS_ROOT}/NOTICE.md" "${FFRS_RUNTIME_ASSETS}/licenses/NOTICE.md"
+sed -n '1,21p' "${FFRS_ROOT}/src/graphics/nvn/include/nvn/nvn.h" > "${FFRS_RUNTIME_ASSETS}/licenses/nvn-headers-MIT.txt"
 cp "${FFRS_ROOT}/third_party/opus/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/opus.txt"
 cp "${FFRS_ROOT}/third_party/lasrecomp/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/lasrecomp.txt"
 cp "${FFRS_ROOT}/src/graphics/nvn_vulkan/engine/third_party/bcdec/LICENSE" "${FFRS_RUNTIME_ASSETS}/licenses/bcdec.txt"

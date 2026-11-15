@@ -450,3 +450,20 @@
 - RG477M 原目录与 v1.0.7 合并资源有差异。存储卡复制受小文件开销影响，已终止本会话两个复制进程。改在 app 私有 files/community-v107 建目录，70004 个未变化文件链接到原 SNK/romfs，2356 个更新文件单独导入，4 个 NSO 链接到原目录。全清单 72360 项 SHA256 校验进行中。派生目录与旧输入分开，存档继续使用原 app 外部文件目录。
 - 当前 shader 已全量校验 6611 项一致，原 shaders 已改名为 shaders-before-1.0.1 留作恢复。
 - 下一步先等待 .local/publication/rg-merged-validation.json，修复任何缺失或差异，配置 game-directory 到上述私有合并目录，再测人物、音频与真实游戏操作。完成代码修正后重新构建与安装，打包 release、push SNK 独立仓、建立标签与预览 Release，并回下载核 SHA。
+
+
+## T58 Mali 人物修正与 30 帧优化检查点
+
+- 用户明确要求 GPU 适配保留荣耀此前正常显示，真机当前全部 RG477M01445122。用户已重新激活“正常游玩、稳住 30Hz”目标，当前优先 RG477M，发布工作仍待完成。
+- 完整资源在 RG477M app 私有 files/community-v107/romfs，70004 个链接加2356个更新文件，72360/72360 SHA256 一致。shader 6611/6611 一致。game-directory 标记已指向该私有目录，标题原作版本实际显示1.07。数据清单一致后人物仍畸形，不能把畸形归因于已发现的文件差异。
+- 在 Mali 设备实际抓到 9 个顶点 shader 的 RGBA32_UINT 属性配 float 输入。原始日志 .local/publication/rg-mali-vertex-inputs2.log。新增 xbg_spirv_vertex.h 保持原寄存器位模式，把输入变量/指针/加载改成匹配的 UINT/SINT，加载后 OpBitcast 回原 FP32 运算。按实际 draw 属性生成并缓存模块，warm 路径同样匹配输入。仅 vendorID 0x13b5 分支启用。
+- 9 个实际 stage 离线补丁 spirv-val Vulkan1.1 均退出0。临时私有覆盖现已重命名 spv-override-before-runtime，当前使用 APK 中的运行时修正。现装候选 SHA a72ecaca151b97646feeda3877773d241ad6457e2fa786735fe357581689198a，构建退出0，覆盖安装退出0。
+- 61 项 graphics 测试，60通过1项缺私有 UINT 输入跳过。6项runtime通过。额外 Mali vendor 门禁用例编译真实 draw/warm 分支，ARM启用，Adreno/NVIDIA/未知vendor保留原模块，退出0。Opus完整混音合约 failures=0。图形测试一度因新 helper 插在旧函数提取边界中而编译失败，已把 helper 移到函数前，保留旧断言复测通过。
+- 用户确认有声音。默认混音器已固化进源码。用户最新确认“现在人出来了，但是好卡”，正确人物截图 rg-sync-results-outcome.png / rg-scene-pause-observed.png。
+- 当前人物正确与新建流程可推进的真机条件同时包括 gfx-sync-mode=1、gfx-sync-submit=1（因此async0）、GPU indexed resident1、完整数据、Mali类型修正。这是诊断强同步，约7.2FPS，不能当30帧通过。sync0先前新建常在main+49d478 strncpy访问0x5xxxxxxxx崩溃，完整数据/旧包控制也复现。是否是延迟GPU写回覆盖CPU数据仍待单变量对照，尚未宣称根因解决。
+- 正确帧 GPASS在 .local/publication/rg-pass-profile.txt，frame4923共74项合计70.7ms。内部主目标1600x900，UI/呈现1920x1080，手持profile720是目标配置，尚无实际720p3D证明。重项为主GBuffer14ms、183334461b277951全屏10.5ms，另多个后处理1-2ms。gpu80ms/submitCPU123ms，snapshot约40MB/frame，writeback30MB/frame。Mali内存type0 flags0x7（coherent未缓存）、type1 flags0xb（cached非coherent）。现有gfx-readback-cached值得对照，Honor旧实验不可代替Mali实测。
+- 已按原游戏 PAUSE→Y 略过全部，当前经过开场影片末尾logo暗帧。用户说封面变且暗，已解释处于影片标志画面并用Plus尝试退出，截图 rg-logo-skip.png 待查看。异步问题已向用户问清封面指游戏标题还是桌面图标，尚待答复。应用图标确实换为自有矢量资源，该选择最终须披露，不能把用户此处反馈误判为认可。
+- LLDB 在 .local/publication/ 有日志。Android app无INTERNET，TCP监听被拒绝，改unix-abstract://snk-rg477m，adb forward tcp5039 localabstract:snk-rg477m。Mac LLDB需 target.memory-module-load-level minimal、auto-import-clang-modules false、symbols.enable-external-lookup false、platform remote-android，可立即连接。默认模块加载曾卡住。
+- 调试器已detach/kill本会话测试进程并退出，当前新进程23813运行，未留断点。旧自动软件断点未命中，SIGSEGV现场已读到自定义String指针0x501012200。调用 main+5d07c0→49d350，字符串源Default；向量行0的String在row+0x60。owner内向量begin指向owner+0x68并与自身元数据重叠，疑似生命周期/覆盖，尚无根因结论。原始反汇编 .local/publication/disasm-vfx-*.txt/bin/elf，仅本地私有。
+- 所有设备命令仍只用 RG477M01445122。FFRS已按用户授权force-stop。临时存储卡 SNK-community-v107 是本会话生成的中断副本，当前不用，后续清理需核对精确路径。原/sdcard/SNK和游戏包保持原输入。
+- 下一步先查看 rg-logo-skip.png 回到真实可操作场景并正常存档，获取同点帧时间。做gfx-live-sync=0与1单变量对照，再测cached readback，避免以剧情/封面或重复呈现替代稳定30。性能修复固化APK后复测新建、画面、声音、输入，再发布独立SNK仓。

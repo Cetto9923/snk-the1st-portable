@@ -8,6 +8,7 @@
 #include <fcntl.h>
 #include <time.h>
 #include "xbg_game_internal.h"
+#include "xbg_spirv_vertex.h"
 #include "xbg_shader_archive.h"
 #ifdef XBG_HAVE_SPIRV_OPT
 #include "xbg_spirv_inline.h"
@@ -2439,8 +2440,9 @@ struct Shader {std::string key;uint32_t stage;VkShaderModule module{};uint32_t l
     bool discards=true; // fragment shader may kill/demote (conservative default)
     XbgRasterFacts raster; // position input (vertex), declared outputs and SampleMask (fragment): first_draw_covers
     std::vector<uint32_t> spv; // fragment shaders with several outputs: source of the integer-target variants
+    std::map<uint32_t,VkShaderModule> vertex_input_modules;
     Buffer c1_buffer{};bool c1_ready=false;
-    ~Shader(){if(module)vkDestroyShaderModule(cfg.device,module,nullptr);}};
+    ~Shader(){for(auto &entry:vertex_input_modules)vkDestroyShaderModule(cfg.device,entry.second,nullptr);if(module)vkDestroyShaderModule(cfg.device,module,nullptr);}};
 // Storage buffers written by a shader. Pointers rooted at a storage-buffer
 // variable that reach OpStore/OpCopyMemory/atomics, function calls, phis or
 // selects mark that binding written; anything unprovable marks all written.
@@ -2697,6 +2699,32 @@ bool spv_override(const std::string &key,std::vector<uint32_t> &words){
     std::vector<uint32_t> w(size_t(n)/4);bool ok=fread(w.data(),1,size_t(n),f)==size_t(n);fclose(f);if(!ok || w[0]!=0x07230203u)return false;
     words.swap(w);xbg_logf("NVN spv override %s words=%zu",key.c_str(),words.size());return true;
 }
+// Integer vertex components reach translated FP32 registers as raw bits.
+uint32_t integer_vertex_format_kind(VkFormat format){
+    switch(format){
+    case VK_FORMAT_R8_UINT:case VK_FORMAT_R8G8_UINT:case VK_FORMAT_R8G8B8_UINT:case VK_FORMAT_R8G8B8A8_UINT:
+    case VK_FORMAT_R16_UINT:case VK_FORMAT_R16G16_UINT:case VK_FORMAT_R16G16B16_UINT:case VK_FORMAT_R16G16B16A16_UINT:
+    case VK_FORMAT_R32_UINT:case VK_FORMAT_R32G32_UINT:case VK_FORMAT_R32G32B32_UINT:case VK_FORMAT_R32G32B32A32_UINT:
+    case VK_FORMAT_A2B10G10R10_UINT_PACK32:return 1;
+    case VK_FORMAT_R8_SINT:case VK_FORMAT_R8G8_SINT:case VK_FORMAT_R8G8B8_SINT:case VK_FORMAT_R8G8B8A8_SINT:
+    case VK_FORMAT_R16_SINT:case VK_FORMAT_R16G16_SINT:case VK_FORMAT_R16G16B16_SINT:case VK_FORMAT_R16G16B16A16_SINT:
+    case VK_FORMAT_R32_SINT:case VK_FORMAT_R32G32_SINT:case VK_FORMAT_R32G32B32_SINT:case VK_FORMAT_R32G32B32A32_SINT:return 2;
+    default:return 0;
+    }
+}
+VkShaderModule mali_vertex_input_module(Shader &shader,uint32_t kinds){
+    if(!kinds)return shader.module;
+    auto found=shader.vertex_input_modules.find(kinds);if(found!=shader.vertex_input_modules.end())return found->second;
+    std::vector<uint32_t> words=shader.spv;
+    int changed=xbg_spirv_integer_vertex_inputs(words,kinds);
+    need(changed>=0,"Unsupported Mali integer vertex input interface");
+    if(!changed)return shader.module;
+    VkShaderModuleCreateInfo info{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};info.codeSize=words.size()*4;info.pCode=words.data();
+    VkShaderModule module=VK_NULL_HANDLE;VK(vkCreateShaderModule(cfg.device,&info,nullptr,&module));
+    shader.vertex_input_modules.emplace(kinds,module);warm::register_module(module,shader.key);
+    xbg_logf("NVN Mali integer vertex inputs shader=%s kinds=%#x variables=%d",shader.key.c_str(),kinds,changed);
+    return module;
+}
 // NVN 的片元着色器用浮点寄存器写整数渲染目标：翻译结果里那个输出是 OpBitcast(float, int)。Vulkan 把浮点输出写进
 // UINT/SINT 附件时按数值转换，这些位模式会被压成 0，目标于是永远是空的。这里把整数附件对应的输出变量与它的存储
 // 改成真正的整数，位模式原样保留。kinds 每 2 位对应一个 Location：0 浮点、1 UINT、2 SINT。
@@ -2848,6 +2876,7 @@ Shader *load_shader(const void *control){
     if(h.stage==4 && p->raster.outputs && (p->raster.outputs&(p->raster.outputs-1)))p->spv=words;
     {bool unknown=false;p->storage_writes=spirv_storage_writes(words,unknown);if(unknown){for(auto &b:p->bindings)if(b.type==VK_DESCRIPTOR_TYPE_STORAGE_BUFFER)p->storage_writes.insert(b.binding);}}
     if(h.stage==0){p->input_classes.resize(p->inputs.size());need(xbg_vertex_input_classes(words.data(),words.size(),p->inputs.data(),p->inputs.size(),p->input_classes.data())==0,"Unsupported vertex input scalar interface");}
+    if(h.stage==0 && properties.vendorID==0x13b5)p->spv=words;
     load_t3=timing_clock();
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=words.size()*4;ci.pCode=words.data();VK(vkCreateShaderModule(cfg.device,&ci,nullptr,&p->module));warm::register_module(p->module,key);Shader *out=p.get();shaders.emplace(key,std::move(p));++stats.shader_loads;++hud::shaders;const uint64_t load_t4=timing_clock();hud::shader_ns+=load_t4-load_t0;
     xbg_logf("NVN shader %s stage=%u loaded words=%zu ms read=%.2f rewrite=%.2f analyse=%.2f module=%.2f reused=%d",key.c_str(),h.stage,words.size(),(load_t1-load_t0)/1e6,(load_t2-load_t1)/1e6,(load_t3-load_t2)/1e6,(load_t4-load_t3)/1e6,int(have_reused));return out;
@@ -2964,8 +2993,9 @@ void flush(){if(pending.empty())return;FILE *f=fopen(list_path().c_str(),"ab");i
 // are freed at shutdown.
 bool keep_rewritten=false;std::unordered_map<std::string,std::vector<uint32_t>> rewritten;
 bool take_rewritten(const std::string &key,std::vector<uint32_t> &out){std::lock_guard<std::mutex> l(mu);if(!compute_prewarm_keys.empty() && std::find(compute_prewarm_keys.begin(),compute_prewarm_keys.end(),key)==compute_prewarm_keys.end())return false;auto it=rewritten.find(key);if(it==rewritten.end())return false;out.swap(it->second);rewritten.erase(it);return true;}
-VkShaderModule load_module(const std::string &key){
-    {std::lock_guard<std::mutex> l(mu);auto it=modules.find(key);if(it!=modules.end())return it->second;}
+VkShaderModule load_module(const std::string &key,uint32_t vertex_kinds=0){
+    const std::string cache_key=vertex_kinds?key+"/vertex/"+std::to_string(vertex_kinds):key;
+    {std::lock_guard<std::mutex> l(mu);auto it=modules.find(cache_key);if(it!=modules.end())return it->second;}
     std::vector<uint8_t> b;if(!read_shader_bundle(key,b,nullptr))return VK_NULL_HANDLE;
     xbg_shader_header h;memcpy(&h,b.data(),sizeof(h));if(h.magic!=0x31534758 || h.version!=1 || h.spirv_bytes%4)return VK_NULL_HANDLE;
     size_t off=sizeof(h)+size_t(h.binding_count)*sizeof(xbg_shader_binding)+size_t(h.input_count)*4+h.c1_bytes;if(off+h.spirv_bytes!=b.size())return VK_NULL_HANDLE;
@@ -2974,9 +3004,10 @@ VkShaderModule load_module(const std::string &key){
     honor_inline_rewrite(w,key,"warm");
 #endif
     quad_rewrite(w,h.stage,key.c_str(),"warm");warp_rewrite(w,h.stage,key.c_str(),"warm");tidy_rewrite(w);
-    if(keep_rewritten){std::lock_guard<std::mutex> l(mu);rewritten.emplace(key,w);}
+    if(keep_rewritten && !vertex_kinds){std::lock_guard<std::mutex> l(mu);rewritten.emplace(key,w);}
+    if(vertex_kinds && h.stage==0 && xbg_spirv_integer_vertex_inputs(w,vertex_kinds)<0)return VK_NULL_HANDLE;
     VkShaderModuleCreateInfo ci{VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO};ci.codeSize=w.size()*4;ci.pCode=w.data();VkShaderModule m;if(vkCreateShaderModule(cfg.device,&ci,nullptr,&m)!=VK_SUCCESS)return VK_NULL_HANDLE;
-    std::lock_guard<std::mutex> l(mu);auto ins=modules.emplace(key,m);if(!ins.second){vkDestroyShaderModule(cfg.device,m,nullptr);return ins.first->second;}return m;
+    std::lock_guard<std::mutex> l(mu);auto ins=modules.emplace(cache_key,m);if(!ins.second){vkDestroyShaderModule(cfg.device,m,nullptr);return ins.first->second;}return m;
 }
 struct Reader{const uint32_t *w;size_t n,i=0;bool bad=false;uint32_t u(){if(i>=n){bad=true;return 0;}return w[i++];}uint64_t q(){uint64_t lo=u();return lo|(uint64_t(u())<<32);}float f(){uint32_t b=u();float x;memcpy(&x,&b,4);return x;}};
 VkPipelineLayout make_layout(const uint32_t *w,uint32_t n){
@@ -3009,6 +3040,12 @@ bool build(const Rec &rec){
     VkPipelineVertexInputStateCreateInfo v{VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO};v.flags=r.u();uint32_t nvb=r.u();if(nvb>32)return false;std::vector<VkVertexInputBindingDescription> vb(nvb);for(auto &x:vb){x.binding=r.u();x.stride=r.u();x.inputRate=VkVertexInputRate(r.u());}
     uint32_t nva=r.u();if(nva>32)return false;std::vector<VkVertexInputAttributeDescription> va(nva);for(auto &x:va){x.location=r.u();x.binding=r.u();x.format=VkFormat(r.u());x.offset=r.u();}
     v.vertexBindingDescriptionCount=nvb;v.pVertexBindingDescriptions=vb.data();v.vertexAttributeDescriptionCount=nva;v.pVertexAttributeDescriptions=va.data();
+    if(properties.vendorID==0x13b5){
+        uint32_t kinds=0;for(const auto &attribute:va)if(attribute.location<16)kinds|=integer_vertex_format_kind(attribute.format)<<(2*attribute.location);
+        if(kinds)for(uint32_t index=0;index<ns;index++)if(st[index].stage==VK_SHADER_STAGE_VERTEX_BIT){
+            st[index].module=load_module(rec.keys[index],kinds);if(!st[index].module)return false;
+        }
+    }
     VkPipelineInputAssemblyStateCreateInfo a{VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO};a.flags=r.u();a.topology=VkPrimitiveTopology(r.u());a.primitiveRestartEnable=r.u();
     VkPipelineTessellationStateCreateInfo t{VK_STRUCTURE_TYPE_PIPELINE_TESSELLATION_STATE_CREATE_INFO};bool ht=r.u()!=0;if(ht){t.flags=r.u();t.patchControlPoints=r.u();}
     VkPipelineViewportStateCreateInfo vp{VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO};vp.flags=r.u();vp.viewportCount=r.u();vp.scissorCount=r.u();bool hv=r.u()!=0,hs=r.u()!=0;if(vp.viewportCount>16 || vp.scissorCount>16)return false;
@@ -4960,6 +4997,14 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     if(state.rast_discard&&state.tf_on){static int once=0;if(!once++){once=1;xbg_logf("NVN transform feedback capture is not implemented: the draw under rasterizer discard produced no feedback");}}
     need(state.rt.n>=0 && state.rt.n<=8,"Invalid draw color target count");
     VkShaderModule modules[5]{};for(unsigned i=0;i<5;i++)if(state.shader[i])modules[i]=state.shader[i]->module;
+    if(properties.vendorID==0x13b5 && state.shader[0]){
+        uint32_t kinds=0;Shader &shader=*state.shader[0];
+        for(uint32_t location:shader.inputs){
+            need(location<16,"Mali vertex location out of bounds");va_st attribute;memcpy(&attribute,&state.attrib[location],4);
+            if(attribute.fmt)kinds|=integer_vertex_format_kind(format(attribute.fmt))<<(2*location);
+        }
+        modules[0]=mali_vertex_input_module(shader,kinds);
+    }
     uint32_t active_colors=0;for(int i=0;i<state.rt.n;i++)if(state.rt.color[i])active_colors|=1u<<i;
     // 整数颜色目标：翻译后的片元着色器用 OpBitcast(float, int) 写，Vulkan 按数值转换成 0，必须换成整数输出。
     // Integer color targets: the translated fragment shader writes through OpBitcast(float, int), which Vulkan
@@ -5042,6 +5087,15 @@ void draw(int prim,int first,int count,const p_draw_idx *indexed,uint32_t instan
     uint32_t attribute_end[16]={},unknown_attribute_size=0;
     for(size_t input=0;input<state.shader[0]->inputs.size();input++){
         uint32_t loc=state.shader[0]->inputs[input];need(loc<16,"Vertex input location out of bounds");va_st a;memcpy(&a,&state.attrib[loc],4);
+        if(properties.vendorID==0x13b5 && probe.waiting && a.stream<16){
+            static std::set<std::pair<std::string,uint64_t>> logged;
+            const uint64_t description=(uint64_t(state.attrib[loc])<<5)|loc;
+            if(logged.size()<256 && logged.emplace(state.shader[0]->key,description).second)
+                xbg_logf("NVN Mali vertex input shader=%s location=%u nvn=%#x vk=%u scalar=%u stream=%u offset=%u stride=%u divisor=%u bytes=%zu",
+                    state.shader[0]->key.c_str(),loc,a.fmt,a.fmt?unsigned(format(a.fmt)):0,
+                    state.shader[0]->input_classes[input],a.stream,a.offset,state.stream[a.stream].stride,
+                    state.stream[a.stream].divisor,state.vb[a.stream].size);
+        }
         if(!a.fmt){
             if(zero_binding<0)zero_binding=xbg_vertex_zero_binding(state.attrib,state.shader[0]->inputs.data(),state.shader[0]->inputs.size());
             need(zero_binding>=0,"No free binding for constant vertex input");
