@@ -547,3 +547,12 @@
 - 从实际捕获的drawgroup提取111个片元模块，使用本机spirv-opt -O，4,302,672字节缩到1,655,080字节，全部spirv-val --target-env vulkan1.1退出0。结果.local/publication/optimized-city-fragments/results.json。这仅为离线编译验证，正确显示与FPS需真机。
 - 111个私有诊断SPV在RG专属files/spv-override，哈希逐个一致，rg-opt-fragments-device-sha.txt。原NSO/RomFS/XGS保持原输入。现有spv_override正常runtime与warm入口均读取这些派生模块，仍叠加原有类型/草叶等修正。回退可将该目录改名，再重启。此目录不进入公开包。
 - 当前同APK c42db65c、wtrack0、defer0、gfx-pass-profile0/120/20000重启测试片元优化，正常标题/Continue输入脚本session32564。下一步先截图确认是否载入10:35城门，检查override加载日志、画面、GPU阶段和真实帧时间。
+
+## T59 阶段采集干扰修正与事件守卫
+
+- 更正上条wtrack性能归因。gfx-pass-profile会使indirect_dispatch_inputs_resident和owned_input_copy关闭GPU常驻快路径，整个运行区间都有影响。加profile的wtrack对照不能直接归因为wtrack变慢，已向用户纠正。GPASS仅用于该采集条件下GPU阶段分析。
+- 移走gfx-pass-profile到config-before-defaults-20261115/gfx-pass-profile-city，重启恢复正常间接绘制路径。片元111个优化模块正常加载88个、截图rg-opt-fragments-after-start.png，缺阶段采集时稳定城门约12.21FPS、GPU46.14ms、submit70.54ms、670draw/34dispatch，没有可确认的改善。日志rg-opt-fragments-normal-path.log。已把spv-override改名spv-override-opt-fragments-20261115，恢复原XGS入口，诊断派生物只留设备私有目录。
+- 发现gfx-pass-live有帧数上界却一直保留pass_prof_enabled，后续帧仍禁GPU快路径。新增呈现边界到达pass_prof_until后清除此flag，保留已录制slot的查询退休。真实block ASan/UBSan用例覆盖上界前/等于/越过、重复呈现边界、再次启动与无限窗口。测试pass-profile-expiry-test.log通过。
+- 新构建build-pass-profile-expiry.log退出0，APK SHA9ea1d4a04fc88958ac3209fe932781be481f5af1e16e82a6cf52ba70c46cad34，覆盖安装rg-pass-expiry-install.log退出0。源码尚待检查点提交，公开Release仍a35c458。
+- 下一轮gfx-defer-events1、gfx-event-guard1、wtrack0，无pass-profile，无SPV覆盖。用现有守卫查是否有guest直接读取待完成事件，守卫只作观察，fault后打开页不会强行完成GPU，不能当修复。脚本session81801正常标题/Continue10:35，之后抓evguard exact/other/write PC与LR，若画面闪即保存录像，结束时恢复defer0并移走guard marker。
+- GitHub默认分支work/snk-the1st-honor-gtpro已从cab771a安全快进到发布a35c458，tag和默认源码一致。当前T59实验独立分支，不改已发布APK。

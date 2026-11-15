@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-15T20:38:06.698335+08:00",
-  "phase": "RG477M CPU诊断轮询修正已安装，继续验证递归锁查找优化",
+  "updated_at": "2026-11-15T20:52:49.288130+08:00",
+  "phase": "社区版已发布，T59继续定位延迟事件与城镇帧时间",
   "coordinator": "Codex",
   "integration_branch": "task/T59-rg477m-frame-time",
   "baseline": {
@@ -228,12 +228,13 @@
     "缺省/marker/env/vendor编译门禁通过。graphics64项63通过1私有fixture跳过，runtime8通过，设备profile脚本通过。",
     "1.0.1-preview已在独立空轨仓发布，APK SHA ea32adb3d3e0fe8061dc33c5fb5ade73ca8ace9ce4cdfd2638787164fa864dc1，公开包回下载全SHA256SUMS验证通过。",
     "缺调试marker入口正常。原游戏新建save002艾里兹街道9:08，重启覆盖安装后Continue读回同位置和两个人物，缩略图正确。",
-    "T59轮询缓存候选通过graphics65项64通过1私有输入跳过。载入户外与城门人物正常。先后采样含移动/剧情状态变化，不作为严格同点FPS提升证据。"
+    "T59轮询缓存候选通过graphics65项64通过1私有输入跳过。载入户外与城门人物正常。先后采样含移动/剧情状态变化，不作为严格同点FPS提升证据。",
+    "T59图形66项65通过1私有fixture跳过，运行时9项通过。有限阶段采集到期后恢复GPU快路径的修正已构建装机。"
   ],
   "unverified": [
     "RG477M稳定30帧尚未达成。组合优化曾站立29.6帧，实际移动26.38帧且会天空闪烁，已弃用事件延迟。无闪烁配置城镇约10至20帧。",
     "除RG477M外的天玑机型仍待逐机验证，荣耀真机继续暂停。",
-    "T59诊断轮询逐帧缓存候选正在同点对照。性能目标保持进行中。"
+    "当前defer-events1加event-guard诊断可能复现天空闪烁，结束须恢复defer0与关闭守卫。尚未达到稳定30。"
   ],
   "historical_verified": [
     "v1.0.7 ExeFS/NSO 提取并集成，彻底消除卡带实体更新提示 (vis_9999)",
