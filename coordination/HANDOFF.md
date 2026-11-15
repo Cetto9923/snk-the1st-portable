@@ -598,3 +598,8 @@
 - batch-events-motion-plan.json预先确定frame13440至14040，实际23.448351694秒、601次成功queue callback、601 distinct-work、重复0、失败0。25.588FPS，p50 38.158ms、p95 48.658ms、p99 56.187ms、max67.105ms，>100ms为0。原始batch-events-motion.csv、batch-events-motion-metrics.json，未筛长帧。未达到稳定30。
 - 移动结束rg-batch-motion-performance-end.png在城门内右墙边，左右输入因相机跟随有少量位置漂移，仍是真实城镇移动。后续与其他配置比较须核画面/位置，不能当逐像素同轨迹。
 - 现在保持APK45ea、defer2/wtrack0，无guard/profile/override/live-off，只新增gfx-async-submit1重启，正常Continue原save00310:35。下一步测默认调度下FPS、async drain/wait与显示，再用现有gfx-render-cpu标记作独立绑核对照，避免把旧defer0或旧写回顺序时的结果当现版结论。
+
+## T59 异步默认调度记录
+
+- PID10492、gfx-async-submit1/defer2/wtrack0同城门约18.0-18.4FPS、CPU提交28ms、GPU24ms，2次Vulkan提交，较async0约26FPS更慢。画面截图rg-async-batch-events-scene.png，原始rg-async-batch-events-scene.log。top可见dm-gfx与guest线程分别占CPU，没有FFRS进程。
+- 随后仅将gfx-render-cpu设7，现有worker自身亲和诊断可实时生效，保留其余设置。下一步核成功日志与FPS。若仍无改善，恢复async0及render-cpu缺省，再尝试现有只读vertex/index跨帧缓存gfx-vcache，依赖现有dirty tracker，必须验证动态人物、草叶与过图。
