@@ -184,6 +184,13 @@ static void log_stats(audio_output *out,const char *reason) {
         (unsigned long long)out->stats.samples_written,out->stats.peak,AAudioStream_getState(out->stream),
         AAudioStream_getDeviceId(out->stream),AAudioStream_getXRunCount(out->stream),
         (long long)AAudioStream_getFramesWritten(out->stream),(long long)AAudioStream_getFramesRead(out->stream));
+    int64_t position=0,presentation_ns=0;
+    aaudio_result_t timestamp_result=AAudioStream_getTimestamp(out->stream,CLOCK_MONOTONIC,&position,&presentation_ns);
+    uint64_t observed_ns=audio_now_ns();
+    fprintf(stderr,"[audio] presentation key=%p result=%d position_frames=%lld timestamp_ns=%lld observed_ns=%llu written_frames=%lld rate=%d fifo_frames=%u\n",
+        out->key,timestamp_result,(long long)position,(long long)presentation_ns,
+        (unsigned long long)observed_ns,(long long)AAudioStream_getFramesWritten(out->stream),
+        AAudioStream_getSampleRate(out->stream),out->paced?ffrs_audio_fifo_size(&out->fifo):0);
 #else
     (void)out;(void)reason;
 #endif
@@ -205,9 +212,15 @@ static aaudio_result_t open_aaudio_stream(audio_output *out) {
     AAudioStreamBuilder_setChannelCount(builder, out->channels);
     AAudioStreamBuilder_setUsage(builder, AAUDIO_USAGE_GAME);
     AAudioStreamBuilder_setContentType(builder, AAUDIO_CONTENT_TYPE_MUSIC);
-    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_NONE);
+    AAudioStreamBuilder_setPerformanceMode(builder, AAUDIO_PERFORMANCE_MODE_LOW_LATENCY);
 
     status = AAudioStreamBuilder_openStream(builder, &out->stream);
+    if(status!=AAUDIO_OK){
+        if(out->stream){AAudioStream_close(out->stream);out->stream=NULL;}
+        fprintf(stderr,"[audio] low latency open failed=%d; retrying default performance mode\n",status);
+        AAudioStreamBuilder_setPerformanceMode(builder,AAUDIO_PERFORMANCE_MODE_NONE);
+        status=AAudioStreamBuilder_openStream(builder,&out->stream);
+    }
     AAudioStreamBuilder_delete(builder);
 
     if (status == AAUDIO_OK && out->stream) {
@@ -226,10 +239,10 @@ static aaudio_result_t open_aaudio_stream(audio_output *out) {
         if (desired > 0) {
             AAudioStream_setBufferSizeInFrames(out->stream, desired);
         }
-        fprintf(stderr, "[audio] real AudioOut stream ready: key=%p rate=%d channels=%u device=%d burst=%d capacity=%d buf=%d\n",
+        fprintf(stderr, "[audio] real AudioOut stream ready: key=%p rate=%d channels=%u device=%d burst=%d capacity=%d buf=%d performance=%d\n",
                 out->key, out->rate, out->channels,
                 AAudioStream_getDeviceId(out->stream), burst, cap,
-                AAudioStream_getBufferSizeInFrames(out->stream));
+                AAudioStream_getBufferSizeInFrames(out->stream),AAudioStream_getPerformanceMode(out->stream));
     }
     return status;
 }

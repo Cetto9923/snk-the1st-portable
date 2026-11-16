@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T12:06:17.234201+08:00",
-  "phase": "T78 bounded cache invalidation for audited CPU writeback reads",
+  "updated_at": "2026-11-16T12:25:02.733009+08:00",
+  "phase": "T79 音频输出延迟与音画同步排查",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -26,13 +26,11 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T78",
+      "task": "T79",
       "paths": [
         "coordination/",
-        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
-        "tests/graphics/test_snk_indirect_templates.py",
-        "tests/graphics/test_snk_writeback_cache_range.py",
-        "tests/graphics/test_snk_writeback_coalescing.py"
+        "src/runtime/hle/audio_bridge.c",
+        "tests/native/audio_bridge_transport_contract.c"
       ]
     }
   ],
@@ -925,6 +923,41 @@
       ],
       "recovery": "0222823 / sourceb3cd31f / APK78a1dfc1;all original saves retained",
       "checkpoint": "APK72391561 /93 graphics:92pass1skip,runtime10,5 negative controls;HOME3;overall FPS not improved. New latest save015 backed up with all saves. Menu-only gate-writeback-clean-after-user-motion cancelled and EXCLUDED. T78 flower regression pending."
+    },
+    {
+      "id": "T79",
+      "role": "CORE",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T79-audio-output-latency",
+      "dependencies": [
+        "T76"
+      ],
+      "pass_gates": [],
+      "objective": "降低已测到的扬声器深缓冲延迟，检查真实音画时间关系",
+      "inputs": [
+        "APK72391561 track360 DEEP_BUFFER speaker estimated254.57ms underruns0",
+        "Android官方AAudio低延迟指南",
+        "2f2a5f5源代码及最新用户save015完整备份"
+      ],
+      "outputs": [
+        "最小低延迟请求与失败回退",
+        "实际时间戳及同场景系统轨道证据",
+        "音频传输和真实游戏稳定性回归"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/runtime/hle/audio_bridge.c",
+        "tests/native/audio_bridge_transport_contract.c"
+      ],
+      "acceptance": [
+        "真实音频队列、速率、字节和重连语义保持",
+        "低延迟请求失败可回原模式",
+        "声卡时间戳有效性检查，物理音画对应尚需真实事件验证",
+        "不把欠载0或输出延迟当口型同步验收"
+      ],
+      "recovery": "APK72391561 /2f2a5f5;原数据和存档原样",
+      "checkpoint": "已恢复APK89e30e42/PID13147/协会save015。相同时间戳+HLE队列控制1d5f4be7的66样本尾部等待中位214.906ms；候选223样本136.906ms、冷重启45样本101.096ms，xruns均0。93图形92pass1skip/10runtime/2负控/14open-close组件/HOME3通过，室内1200SF29.9946fps。原11存档全SHA及tar逐字节一致，测试媒体音量恢复原0。口型/全过场与户外30、其它设备继续，T79保持in_progress。"
     }
   ],
   "blockers": [],

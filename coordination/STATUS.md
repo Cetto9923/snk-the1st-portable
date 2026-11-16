@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T12:06:17.234201+08:00
-阶段：T78 bounded cache invalidation for audited CPU writeback reads
+状态事件时间：2026-11-16T12:25:02.733009+08:00
+阶段：T79 音频输出延迟与音画同步排查
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -36,10 +36,11 @@
 | T76 | GRAPHICS_RUNTIME | passed | Codex | T75 | 无额外门禁 | task/T76-texture-descriptor-index |
 | T77 | ANDROID_RUNTIME | passed | Codex | T76 | 无额外门禁 | task/T77-android-performance-hint |
 | T78 | GRAPHICS_RUNTIME | in_progress | Codex | T76, T77 | 无额外门禁 | task/T78-writeback-cache-range |
+| T79 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T79-audio-output-latency |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T78", "paths": ["coordination/", "src/graphics/nvn_vulkan/engine/xbg_game.cpp", "tests/graphics/test_snk_indirect_templates.py", "tests/graphics/test_snk_writeback_cache_range.py", "tests/graphics/test_snk_writeback_coalescing.py"]}
+- {"owner": "Codex", "task": "T79", "paths": ["coordination/", "src/runtime/hle/audio_bridge.c", "tests/native/audio_bridge_transport_contract.c"]}
 
 ## 阻塞
 

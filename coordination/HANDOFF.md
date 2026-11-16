@@ -1080,3 +1080,20 @@
 
 - 新冷Continue读到用户新进度01:27:30、协会，停在确认框。误启动的gate-writeback-clean-after-user-motion已SIGINT停止并EXCLUDED，不能用菜单算帧率。完整存档备份saves-after-user-play-20261116.tar已解析核实11文件、含新save015及原008/007并逐项SHA；新save015 SHA ad2a49fc23ff578b0d27e7fd7633406f4bedd2c3afeaa78545aec8c71fc61bc8。补A后实际协会人物/场景可见。T78花盆回归与整体收益尚未通过，3行产品修改保存检查点。
 - 用户补充音画同步/声音延迟。当前723/PID25575，AudioFlinger本app track360、扬声器0x2、DEEP_BUFFER输出、系统估算延迟254.57ms、欠载0。源码open_aaudio_stream明确PERFORMANCE_MODE_NONE；需先试请求LOW_LATENCY并验证实际通道、延迟与稳定性。该数字是系统轨道估算，非口型音画相对延迟实测。av-before-audioflinger.txt与两张实际截图保留。荣耀继续暂停。
+
+## T79 音频输出延迟与音画同步
+
+- 分支task/T79-audio-output-latency，HEAD2f2a5f5。只改audio_bridge.c请求LOW_LATENCY、失败后NONE重开，以及每秒同源时钟AAudio时间戳日志；原PCM字节、速率、缓冲策略、回收、暂停和重连继续原实现。默认shared保持。Android官方依据 https://developer.android.com/ndk/guides/audio/aaudio/aaudio 与 https://developer.android.com/games/sdk/oboe/low-latency-audio 。
+- APK89e30e42e2296da778540142db179c96471b80b05ecae9249021969e3ab1ac96，ELFf178f1fe055f9c9023691269cf48ad886e77602e72d0ec2557875ed3b0a146f0。build-audio-low-latency-candidate.log退出0，完整归档及audio-low-latency-candidate-provenance.json。真实477M/PID2768实际performance10即NONE，低延迟请求未获完整低延迟模式，但选到PRIMARY输出、burst1026/buf2052；原NONE为DEEP_BUFFER/burst3075/buf6150。不能声称获得FAST或MMAP，真实MMAP endpoint仍0。
+- 同存档协会speaker track估算原10样本219.0..252.18ms、中位232.03，候选12样本83.85..105.62、中位84.255，原始dumpsys与av-low-latency-comparison.json保留。这是系统轨道估算，不包括HLE积压，不能当口型音画偏差。候选另223次AAudio时间戳加上source submitted-written，最新PCM尾部预计播放等待129.698..146.759ms、中位136.906；输出部分中位85.242/source队列50ms。全部xruns0，原始av-low-latency-speaker-steady-tail.log/json保留。
+- 93图形92通过1私有fixture跳过、10runtime通过。实际audio_bridge_transport_contract以NDK28编译在477M跑stub，14次成功open/close计数一致、错误0，覆盖原逐字节多声道、阻塞/部分写/timeout/disconnect/stop/restart以及新增LOW_LATENCY成功和失败NONE回退。2负控真实断言失败，request-default exit1/14断言、missing-fallback exit1/5174断言。HOST实际audio_transport_contract通过ASan/UBSan，错误0。并非独立QA或声学验收。
+- HOME三轮同PID2768、实际draw/present增长/result0，rg-audio-low-latency-cycles.json。后台之后音频继续非零并有有效时间戳。协会save015附近1200移动间隔，association-audio-low-latency-motion原日志：1201不同工作帧30.00016FPS/p95 34.268ms/max36.690ms，无失败重复；完整SF29.99464FPS/p95 33.166ms/p99 49.590ms/max49.671ms，无超过50/100ms。19批CPU7.216/GPU22.391/draw268.5，场景明显轻于城门，不能归因到音频修改或验收户外30。
+- scrcpy playback+dup三次得到全零音轨，第四次已确认设备媒体3档仍全零，该捕获路径兼容/策略原因未确认，全部EXCLUDED，不能当游戏无声或同步通过。最初设备媒体确为静音0，cmd media_session set3未解除静音，后来用标准VOLUME_UP到3档才确认未静音；结束时须恢复原0。output源数字捕获能获得非零音频，18秒NPC对话记录av-low-latency-dialogue-output.mkv，有真实字幕/人物/音频；排除首秒后非零帧99.9846%、最长全零1采样。output捕获会切remote_submix，不能据此验收扬声器口型同步或物理延迟。捕获后回speaker ready已出现，仍需最终核对。
+- 为完整计入应用排队，临时构建只将首次性能请求恢复NONE、保留相同时间戳的控制包1d5f4be7a046312a597b85095df8392efed99d51cad5dd31f5c84847245bde2f。控制source、APK/ELF/provenance已精确归档。build退出0后finally已恢复产品源SHAaef803af...，默认构建路径当前是控制包，后续安装只用显式归档APK。当前rg-audio-latency-control安装/冷Continue最新save015进行中；先视检真实场景，再取60秒时间戳与HLE队列对照，最后必须安装回89候选并恢复用户新存档场景/原静音0。全口型/过场音画同步和户外稳定30继续，荣耀暂停，公共版本仍ba052997。
+
+### T79 完整排队对照与恢复检查点
+
+- 控制1d5f4be7已实际冷Continue到同一协会，首图确认/PID11450、扬声器DEEP_BUFFER。排除首图以前时间戳，66样本source队列0，最新PCM尾部等待211.450..215.236ms、中位214.906。控制APK仅将首次模式请求从LOW_LATENCY改NONE，含同等时间戳日志，全部样本xruns0。
+- 已显式覆盖恢复89e30e42候选并冷Continue，最终PID13147，首图人物/协会/HUD正常，ready device3/burst1026/buf2052/performance10。首图以后45个样本，output中位81.718ms/source16.667ms/合计101.096ms，范围94.295..110.020ms，全部xruns0。前长运行223样本合计中位136.906ms，运行时长及捕获/后台切换条件不同，保留两轮结果，不只报较小读数。av-low-latency-final-comparison.json汇总。这里是时间戳推算的最新PCM尾部等待，物理声画事件/口型偏差依旧未直接测定。
+- 最终全11存档重新tar备份并逐文件SHA解析校验，与用户新进度备份完全相同，tar SHA也一致b94dc5511614a7b1064a6aed459cf927806b3fdcb3c19e964c38f9e894df5237。测试临时媒体3档已用标准音量键恢复原0，并cmd media_session get验证，av-final-volume-restoration.txt。最终装机89候选，默认构建目录仍为控制1d5f，后续安装继续显式路径或重新构建实际产品源码。公共预览ba052997。
+- T79按输出延迟改善、传输回归和恢复范围保存源码检查点，状态仍in_progress。下一步继续对白/过场真实事件的物理音画同步验证及城门/花盆户外低帧率，不以本次室内29.995验收整体稳定30。荣耀及其它机型未重新实测。
