@@ -980,3 +980,25 @@
 - 最终APK三轮HOME同PID10658、真实draw/present增长且result0，rg-community-102-resume-*末图人物/场景可见。原音频日志非零、AAudio_state4/xruns0，仅日志范围。存档继续使用原save008，原有save007及全槽备份保留。当前源码/版本/文档待冻结为发布提交，再运行既有package_community_release.py并在独立空轨仓创建v1.0.2-preview，随后回下载全SHA验证。荣耀暂停，稳定30总目标继续。
 - 发布源码冻结提交2867bcf9f07e244c0bc912070593ea3b1640f477，打包时工作树干净。既有package_community_release.py生成APK/社区ZIP/文档/9许可证/manifest/全SHA，另外保留与上一公开版本一致的英文独立文档文件名。v1.0.2-preview已公开为prerelease，6个附件，https://github.com/Cetto9923/snk-the1st-portable/releases/tag/v1.0.2-preview 。APK仍ba052997，标签实际解析到2867bcf。
 - 全部6公开附件回下载后与本地产物逐字节一致，解开社区ZIP后17项SHA256SUMS全部通过，退出0。community-102-public-download-verify.json记录目录与每个哈希。发布manifest明确source_tree_dirty=false/game_data=user_supplied。当前包仅应用、自有界面和许可证资源，原游戏数据由用户提供。该发布任务完成，稳定30目标继续，不能把预览版发布等同于性能目标完成。
+
+## T74 系统调度与剩余CPU开销
+
+- 从c2a2ac5创建task/T74-scheduling-trace，继续使用公开ba052997与RG477M默认配置，冷Continue8首图人物/城门确认。初次Perfetto不能直接读取shell_data_file配置，已改为标准输入，不改变系统权限。初次失败run日志和1500帧CSV保留，未当作有效系统轨迹。5秒stdin烟测发现配置缺flush与不支持的atrace事件，随后补flush1000ms、移除额外atrace类别，保留sched/freq/idle/process/FrameTimeline。
+- gate-community-102-sched-stdin.pftrace为60秒43,373,435字节真实轨迹，config哈希/trace哈希/PID23686/APKba052997/退出0均在-perfetto-provenance.json。Perfetto stats无非info错误或数据丢失。1500移动间隔工作28.393FPS/max57.766ms仅诊断，不作产品收益验收。实际SNK是唯一运行中的FFRS/SNK程序。热服务cached和HAL状态仍不同，当前HAL CPU88.625/SKIN52.496原文保留，尚未据此归因。
+- 60秒内主线程23730/ffrs-guest实际Running56.981秒，Runnable合计1.846秒、Sleep1.144秒、D0.000607秒。5秒前置样本中该线程约99.95%运行时间在大核4–7，优先级120。因此没有先采用绑核或提高优先级。FrameTimeline只含SurfaceFlinger/SystemUI，不能把它当SNK物理呈现证明。游戏CPU帧时间通过CSV与clock_snapshot再对齐。
+- NDK实际simpleperf用户态500Hz/20秒，14884采样、丢失0，原始perf.data/工具SHA/完整命令/PID同23686保留。主线程9053样本中memcpy12.98%、descriptors_build4.95%、draw4.48%、pthread_mutex_lock4.25%、descriptors3.82%、mutex_unlock2.72%、snapshot2.13%、nvnBufferFlushMappedRange1.61%。两种调用链模式未提供可靠memcpy父链，未把memcpy归因到上传或GPU写回。精确ELF通过真实映射路径提供符号，原始报告和FP补充保留。
+- 已读到FlushMappedRange/InvalidateMappedRange对全16384槽做buffer_find，仅为前8条日志计算initialized；每次仍计calls/flushes/invalidates并保持原互斥。下一步仅把这项诊断查找限制到实际需要打印的调用，先实际函数统计/并发/日志回归，再比较真实游戏CPU与帧间隔。原始返回、内存与GPU操作入口保留，稳定30仍未完成。
+
+### T74 候选装机与同点对照
+
+- 全1500间隔与系统clock_snapshot对齐，时钟偏移-616至-76ns，23个>50ms间隔实际Running占比平均95.526%。最长57.766ms中Running55.818ms，Runnable约1.407ms、Sleep0.541ms。main-long-intervals.json与SQL/CSV保留。SPAN_JOIN真实sched×CPUfreq时间加权主线程56.981秒均值2.758526GHz，CPU7运行34.216秒均值3.104900GHz，其余大核约2.23GHz，尚未据此归因热降频。
+- 两个flush/invalidate实际函数仅在原前8条日志中查buffer registry，保留每次统计/互斥/返回。宿主ASan/UBSan覆盖unknown/NULL/uninitialized/known、负offset/SIZE_MAX、8线程统计和日志上限，4负控实际断言失败。graphics91项90通过1私有fixture跳过，runtime9通过。build-buffer-flush-logging-candidate.log退出0，APK5e5aa7e836ef48c2c15c107047636e1b16124ddf3973af4c56499ea9963cdf13/精确ELF/provenance保留，内部候选未发布。
+- 公开ba052997冷Continue8作为同点对照，gate-buffer-flush-control-motion-*各2400移动间隔，工作27.824322FPS/p95 46.241ms/max82.467ms，完整SF27.821285FPS/p95 49.645ms/max115.708ms，物理>100ms2个，无失败/重复工作。39批CPU19.907ms/GPU22.816ms、draw870.138。当前较早29.9窗口变慢，尚未归因，不能选择性忽略。
+- 5e已签名覆盖并Continue8，rg-buffer-flush-logging-candidate-first.png人物/城门/亮度可见。同缺省无marker/450底座30/4槽/cache1/texdirty1/BC2/FIFO/timing1/PAD可见/Android摇杆，gate-buffer-flush-candidate-motion-*正在2400间隔与连续SF。下一步先读两份metrics和perf batches，再决定收益与后续瓶颈。保存008/007和备份保留，荣耀暂停。
+
+### T74 实机完成检查点
+
+- 5e同save008摇杆2400间隔，2401不同工作帧28.375725FPS/p95 44.966ms/max71.271ms，无失败/重复/>100ms。完整SF物理28.375436FPS/p95 49.622ms/max115.735ms，>50ms64个/>100ms2个。39批CPU19.593ms/GPU22.908ms、draw869.590。相邻公开包对照SF27.821FPS/CPU19.907ms，本轮有小幅改善，仍有约116ms停顿，整体稳定30继续。
+- 真实游戏三轮HOME3秒/前台10秒，同PID22441且draw/present增长、result0，rg-buffer-flush-logging-candidate-cycles.json与三截图保留。正常System→Load列表save008/save007缩略图可见，确认save007时间17:04/Playtime45:23再载入，flower-ready截图人物/花叶/房屋可见。save007同2400摇杆工作27.069945FPS/p95 46.406ms/max75.139ms，无失败/重复/>100ms；完整SF27.086332FPS/p95 66.048ms/max115.500ms，>100ms1个。无较早短窗替代此长测。
+- 重新逐条解析simpleperf原始dump，先前报告视图未完整显示的调用链已有直接父函数。主线程9053样本中，1175个memcpy叶样本的765个直接父为apply_writeback、261个为stream_buffer。168个strcmp中162个父为nso_find_symbol，76个nso_find_symbol叶样本全部来自interposed_deallocate。后两项为互斥叶PC样本，合计238/9053约2.63%。rg-community-102-libc-direct-parents.json与20MiB原始dump保留，修正此前“memcpy父链尚未可靠取得”的记录。
+- T74调度证据与诊断查找修正按此范围完成。下一步T75拟将四个不可变主模块导出分配器偏移在模块成功加载时解析一次，保留每次nso_entry_address健康/范围验证与原nb_call_from_host、缺符号拒绝和guest堆归属。原模块字节与游戏存档不修改。更大的GPU写回占用已量化，后续另按同步语义分析。

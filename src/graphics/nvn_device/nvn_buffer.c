@@ -841,20 +841,22 @@ ptrdiff_t nvnBufferGetMemoryOffset(const void *buffer) {
  * because pretending that a cache operation happened when none was needed
  * would hide a real problem later. */
 void nvnBufferFlushMappedRange(const void *buffer, ptrdiff_t offset, size_t size) {
-    nvn_buffer_state *found;
+    static unsigned said;
+    const int log_call = __atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8;
     int known = 0;
     pthread_mutex_lock(&s_buffer_lock);
     s_stats.calls++;
     s_stats.flushes++;
-    found = buffer_find((void *)(uintptr_t)buffer, 0);
-    known = found != NULL && found->initialized;
+    if (log_call) {
+        nvn_buffer_state *found = buffer_find((void *)(uintptr_t)buffer, 0);
+        known = found != NULL && found->initialized;
+    }
     pthread_mutex_unlock(&s_buffer_lock);
     /* Per-call stdio here was measured at ~700 KB of log per frame (19 779
      * lines in a 6-frame window): the call is on the per-frame hot path, so
      * the explanation is printed a few times and the rest is counted in
      * s_stats.flushes. The reasoning itself does not change per call. */
-    static unsigned said;
-    if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+    if (log_call)
         fprintf(stderr, "[nvn] nvnBufferFlushMappedRange: buffer=%p offset=%" PRIdPTR " size=%zu initialized=%d; the "
                         "storage is host memory the guest writes itself, so it is already coherent\n",
                 buffer, offset, size, known);
@@ -866,16 +868,18 @@ void nvnBufferFlushMappedRange(const void *buffer, ptrdiff_t offset, size_t size
  * The reference host records this as an empty operation as well
  * (hle_nvn.c:1785), for the same reason as the flush. */
 void nvnBufferInvalidateMappedRange(const void *buffer, ptrdiff_t offset, size_t size) {
-    nvn_buffer_state *found;
+    static unsigned said;
+    const int log_call = __atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8;
     int known = 0;
     pthread_mutex_lock(&s_buffer_lock);
     s_stats.calls++;
     s_stats.invalidates++;
-    found = buffer_find((void *)(uintptr_t)buffer, 0);
-    known = found != NULL && found->initialized;
+    if (log_call) {
+        nvn_buffer_state *found = buffer_find((void *)(uintptr_t)buffer, 0);
+        known = found != NULL && found->initialized;
+    }
     pthread_mutex_unlock(&s_buffer_lock);
-    static unsigned said;
-    if (__atomic_fetch_add(&said, 1, __ATOMIC_RELAXED) < 8)
+    if (log_call)
         fprintf(stderr, "[nvn] nvnBufferInvalidateMappedRange: buffer=%p offset=%" PRIdPTR " size=%zu initialized=%d; the "
                         "storage is host memory the guest writes itself, so there is no stale cache to drop\n",
                 buffer, offset, size, known);

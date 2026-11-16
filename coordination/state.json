@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T08:54:21.196694+08:00",
-  "phase": "T73 community preview 1.0.2",
+  "updated_at": "2026-11-16T09:54:59.782822+08:00",
+  "phase": "T74 system scheduling trace and remaining long frames",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -732,6 +732,42 @@
       ],
       "recovery": "485bd2b / apk-rg477m-defaults-candidate.apk(0dfca4a6); public v1.0.1-preview",
       "checkpoint": "v1.0.2-preview public / tag2867bcf / APKba052997 / 6 downloaded assets byte-identical,17 SHA verified exit0 / source clean / known99ms stalls retained in notes / overall performance goal active"
+    },
+    {
+      "id": "T74",
+      "role": "GRAPHICS_RUNTIME",
+      "status": "passed",
+      "owner": "Codex",
+      "branch": "task/T74-scheduling-trace",
+      "dependencies": [
+        "T72",
+        "T73"
+      ],
+      "pass_gates": [],
+      "objective": "Correlate remaining real-scene long intervals with CPU scheduling and frame timeline, then fix the proven bottleneck toward stable30",
+      "inputs": [
+        "published v1.0.2-preview APKba052997 / source2867bcf",
+        "same native runtime gate/flower2400 SF p95~33.2ms and max~99ms",
+        "official Perfetto34 device supports sched and FrameTimeline; verified native Mac processor59.1"
+      ],
+      "outputs": [
+        "bounded raw system trace with exact APK/PID/config/frame-window provenance",
+        "clock-aligned long-frame thread run/wait evidence",
+        "minimal proven fix and full distinct-work/physical presentation regression"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/graphics/nvn_device/nvn_buffer.c",
+        "tests/graphics/test_snk_buffer_flush_logging.py"
+      ],
+      "acceptance": [
+        "no guessed root cause from average FPS or a single screenshot",
+        "tracing windows explicitly diagnostic with overhead",
+        "game speed/input/audio/resource lifetime preserved",
+        "target completion requires real playable-scene stable30 evidence"
+      ],
+      "recovery": "c2a2ac5 / public APKba052997 / RG477M packaged defaults / user save008 backup and save007 retained",
+      "checkpoint": "APK5e5aa7e8 / graphics91:90pass1private-skip,runtime9,4 negative controls / save008 SF28.375FPS vs control27.821FPS;CPU19.907->19.593ms / save007 SF27.086FPS,p95=66.048ms / HOME3 same PID22441 / scheduling+bounded logging scope passed; overall stable30 pending"
     }
   ],
   "blockers": [],
@@ -779,6 +815,7 @@
     "T73 v1.0.2-preview已在独立空轨仓公开，标签2867bcf，APKba052997。6附件回下载逐字节一致，社区包解开后17项SHA通过，原游戏数据由用户提供。"
   ],
   "unverified": [
+    "T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.",
     "RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。",
     "高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。",
     "RG477M缓存/defer2/450/4槽/FIFO/timing/BC2已固化并发布1.0.2-preview，草叶/天空更多场景、过图和长流程仍待回归，物理约99ms长间隔继续定位。",
