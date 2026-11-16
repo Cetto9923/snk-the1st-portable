@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T09:54:59.782822+08:00
-阶段：T74 system scheduling trace and remaining long frames
+状态事件时间：2026-11-16T10:24:34.551246+08:00
+阶段：T75 immutable guest allocator export lookup cache
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -32,6 +32,7 @@
 | T72 | GRAPHICS | passed | Codex | T71 | 无额外门禁 | task/T72-bc-parallel-fast |
 | T73 | RELEASE_ANDROID | passed | Codex | T72 | 无额外门禁 | task/T73-community-preview-102 |
 | T74 | GRAPHICS_RUNTIME | passed | Codex | T72, T73 | 无额外门禁 | task/T74-scheduling-trace |
+| T75 | RUNTIME | passed | Codex | T74 | 无额外门禁 | task/T75-allocator-symbol-cache |
 
 ## 独占写入
 
@@ -87,6 +88,7 @@
 
 ## 未验证
 
+- T75 latest installed9b410c8b: gate SF29.580 then29.035;flower28.233 with132.294ms physical max. Stable30 remains pending.
 - T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.
 - RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。

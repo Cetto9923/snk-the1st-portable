@@ -95,11 +95,19 @@ struct guest_dso_record {
     nso_module_tls_template tls_template;
     nso_module_tls_image *primary_tls_image;
 };
+enum interposed_allocator {
+    INTERPOSED_ALIGNED_ALLOC,
+    INTERPOSED_FREE,
+    INTERPOSED_DELETE,
+    INTERPOSED_DELETE_ARRAY,
+    INTERPOSED_ALLOCATOR_COUNT
+};
 struct guest_process {
     pthread_mutex_t mutex;
     guest_context *context; /* Private: no raw tickets/Context escape this owner. */
     guest_pages *pages; /* Sole VA/page/ticket authority. */
     nso_module *module;
+    uint64_t interposed_allocator_offsets[INTERPOSED_ALLOCATOR_COUNT];
     void *module_ticket;
     size_t module_bytes;
     int module_committed,module_ready,running,quarantined,diagnostic_retained;
@@ -435,6 +443,18 @@ struct nso_result guest_process_create_with_resources(const struct guest_process
 struct nso_result guest_process_create(const struct guest_process_config *config,guest_process **out) {
     return guest_process_create_with_arguments(config,0,NULL,out);
 }
+/* Symbol values are immutable for this module. Resolve before guest threads
+ * start, while the process mutex is held. Calls still validate each entry
+ * against the live module before crossing the native boundary. */
+static void prepare_interposed_allocators(guest_process *p) {
+    static const char *const names[INTERPOSED_ALLOCATOR_COUNT] = {
+        "aligned_alloc", "free", "_ZdlPv", "_ZdaPv"
+    };
+    for (unsigned i = 0; i < INTERPOSED_ALLOCATOR_COUNT; ++i) {
+        uint32_t symbol = nso_find_symbol(p->module, names[i]);
+        p->interposed_allocator_offsets[i] = symbol ? nso_symbol_value(p->module, symbol) : 0;
+    }
+}
 static void guest_process_text_filter(void *text, size_t bytes, void *opaque) {
     (void)opaque;
     struct guest_tp_patch_report report;
@@ -512,6 +532,7 @@ struct nso_result guest_process_load(guest_process *p,const char *path,char *err
             if(cleanup.status!=NSO_OK)p->quarantined=1;
         } else {
             nso_set_unload_observer(p->module,nso_host_exit_scope_end,p->module);
+            prepare_interposed_allocators(p);
             p->module_ready=1;
         }
     }
@@ -1242,20 +1263,18 @@ void guest_process_bind_child_thread(void) {
 int guest_process_interposed_aligned_alloc(size_t alignment,size_t bytes,void **out) {
     guest_process *p=current_process;
     if(!p || !p->module)return 0;
-    uint32_t symbol=nso_find_symbol(p->module,"aligned_alloc");
-    uint64_t offset=symbol?nso_symbol_value(p->module,symbol):0,address=0;
+    uint64_t offset=p->interposed_allocator_offsets[INTERPOSED_ALIGNED_ALLOC],address=0;
     if(!offset || nso_entry_address(p->module,offset,&address).status!=NSO_OK)return -1;
     nb_registers packet={.x={alignment,bytes}};
     nb_status r=nb_call_from_host(&p->boundary,(void(*)(void))(uintptr_t)address,&packet);
     if(r!=NB_OK){fprintf(stderr,"[allocator-interpose] boundary=%d; refusing foreign heap fallback\n",r);return -1;}
     *out=(void*)(uintptr_t)packet.x[0];return 1;
 }
-static int interposed_deallocate(void *pointer, const char *name) {
+static int interposed_deallocate(void *pointer, enum interposed_allocator allocator, const char *name) {
     guest_process *p=current_process;
     if(!p || !p->module)return 0;
     if(!pointer)return 1;
-    uint32_t symbol=nso_find_symbol(p->module,name);
-    uint64_t offset=symbol?nso_symbol_value(p->module,symbol):0,address=0;
+    uint64_t offset=p->interposed_allocator_offsets[allocator],address=0;
     if(!offset || nso_entry_address(p->module,offset,&address).status!=NSO_OK)return -1;
     nb_registers packet={.x={(uintptr_t)pointer}};
     nb_status r=nb_call_from_host(&p->boundary,(void(*)(void))(uintptr_t)address,&packet);
@@ -1263,10 +1282,11 @@ static int interposed_deallocate(void *pointer, const char *name) {
     return 1;
 }
 int guest_process_interposed_free(void *pointer) {
-    return interposed_deallocate(pointer, "free");
+    return interposed_deallocate(pointer, INTERPOSED_FREE, "free");
 }
 int guest_process_interposed_delete(void *pointer, bool array) {
-    return interposed_deallocate(pointer, array ? "_ZdaPv" : "_ZdlPv");
+    return interposed_deallocate(pointer, array ? INTERPOSED_DELETE_ARRAY : INTERPOSED_DELETE,
+                                array ? "_ZdaPv" : "_ZdlPv");
 }
 /* Called after nb_call_child returns and before unbinding either TLS domain. */
 int guest_process_invoke_thread_exit(void (*destructor)(void *),void *value) {

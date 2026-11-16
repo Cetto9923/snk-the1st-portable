@@ -13,6 +13,10 @@ class SizedDeleteTests(unittest.TestCase):
         start = source.index('static int interposed_deallocate(')
         end = source.index('/* Called after nb_call_child', start)
         implementation = source[start:end]
+        enum_start = source.index('enum interposed_allocator {')
+        enum_end = source.index('};', enum_start) + 2
+        prepare_start = source.index('static void prepare_interposed_allocators(')
+        prepare_end = source.index('\n}', prepare_start) + 2
         program = r'''
 #include "guest_process.h"
 #include "snk_libcxx.h"
@@ -21,23 +25,30 @@ class SizedDeleteTests(unittest.TestCase):
 #include <stdio.h>
 #include <string.h>
 
-struct guest_process { nso_module *module; nb_scope boundary; };
+''' + source[enum_start:enum_end] + r'''
+struct guest_process {
+    nso_module *module;
+    nb_scope boundary;
+    uint64_t interposed_allocator_offsets[INTERPOSED_ALLOCATOR_COUNT];
+};
 static guest_process process;
 static guest_process *current_process;
-static int calls[4], missing, boundary_failure, live[4];
+static int calls[4], missing, boundary_failure, live[4], lookups;
 static unsigned char blocks[4];
 
 uint32_t nso_find_symbol(const nso_module *module, const char *name) {
     assert(module == process.module);
+    ++lookups;
     if (missing) return 0;
     if (!strcmp(name, "free")) return 1;
     if (!strcmp(name, "_ZdlPv")) return 2;
     if (!strcmp(name, "_ZdaPv")) return 3;
+    if (!strcmp(name, "aligned_alloc")) return 4;
     assert(0);
     return 0;
 }
 uint64_t nso_symbol_value(const nso_module *module, uint32_t index) {
-    assert(module == process.module && index >= 1 && index <= 3);
+    assert(module == process.module && index >= 1 && index <= 4);
     return index;
 }
 struct nso_result nso_entry_address(const nso_module *module,
@@ -59,7 +70,7 @@ nb_status nb_call_from_host(nb_scope *scope, void (*entry)(void),
     calls[operation]++;
     return NB_OK;
 }
-''' + implementation + r'''
+''' + source[prepare_start:prepare_end] + implementation + r'''
 int main(void) {
     unsigned arguments = 99, returns = 99;
     uint64_t (*scalar)(void *, uint64_t) = (void *)snk_libcxx_lookup(
@@ -70,6 +81,8 @@ int main(void) {
     assert(array && array != scalar && arguments == 2 && returns == 0);
     current_process = &process;
     process.module = (nso_module *)&process;
+    prepare_interposed_allocators(&process);
+    assert(lookups == 4);
     scalar(NULL, 48);
     array(NULL, 48);
     for (int i = 0; i < 100000; ++i) {
@@ -79,6 +92,7 @@ int main(void) {
         assert(!live[2] && !live[3]);
     }
     assert(calls[1] == 0 && calls[2] == 100000 && calls[3] == 100000);
+    assert(lookups == 4);
     live[1] = 1;
     assert(guest_process_interposed_free(&blocks[1]) == 1);
     assert(!live[1] && calls[1] == 1);
@@ -88,9 +102,11 @@ int main(void) {
     assert(live[2] == 1 && calls[1] == 1);
     boundary_failure = 0;
     missing = 1;
+    prepare_interposed_allocators(&process);
     assert(guest_process_interposed_delete(&blocks[2], false) == -1);
     assert(live[2] == 1 && calls[1] == 1);
     missing = 0;
+    prepare_interposed_allocators(&process);
     assert(guest_process_interposed_delete(&blocks[2], false) == 1);
     current_process = NULL;
     assert(guest_process_interposed_delete(&blocks[2], false) == 0);

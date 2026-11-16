@@ -1002,3 +1002,24 @@
 - 真实游戏三轮HOME3秒/前台10秒，同PID22441且draw/present增长、result0，rg-buffer-flush-logging-candidate-cycles.json与三截图保留。正常System→Load列表save008/save007缩略图可见，确认save007时间17:04/Playtime45:23再载入，flower-ready截图人物/花叶/房屋可见。save007同2400摇杆工作27.069945FPS/p95 46.406ms/max75.139ms，无失败/重复/>100ms；完整SF27.086332FPS/p95 66.048ms/max115.500ms，>100ms1个。无较早短窗替代此长测。
 - 重新逐条解析simpleperf原始dump，先前报告视图未完整显示的调用链已有直接父函数。主线程9053样本中，1175个memcpy叶样本的765个直接父为apply_writeback、261个为stream_buffer。168个strcmp中162个父为nso_find_symbol，76个nso_find_symbol叶样本全部来自interposed_deallocate。后两项为互斥叶PC样本，合计238/9053约2.63%。rg-community-102-libc-direct-parents.json与20MiB原始dump保留，修正此前“memcpy父链尚未可靠取得”的记录。
 - T74调度证据与诊断查找修正按此范围完成。下一步T75拟将四个不可变主模块导出分配器偏移在模块成功加载时解析一次，保留每次nso_entry_address健康/范围验证与原nb_call_from_host、缺符号拒绝和guest堆归属。原模块字节与游戏存档不修改。更大的GPU写回占用已量化，后续另按同步语义分析。
+
+## T75 主模块分配器导出偏移缓存
+
+- T74检查点52e61b0，创建task/T75-allocator-symbol-cache。guest_process仅增加四项每进程偏移，在guest_process_load成功且安装unload observer之后、module_ready与guest线程启动之前解析原aligned_alloc/free/_ZdlPv/_ZdaPv。每次调用继续检查当前进程/模块、NULL语义、offset与nso_entry_address，再走原nb_call_from_host。模块重新成功加载完整覆写四项，包括缺失0和未定义UINT64_MAX，缓存未存guest堆指针。
+- 实际prepare/load/四类分配器函数提取ASan/UBSan，双模块不同基址、8线程64000调用、每次入口健康验证、缺符号、未定义、重载、加载失败/保留、boundary失败与NULL语义通过。原sized delete的200001次guest堆回收测试保留，并验证热路径不再查符号。初次text_filter提取测试包含新helper而编译失败，已将helper移到text_filter之前保持原提取边界，测试回归10项全通过，runtime-tests-allocator-cache-final.log。
+- 5项负控真实执行后断言失败，分别漏加载准备、scalar/array交换、忽略入口拒绝、忽略boundary失败、重载沿用旧缓存。allocator-cache-negative-controls.log/json。图形91项90通过1私有fixture跳过。build-allocator-cache-candidate.log退出0，APK9b410c8b1ccb7639361a03561aeff79635e8b8dc3ffc9c28970d522de8c8a3c6，ELFd09d2983876c0f3cf981217378d26c668707840923310d4ee775ba74b4e17bee，精确归档与allocator-cache-candidate-provenance.json保留。
+- 正在477M签名覆盖安装该内部候选并Continue8。下一步先核rg-allocator-cache-candidate-first.png真实场景，再按相同缺省配置做gate-allocator-cache-motion各2400间隔与完整SF，对照前5e的28.375FPS。随后确认原符号搜索退出真实采样热点、HOME/花盆回归。用户save008/007和备份保留，公共v1.0.2-preview仍ba052997，荣耀暂停，整体稳定30继续。
+
+### T75 首轮真实场景与热点复核
+
+- 9b签名覆盖后Continue8，真实首图两个人物、NPC、城门与亮度可见，PID4738。gate-allocator-cache-motion-*缺省无marker、原450底座30/4槽/cache1/texdirty1/BC2/FIFO/timing1/PAD可见/Android摇杆，各2400间隔。2401不同工作帧29.577636FPS/p95 42.509ms/max76.875ms，无失败/重复/>100ms。完整SF29.579539FPS/p95 33.511ms/p99 49.683ms/max99.230ms，无>100ms。39批CPU18.829ms/GPU23.342ms、draw871.513。前5e同点28.375FPS/CPU19.593ms，有改善但尚未稳30。
+- 之后另做20秒simpleperf，14625样本丢失0，主线程4843共8845。原nso_find_symbol在该窗口0叶样本，strcmp10个，原公开ba采样分别76与168。memcpy仍1177个，其中790个直接父为apply_writeback、223个stream_buffer。真实采样与产品帧率窗口分开，rg-allocator-cache-cpu-20261116-100400原始文件/工具SHA/命令/maps/精确ELF symfs与main-cpu-report、direct-parents.json保留。
+- 9b三轮HOME3秒/前台10秒，同PID4738、实际draw/present增长且result0，rg-allocator-cache-candidate-cycles.json与三截图。正常System载入列表008/007缩略图可见，确认17:04/45:23载入007，flower-ready截图人物/花叶/房屋可见。flower-allocator-cache-motion-*各2400移动间隔，工作28.225088FPS/p95 44.718ms/max81.518ms，失败/重复/>100ms均0。完整SF28.232664FPS/p95 49.627ms/p99 82.785ms/max132.294ms，>100ms2个。39批CPU20.563ms/GPU22.962ms、draw882.8。该物理长停顿保留，稳定30未通过。
+- 正在同签覆盖回5e并冷Continue8做反向次序对照，rg-allocator-reverse-control-*。随后恢复9b重测同点，以排查运行时长和系统波动的影响。公共预览版仍ba052997。本次回退仅替换同签应用，游戏数据与save008/007未修改。
+
+### T75 反向对照与最终检查点
+
+- 5e反向冷Continue8，gate-allocator-reverse-control-motion-*2400间隔，工作28.532754FPS/p95 44.220ms/max77.617ms；完整SF28.526107FPS/p95 49.623ms/max99.262ms。39批CPU19.541ms/GPU22.867ms、draw873.8。恢复9b再冷Continue8，真实首图确认，gate-allocator-cache-repeat-motion-*2400间隔工作29.031126FPS/p95 43.951ms/max77.049ms；完整SF29.034788FPS/p95 49.591ms/max115.645ms、>100ms1个。两轮都2401不同工作帧、无失败或重复、完整SF覆盖。重测表明改善幅度波动，不能只报首轮29.58或宣称稳定30。
+- T75按不可变导出偏移缓存、guest堆归属和生命周期回归范围通过，整体性能目标继续。当前9b已恢复到477M，Continue8与两份存档备份保留。其它机型未实机，荣耀暂停。内部候选尚未替换公共ba052997预览版。
+- 用精确9b ELF解析8845主线程PC，indexed_graphics_ready中0x40d860/874两个热点共102样本，位于xbg_game.cpp:6616的纹理描述符std::map<int,RegisteredTexture>::find。descriptors_build热点3efd34/3fa494各32样本，分别为shader_layouts与images有序表查找，另有ImgKey哈希查找。原始hot-instructions.json与addr2line文件保留。接下来先优化纹理描述符ID查找的单一容器，保持外层pool索引、注册对象地址和所有revision/视图验证。
+- 已核C++工作草案unord.req.general，https://eel.is/c++draft/unord.req ，rehash保留元素指针/引用。源中三个纹理ID表声明的全部调用点使用find/operator[]，无按ID排序遍历；实际注册保存元素引用，关闭时才clear。后续仍需增长/重注册/多pool/legacy实测回归与实际游戏长测，标准资料只作设计依据。

@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T09:54:59.782822+08:00",
-  "phase": "T74 system scheduling trace and remaining long frames",
+  "updated_at": "2026-11-16T10:24:34.551246+08:00",
+  "phase": "T75 immutable guest allocator export lookup cache",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -768,6 +768,40 @@
       ],
       "recovery": "c2a2ac5 / public APKba052997 / RG477M packaged defaults / user save008 backup and save007 retained",
       "checkpoint": "APK5e5aa7e8 / graphics91:90pass1private-skip,runtime9,4 negative controls / save008 SF28.375FPS vs control27.821FPS;CPU19.907->19.593ms / save007 SF27.086FPS,p95=66.048ms / HOME3 same PID22441 / scheduling+bounded logging scope passed; overall stable30 pending"
+    },
+    {
+      "id": "T75",
+      "role": "RUNTIME",
+      "status": "passed",
+      "owner": "Codex",
+      "branch": "task/T75-allocator-symbol-cache",
+      "dependencies": [
+        "T74"
+      ],
+      "pass_gates": [],
+      "objective": "Resolve immutable guest allocator exports once at successful module load; preserve per-call entry validation and guest heap ownership",
+      "inputs": [
+        "52e61b0 / APK5e5aa7e8",
+        "9053 main samples:162 strcmp under nso_find_symbol+76 nso_find_symbol under interposed_deallocate"
+      ],
+      "outputs": [
+        "per-process allocator export offset cache with lifecycle tests",
+        "exact APK and same-save distinct-work/SF long regression"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/runtime/hle/guest_process.c",
+        "tests/runtime/test_snk_sized_delete.py",
+        "tests/runtime/test_snk_allocator_cache.py"
+      ],
+      "acceptance": [
+        "no host heap fallback or skipped deallocation",
+        "each call retains nso_entry_address and nb_call_from_host checks",
+        "missing exports and process/module reload correctly handled",
+        "real same-save long measurement; overall stable30 remains pending"
+      ],
+      "recovery": "52e61b0 / APK5e5aa7e8 / save008 and save007 preserved",
+      "checkpoint": "APK9b410c8b /runtime10,graphics91:90passed1skip,5negative controls / no marker gate SF29.580 then29.035 vs5e28.375 then28.526;flower SF28.233 max132.294ms / HOME3 PID4738 / allocator lookup exited samples / scope passed; overall stable30 pending"
     }
   ],
   "blockers": [],
@@ -815,6 +849,7 @@
     "T73 v1.0.2-preview已在独立空轨仓公开，标签2867bcf，APKba052997。6附件回下载逐字节一致，社区包解开后17项SHA通过，原游戏数据由用户提供。"
   ],
   "unverified": [
+    "T75 latest installed9b410c8b: gate SF29.580 then29.035;flower28.233 with132.294ms physical max. Stable30 remains pending.",
     "T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.",
     "RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。",
     "高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。",
