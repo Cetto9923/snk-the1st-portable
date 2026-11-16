@@ -2134,9 +2134,12 @@ struct MemoImage {
 };
 using PoolKey=std::pair<uintptr_t,int64_t>;
 PoolKey pool_key(const dpool_t *p){need(p && p->pool,"Missing descriptor pool");return {uintptr_t(p->pool->mem),p->off};}
-std::map<PoolKey,std::map<int,RegisteredTexture>> textures;
-std::map<int,RegisteredTexture> legacy_textures;std::map<int,samp_par> legacy_samplers;
-std::map<int,RegisteredTexture> *texture_pool_cache=nullptr;PoolKey texture_pool_cache_key{}; // descriptors(): last texture pool (entries are never erased before shutdown)
+// Descriptor IDs need keyed lookup. Rehash preserves the element addresses
+// retained by descriptor memos and the sampled-image cache.
+using TextureTable=std::unordered_map<int,RegisteredTexture>;
+std::map<PoolKey,TextureTable> textures;
+TextureTable legacy_textures;std::map<int,samp_par> legacy_samplers;
+TextureTable *texture_pool_cache=nullptr;PoolKey texture_pool_cache_key{}; // descriptors(): last texture pool (entries are never erased before shutdown)
 std::map<PoolKey,std::map<int,samp_par>> samplers;
 std::map<uint32_t,RegisteredTexture> null_textures;
 struct HostSegment{cmd_t *owner;std::unique_ptr<uint8_t[]> memory;size_t bytes;};

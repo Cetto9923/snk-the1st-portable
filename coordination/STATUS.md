@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T10:24:34.551246+08:00
-阶段：T75 immutable guest allocator export lookup cache
+状态事件时间：2026-11-16T10:43:20.450662+08:00
+阶段：T76 texture descriptor ID index
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -33,6 +33,7 @@
 | T73 | RELEASE_ANDROID | passed | Codex | T72 | 无额外门禁 | task/T73-community-preview-102 |
 | T74 | GRAPHICS_RUNTIME | passed | Codex | T72, T73 | 无额外门禁 | task/T74-scheduling-trace |
 | T75 | RUNTIME | passed | Codex | T74 | 无额外门禁 | task/T75-allocator-symbol-cache |
+| T76 | GRAPHICS_RUNTIME | passed | Codex | T75 | 无额外门禁 | task/T76-texture-descriptor-index |
 
 ## 独占写入
 
@@ -88,6 +89,7 @@
 
 ## 未验证
 
+- T76 installed78a1dfc1: save008 SF29.604 max132.319ms;save007 SF28.510 max99.274ms. Overall stable30 remains pending.
 - T75 latest installed9b410c8b: gate SF29.580 then29.035;flower28.233 with132.294ms physical max. Stable30 remains pending.
 - T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.
 - RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。

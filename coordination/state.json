@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T10:24:34.551246+08:00",
-  "phase": "T75 immutable guest allocator export lookup cache",
+  "updated_at": "2026-11-16T10:43:20.450662+08:00",
+  "phase": "T76 texture descriptor ID index",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -802,6 +802,40 @@
       ],
       "recovery": "52e61b0 / APK5e5aa7e8 / save008 and save007 preserved",
       "checkpoint": "APK9b410c8b /runtime10,graphics91:90passed1skip,5negative controls / no marker gate SF29.580 then29.035 vs5e28.375 then28.526;flower SF28.233 max132.294ms / HOME3 PID4738 / allocator lookup exited samples / scope passed; overall stable30 pending"
+    },
+    {
+      "id": "T76",
+      "role": "GRAPHICS_RUNTIME",
+      "status": "passed",
+      "owner": "Codex",
+      "branch": "task/T76-texture-descriptor-index",
+      "dependencies": [
+        "T75"
+      ],
+      "pass_gates": [],
+      "objective": "Use keyed texture descriptor lookup with stable registered-object addresses after growth, preserving existing pool and revision semantics",
+      "inputs": [
+        "64c0e36 / APK9b410c8b",
+        "8845 main samples:102 at texture ID ordered lookup PCs40d860/874",
+        "C++ unord.req.general stable element pointers on rehash"
+      ],
+      "outputs": [
+        "minimal inner descriptor table change and real registration/lifetime regression",
+        "exact APK with same-save long distinct-work/SF regression"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "tests/graphics/test_snk_texture_descriptor_index.py"
+      ],
+      "acceptance": [
+        "no change to descriptor ID, pool key or legacy fallback",
+        "object pointers remain valid through growth/re-registration",
+        "all view/revision and GPU data checks preserved",
+        "actual game long windows with overhead recorded; stable30 goal active"
+      ],
+      "recovery": "64c0e36 / APK9b410c8b /save008/save007 backups retained",
+      "checkpoint": "APK78a1dfc1 /graphics92:91passed1skip,runtime10,3negative controls / save008 SF29.604 p95=33.442ms max132.319ms;save007 SF28.510 max99.274ms /HOME3 PID26483 /scope passed;overall stable30 pending"
     }
   ],
   "blockers": [],
@@ -849,6 +883,7 @@
     "T73 v1.0.2-preview已在独立空轨仓公开，标签2867bcf，APKba052997。6附件回下载逐字节一致，社区包解开后17项SHA通过，原游戏数据由用户提供。"
   ],
   "unverified": [
+    "T76 installed78a1dfc1: save008 SF29.604 max132.319ms;save007 SF28.510 max99.274ms. Overall stable30 remains pending.",
     "T75 latest installed9b410c8b: gate SF29.580 then29.035;flower28.233 with132.294ms physical max. Stable30 remains pending.",
     "T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.",
     "RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。",

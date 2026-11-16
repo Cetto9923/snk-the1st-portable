@@ -1023,3 +1023,25 @@
 - T75按不可变导出偏移缓存、guest堆归属和生命周期回归范围通过，整体性能目标继续。当前9b已恢复到477M，Continue8与两份存档备份保留。其它机型未实机，荣耀暂停。内部候选尚未替换公共ba052997预览版。
 - 用精确9b ELF解析8845主线程PC，indexed_graphics_ready中0x40d860/874两个热点共102样本，位于xbg_game.cpp:6616的纹理描述符std::map<int,RegisteredTexture>::find。descriptors_build热点3efd34/3fa494各32样本，分别为shader_layouts与images有序表查找，另有ImgKey哈希查找。原始hot-instructions.json与addr2line文件保留。接下来先优化纹理描述符ID查找的单一容器，保持外层pool索引、注册对象地址和所有revision/视图验证。
 - 已核C++工作草案unord.req.general，https://eel.is/c++draft/unord.req ，rehash保留元素指针/引用。源中三个纹理ID表声明的全部调用点使用find/operator[]，无按ID排序遍历；实际注册保存元素引用，关闭时才clear。后续仍需增长/重注册/多pool/legacy实测回归与实际游戏长测，标准资料只作设计依据。
+
+## T76 纹理描述符ID索引
+
+- T75已提交64c0e36，与T74的52e61b0一起推到独立空轨远端对应task分支。创建task/T76-texture-descriptor-index，总控独占xbg_game.cpp与新回归测试。仅将三个内部ID表声明共用TextureTable=std::unordered_map<int,RegisteredTexture>，外层PoolKey有序表继续使用原实现，现有pool key、find/operator[]、注册对象字段和revision/视图/图像验证均保留。注册对象指针只在shutdown clear时释放，rehash保留元素地址。
+- build-texture-descriptor-index-candidate.log退出0，APK78a1dfc1ff9487515a6095003a931a0fbf5e2d4f41503ab4ea42d8359ee563b5，ELFf1e5b3224abf3dcea8cb28f0f8de014d27d30447a23f5cf85980bb16943a79e1，精确归档与texture-descriptor-index-candidate-provenance.json保留。当前477M仍9b/Continue8实际场景，尚未安装78。
+- 新测试提取实际注册/查找/eligible查找和完整RegisteredTexture/MemoImage定义，ASan/UBSan覆盖多内存pool、同pool不同offset、相同ID隔离、legacy fallback、16384项插入与显式rehash、保存的memo/texture对象地址、等价重注册、视图/serial变更与shutdown后重新创建。首轮fixture形参pool与实际局部pool同名导致编译失败，已将测试形参改为bound_pool，独立合约已通过。原首轮92图形除该fixture外90通过1私有skip，修正后正在完整重跑，10运行时已通过。3项实际运行期负控正在执行，尚未记录性能收益。
+- 下一步确认graphics-tests-texture-descriptor-index-final.log和texture-index-negative-controls.json，再签名覆盖78并Continue8看首图，按无marker默认450底座30/4槽/cache1/texdirty1/BC2/FIFO/timing1/PAD可见/摇杆2400间隔测gate-texture-descriptor-index-motion。恢复点为9b，用户save008/007及全槽备份保留。公开版本仍ba052997，荣耀暂停，稳定30目标继续。
+- 修正fixture后完整图形92项91通过1私有fixture跳过，graphics-tests-texture-descriptor-index-final.log退出0。3负控实际运行触发断言/ASan，分别丢pool offset、重注册替换已引用对象、停用revision递增，texture-index-negative-controls.log/json。10运行时退出0。78已签名覆盖并冷Continue8，rg-texture-descriptor-index-first.png两个人物/NPC/城门/亮度可见，正在gate-texture-descriptor-index-motion-*2400移动间隔与完整SF。
+- 已查Android官方MediaTek ADPF案例与原生Codelab，https://developer.android.com/stories/games/mediatek-adpf ，https://developer.android.com/codelabs/adaptability-codelab 。Performance Hint Session按真实目标与实际工作时长提供系统调度线索，可作为后续方向，尚未接入或声称本设备支持/获益。先前performance-hint-api旧文档路径404，已用官方当前页面核对。没有改系统调度、绑核、驱动或全局显示，也没有继承其它案例的FPS数字。
+
+### T76 城门实测与后续能力核对
+
+- 78各2400移动间隔，gate-texture-descriptor-index-motion-*工作2401不同帧29.595079FPS/p95 42.452ms/max79.604ms，无失败/重复/>100ms。完整SF29.603668FPS/p95 33.442ms/p99 49.643ms/max132.319ms，>50ms15个/>100ms2个。39批CPU18.668ms/GPU23.416ms、draw874.697。相邻9b重复窗SF29.035/CPU19.544ms，当前有改善，仍有长停顿，稳定30继续。
+- 78真实游戏三轮HOME3秒/前台10秒，同PID26483、draw与present增长且result0，rg-texture-descriptor-index-cycles.json与三截图。首个长测与恢复之后另做20秒simpleperf，14485样本/丢失0，主线程26589共8595。descriptors_build占比5.20%→4.51%、indexed_graphics_ready2.36%→1.66%，主线程样本总数和运行条件不同，百分比仅作热点定位。原始rg-texture-index-cpu-20261116-103551.perf.data/maps/工具SHA/精确ELF与main-cpu-report保留。正在正常载入save007以复测花盆。
+- 477M真实dumpsys performance_hint显示HAL Support true、PreferredRate8333333ns、Active Sessions空，rg477m-performance-hint-capability.txt。NDK26实际performance_hint.h提供API33引入的getManager/createSession/reportActualWorkDuration/updateTargetWorkDuration/closeSession。游戏主线程属于本app线程组，具备后续候选接入条件，尚未启用。
+- 已读原JNI setFocusState→nso_host_oe_set_host_focus与GameActivity onResume/onPause。后续ADPF候选拟复用这一真实生命周期关闭/重建本app会话，使用实际主线程和原33.333ms目标，报告排除限帧与显示等待的真实帧工作区间。该工作边界与目标仍需在接入时核对，收益以477M实际A/B为准。恢复点9b，荣耀暂停。
+
+### T76 完成检查点
+
+- 正常System载入列表save008/007缩略图可见，确认save007的17:04/45:23后载入。rg-texture-index-flower-ready.png人物、花叶、房屋可见。flower-texture-descriptor-index-motion-*各2400移动间隔，2401不同工作帧28.508892FPS/p95 44.047ms/max69.740ms，无失败/重复/>100ms。完整SF28.509978FPS/p95 49.623ms/max99.274ms，无>100ms。前9b花盆28.233FPS/max132.294ms，本轮小幅改善，稳定30仍待实现。
+- T76按纹理ID索引、注册对象稳定性、92图形/10运行时/3负控、真实城门与花盆长测、HOME3范围完成。当前APK78a1dfc1仍安装于477M，停在save007移动后场景，冷Continue8恢复用户新位置，存档与全槽备份保留。公开v1.0.2-preview仍ba052997，荣耀暂停。
+- 下一步T77拟试本应用可选ADPF Performance Hint，477M HAL已读到支持。先核API和生命周期，再以原33.333ms目标、实际guest主线程、排除限帧/呈现等待后的真实工作区间构建默认关闭的候选，在同APK开/关冷重载A/B后决定是否固化。已有性能和显示恢复点均可直接覆盖安装，不需要再次询问重启。
