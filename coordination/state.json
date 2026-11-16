@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T13:13:37.187905+08:00",
+  "updated_at": "2026-11-16T13:15:13.235079+08:00",
   "phase": "T82 user-requested v1.0.3 release freeze; device installation deferred until reconnect",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
@@ -23,7 +23,19 @@
     "honor_test_status": "user_authorized_install_awaiting_connection"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T82",
+      "paths": [
+        "coordination/",
+        "README.md",
+        "README-HONOR.md",
+        "docs/release/安装与使用.md",
+        "src/android/app/gamewindow/AndroidManifest.xml"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -1015,6 +1027,44 @@
       ],
       "recovery": "APK89e30e42 /ed80868;all saved progress retained",
       "checkpoint": "Frozen before-pace candidate0a3881ab: actual flower2400SF29.1988 vs89control28.4435;max99.251 vs115.850ms,over1000vs2;94graphics93pass1skip/runtime10/7neg. Overall stable30 and HOME/008/physical AV incomplete. User requests ship current version,post-release pause;both USB devices absent,user defers reconnect and requests package first."
+    },
+    {
+      "id": "T82",
+      "role": "RELEASE",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T82-community-103-release",
+      "dependencies": [
+        "T80"
+      ],
+      "pass_gates": [],
+      "objective": "Freeze and publish current v1.0.3 application/self-owned resources with truthful compatibility scope,then pause goal as user requested",
+      "inputs": [
+        "f3f254f merged remote user docs through947838b;T81source52a827e",
+        "0a3881ab/codea882953a flower29.1988SF;94graphics93pass1skip;runtime10;7negative",
+        "user authorizes Honor install and formal release;currently bothUSB absent,user requests package first"
+      ],
+      "outputs": [
+        "committed/pushed source and formal v1.0.3 GitHub release",
+        "same-signature APK/communityZIP/notices/checksums/re-downloaded verification",
+        "Qualcomm/Mali profile tests;Honor install recorded pending reconnect"
+      ],
+      "write_scope": [
+        "coordination/",
+        "README.md",
+        "README-HONOR.md",
+        "docs/release/安装与使用.md",
+        "src/android/app/gamewindow/AndroidManifest.xml"
+      ],
+      "acceptance": [
+        "latest user community/legal wording preserved",
+        "release APK contains application/self resources/licenses and user-supplied game data excluded",
+        "exact clean source provenance,APK signature/ABI/version and public asset hashes verified",
+        "Qualcomm/Mali vendor/profile regressions executed and actual device scope stated",
+        "after release pause automatic goal per explicit user answer"
+      ],
+      "recovery": "v1.0.2-preview public;89e30e42 prior tested audio build;private0a/6311 experiments retained;all original game data and saves",
+      "checkpoint": "T81 frozen52a827e,remote5userdocs mergedf3f254f. Honor same cert verified,but USB disconnected. User defers device connection and requests release package first."
     }
   ],
   "blockers": [],

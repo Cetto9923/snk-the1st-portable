@@ -1,6 +1,6 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T13:13:37.187905+08:00
+状态事件时间：2026-11-16T13:15:13.235079+08:00
 阶段：T82 user-requested v1.0.3 release freeze; device installation deferred until reconnect
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
@@ -39,10 +39,11 @@
 | T79 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T79-audio-output-latency |
 | T80 | CORE | passed | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
 | T81 | CORE | in_progress | Codex | T80 | 无额外门禁 | task/T81-descriptor-memo-cleanup |
+| T82 | RELEASE | in_progress | Codex | T80 | 无额外门禁 | task/T82-community-103-release |
 
 ## 独占写入
 
-- 无
+- {"owner": "Codex", "task": "T82", "paths": ["coordination/", "README.md", "README-HONOR.md", "docs/release/安装与使用.md", "src/android/app/gamewindow/AndroidManifest.xml"]}
 
 ## 阻塞
 

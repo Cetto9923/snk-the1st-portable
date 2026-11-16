@@ -1121,3 +1121,11 @@
 - 6311覆盖后最初首图是Continue确认框，已排除。补A后实际协会正确，再正常System→Load确认00717:04/45:23，首图人物/花盆/HUD正确。flower-memo-retired-candidate-motion-*2400间隔工作28.413909FPS/p95 43.470ms/max79.748ms；完整SF28.415078FPS/p95 49.625ms/max115.808ms、>100ms2个。39批CPU20.473/present1.270/GPU22.849ms、draw884.649。实际平均帧率与物理长帧没有改善，不能按工作帧p99由53.067降48.870ms宣称稳定性完成。
 - 原6311清理在cfg.present和xbg_frame_pace之后，平均present CPU多约0.44ms。现把512项CPU元数据销毁移到submit_slots及诊断读回之后、原xbg_frame_pace之前，让GPU提交后的CPU清理进入原限帧等待预算。既有pacer、目标帧率和present调用使用原逻辑，原present_cpu计时覆盖清理。组件提取actual cleanup→pace调用，真实frame trace独立于清理预算，7负控与94图形93通过1私有skip再次通过，graphics-tests-memo-cleanup-before-pace.log和memo-retired-before-pace-negatives.log。
 - build-memo-cleanup-before-pace.log退出0，APK0a3881ab383e080f4a33bea3f64980c3b5c1d939b3779ea7f5555866e1d003b1、ELFc01def40a1c195f7214d478a46cd60dc13bd9d6ab8c270d68832b9f8987c82b3，精确归档与memo-cleanup-before-pace-provenance.json。产品源SHAa882953a...，音频仍aef803af...。已覆盖0a到477M/PID8005，冷Continue首图实际协会，人物/光照/HUD正常，音频speaker3/1026burst/2052buf。当前正在正常载入007确认框，尚未测量0a的性能。下一步视检确认007后2400移动+完整SF，再决定保留/回退；之后还有008、HOME及花叶连续显示回归。
+
+## T82 用户要求的发布冻结与后续暂停
+
+- 0a候选在save007首图人物/花叶/HUD正常，2400移动间隔工作29.192199FPS/p95 42.648ms/max73.965ms；完整SF29.198770FPS/p95 49.577ms/p99 82.648ms/max99.251ms，>100ms0个。旧89同点SF28.443468/max115.850ms、>100ms2个，draw884.20/884.38相近，当前显示局部改善。39批CPU19.283/present1.291/GPU23.228ms。仍未全场景稳定30，0a的008/HOME和物理音画同步未完成。冻结当前清理时机与已验证的音频路径，停止新增优化实验。
+- 用户明确要求提交当前版本、关注高通兼容并安装荣耀，准备正式发布。用户另明确选择“发布后暂停自动优化”。本轮先前为progress，当前按发布收尾推进。荣耀安装授权已重新授予。随后两个USB设备均从ADB及Mac IOUSB列表消失，用户明确回复“稍后连接，先完成发布包”，因此荣耀安装及本版真机验收登记待连接。
+- 荣耀断开前读到ROD2-W69及已安装旧包，签名证书SHA256与当前包同为0203b98094ec6fd5811162a236b376241e8425653996744c418e0cc00696969d，旧APK已保存honor-before-103.apk。旧前台为FFRS。只读备份原存档时run-as访问外部目录被Android16拒绝，shell tar/pull也因私有data.dat权限失败，错误探测归档，未把102字节错误文本或只含目录的tar认定为备份。原存档树、大小和控制文件已记录，未对荣耀执行安装/重启/存档写入。重新连接后可同签覆盖并正常载入原存档验证。
+- git fetch发现用户在默认分支新增5个主页、安装指南和法律说明提交，最新947838b。T81源码检查点52a827e后合并用户最新分支，README和安装指南冲突以用户最新版本正文解决，合并f3f254f。当前task/T82-community-103-release，版本升为1.0.3/versionCode4。保留用户社区与免责声明内容，按本轮实际范围更新版本/帧率与待连接信息，纠正README-HONOR历史将刷新率当60FPS的说明。
+- 本次发布应用、自有资源及许可证，游戏数据由用户自行提供。计划从干净源码提交重建，执行94图形/10运行时、JNI设备分档与Java机型合约，核实Mali条件对Adreno厂商分支的覆盖；实际高通设备范围标记待连接。随后生成社区ZIP、APK、说明、清单和SHA，提交/推送默认分支及正式GitHub版本，回下载逐字节检查，再调用goal暂停。稳定30目标未完成，发布不能用作该目标完成依据。
