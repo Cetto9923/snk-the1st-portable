@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T10:58:50.252785+00:00",
+  "updated_at": "2026-11-16T14:56:49.083019+00:00",
   "phase": "v1.0.3 published and verified; user-requested automatic optimization pause",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
@@ -1151,6 +1151,38 @@
       ],
       "recovery": "1.0.5候选与honor-previous.apk",
       "checkpoint": "APK SHA256 b85a30cd9204b6fc1d5e2842cd9bab209281f198f705f29c8c09e31c9119526c。构建/荣耀覆盖安装退出0，标题正常，读档到世界地图教学及游戏画面，PID9686无fault记录。手机左右横握的实测等待对方覆盖安装。"
+    },
+    {
+      "id": "T86",
+      "role": "RELEASE",
+      "owner": "Codex",
+      "status": "in_progress",
+      "branch": "task/T86-release-106",
+      "objective": "发布最新1.0.6正式应用包和简洁说明",
+      "inputs": [
+        "d45738f及1.0.6-preview横屏真机记录",
+        "用户明确要求打最新包发布"
+      ],
+      "outputs": [
+        "同签名1.0.6/versionCode8 APK与社区ZIP",
+        "GitHub正式Release及回下载校验"
+      ],
+      "dependencies": [
+        "T85"
+      ],
+      "write_scope": [
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "docs/release/安装与使用.md",
+        "README.md",
+        "coordination/"
+      ],
+      "acceptance": [
+        "干净源码提交与构建包对应",
+        "签名/版本/横屏属性核对",
+        "上传附件回下载SHA256一致",
+        "机型和已知限制准确表述"
+      ],
+      "recovery": "v1.0.3正式Release及1.0.6-preview本机候选"
     }
   ],
   "blockers": [],

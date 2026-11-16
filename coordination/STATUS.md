@@ -1,6 +1,6 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T10:58:50.252785+00:00
+状态事件时间：2026-11-16T14:56:49.083019+00:00
 阶段：v1.0.3 published and verified; user-requested automatic optimization pause
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
@@ -43,6 +43,7 @@
 | T83 | DATA | passed | Codex | T82 | 无额外门禁 | task/T83-data-delta |
 | T84 | RUNTIME | in_progress | Codex | T83 | 无额外门禁 | task/T84-oneplus-crash |
 | T85 | ANDROID | passed | Codex | T83 | 无额外门禁 | task/T84-oneplus-crash |
+| T86 | RELEASE | in_progress | Codex | T85 | 无额外门禁 | task/T86-release-106 |
 
 ## 独占写入
 
