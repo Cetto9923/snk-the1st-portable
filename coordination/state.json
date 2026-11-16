@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T12:25:02.733009+08:00",
-  "phase": "T79 音频输出延迟与音画同步排查",
+  "updated_at": "2026-11-16T12:36:17.815719+08:00",
+  "phase": "T80 monotonic-aligned outdoor long-frame CPU diagnosis",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -26,11 +26,9 @@
   "active_writers": [
     {
       "owner": "Codex",
-      "task": "T79",
+      "task": "T80",
       "paths": [
-        "coordination/",
-        "src/runtime/hle/audio_bridge.c",
-        "tests/native/audio_bridge_transport_contract.c"
+        "coordination/"
       ]
     }
   ],
@@ -958,6 +956,38 @@
       ],
       "recovery": "APK72391561 /2f2a5f5;原数据和存档原样",
       "checkpoint": "已恢复APK89e30e42/PID13147/协会save015。相同时间戳+HLE队列控制1d5f4be7的66样本尾部等待中位214.906ms；候选223样本136.906ms、冷重启45样本101.096ms，xruns均0。93图形92pass1skip/10runtime/2负控/14open-close组件/HOME3通过，室内1200SF29.9946fps。原11存档全SHA及tar逐字节一致，测试媒体音量恢复原0。口型/全过场与户外30、其它设备继续，T79保持in_progress。"
+    },
+    {
+      "id": "T80",
+      "role": "CORE",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T80-long-frame-profile",
+      "dependencies": [
+        "T76"
+      ],
+      "pass_gates": [],
+      "objective": "Attribute long outdoor frame CPU samples using matching monotonic timestamps to progress stable30",
+      "inputs": [
+        "b0f9448 /APK89e30e42 /ELFf178f1fe",
+        "game present CLOCK_MONOTONIC trace and simpleperf sample TIME",
+        "save008/007 and new save015 full backups"
+      ],
+      "outputs": [
+        "current outdoor motion baseline",
+        "exact ELF/raw stacks/per-frame CPU correlation"
+      ],
+      "write_scope": [
+        "coordination/"
+      ],
+      "acceptance": [
+        "actual loaded scene and installed/source hashes",
+        "profiler overhead window excluded from FPS acceptance",
+        "clock domain, sample overlap and guest main thread verified",
+        "full outdoor stable30 objective retained"
+      ],
+      "recovery": "APK89e30e42 /save015; all original data and saves retained",
+      "checkpoint": "APK89/PID13147 normalLoad008 verified;2400 motion SF29.688/max99.250ms;explicit monotonic40s profile30044samples0lost;guest13185;25long frames memo_unpin_all ~7.92ms/frame vs normal0.044;diagnostic only, product code unchanged"
     }
   ],
   "blockers": [],

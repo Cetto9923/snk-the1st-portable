@@ -1097,3 +1097,11 @@
 - 已显式覆盖恢复89e30e42候选并冷Continue，最终PID13147，首图人物/协会/HUD正常，ready device3/burst1026/buf2052/performance10。首图以后45个样本，output中位81.718ms/source16.667ms/合计101.096ms，范围94.295..110.020ms，全部xruns0。前长运行223样本合计中位136.906ms，运行时长及捕获/后台切换条件不同，保留两轮结果，不只报较小读数。av-low-latency-final-comparison.json汇总。这里是时间戳推算的最新PCM尾部等待，物理声画事件/口型偏差依旧未直接测定。
 - 最终全11存档重新tar备份并逐文件SHA解析校验，与用户新进度备份完全相同，tar SHA也一致b94dc5511614a7b1064a6aed459cf927806b3fdcb3c19e964c38f9e894df5237。测试临时媒体3档已用标准音量键恢复原0，并cmd media_session get验证，av-final-volume-restoration.txt。最终装机89候选，默认构建目录仍为控制1d5f，后续安装继续显式路径或重新构建实际产品源码。公共预览ba052997。
 - T79按输出延迟改善、传输回归和恢复范围保存源码检查点，状态仍in_progress。下一步继续对白/过场真实事件的物理音画同步验证及城门/花盆户外低帧率，不以本次室内29.995验收整体稳定30。荣耀及其它机型未重新实测。
+
+## T80 户外长帧的时间对齐采样
+
+- 上一轮T79实际改进了声音延迟，按progress继续主目标。当前源b0f9448，APK89e30e42/PID13147。经正常System→Load列表确认save008的2025/11/15 18:31:47、01:09:53，加载后首图人物/城门正常，PAD隐藏，用户save015继续保留。首次写state的长中文stdin因编码报错，未修改state，已用ASCII脚本完成任务卡登记，未据错误输出记成功。
+- gate-audio89-outdoor-motion-*原始2400移动间隔，2401不同工作帧29.684727FPS/p95 41.342ms/max68.221ms，无失败/重复/>100ms。完整SF29.688185FPS/p95 33.561ms/p99 49.672ms/max99.250ms，>50ms14个。39批CPU19.361/GPU22.977ms、draw873.38，稳定30尚未通过。全部15旧调参文件缺席、原底座450/30/4槽/cache1/texdirty1/BC2/FIFO/timing1，测量时无录像/CPU采样。
+- 随后独立40秒simpleperf task-clock:u/f500/dwarf，显式--clockid monotonic，原工具SHA590668cd...，实际记录39.9914秒/30044样本/丢失0。rg-long-frame-cpu-20261116-123002原始perf、maps、精确ELFf178f1fe、逐帧CSV、命令与source dirty归档。主线程13185为本app线程组13147的ffrs-guest且占58.52%全线程样本，实际调用链为游戏队列入口；原记录样本time明确落在同源CLOCK_MONOTONIC逐帧CSV覆盖范围，未推测跨时钟换算。
+- 分析仅完整帧区间，25个>45ms帧均值48.363/max58.579ms，主线程task-clock样本加权估算42.56ms/帧。1092个25..40ms帧均值32.686ms，主线程估算28.690ms/帧。长帧memo_unpin_all祖先路径估算7.92ms/帧，普通帧约0.044ms，增量约7.88ms，主要叶节点包含Scudo批量释放；其后get_image_slow约+1.58ms、stream_buffer/descriptors_build各+1.17ms。原始dump与long-frame-analysis.json保留。采样有开销且2ms周期带来估算误差，以上用于定位，未作为产品FPS。
+- 代码确认memo_unpin_all在epoch失效或pinned>8192时即时归还sets到原slot.used_sets并clear全部DescMemo节点，每项持有多份CPU vector。下一步只考虑把已经失效的CPU缓存元数据移出查询表，并在逐帧固定预算下释放，GPU descriptor/fence回收与原命中验证继续原有路径。需验证front iterator即时失效、跨槽隔离、重复失效/关缓存、内存上限及shutdown，不复用旧epoch的条目。

@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T12:25:02.733009+08:00
-阶段：T79 音频输出延迟与音画同步排查
+状态事件时间：2026-11-16T12:36:17.815719+08:00
+阶段：T80 monotonic-aligned outdoor long-frame CPU diagnosis
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -37,10 +37,11 @@
 | T77 | ANDROID_RUNTIME | passed | Codex | T76 | 无额外门禁 | task/T77-android-performance-hint |
 | T78 | GRAPHICS_RUNTIME | in_progress | Codex | T76, T77 | 无额外门禁 | task/T78-writeback-cache-range |
 | T79 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T79-audio-output-latency |
+| T80 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T79", "paths": ["coordination/", "src/runtime/hle/audio_bridge.c", "tests/native/audio_bridge_transport_contract.c"]}
+- {"owner": "Codex", "task": "T80", "paths": ["coordination/"]}
 
 ## 阻塞
 
