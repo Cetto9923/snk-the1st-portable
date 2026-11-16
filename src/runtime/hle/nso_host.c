@@ -908,7 +908,7 @@ int32_t nso_host_fs_query_mount_rom_cache_size(size_t *out_size) {
     return 0;
 }
 
-#define NSO_FS_MAX_MOUNTS 8
+#define NSO_FS_MAX_MOUNTS 128
 typedef struct {
     int in_use;
     int writable;
@@ -1773,19 +1773,79 @@ void nso_host_fs_enable_global_file_data_cache(void *buffer, size_t size) {
     fprintf(stderr, "[hle] nn::fs::EnableGlobalFileDataCache: buffer=%p size=%zu\n", buffer, size);
 }
 
+/* Each locally imported add-on has its original RomFS and a verified title ID.
+ * The index is relative to this application's add-on base title ID. */
+static int aoc_root_path(char *path, size_t capacity) {
+    const char *romfs = getenv("NN_FS_ROM_PATH");
+    if (!romfs || !romfs[0]) romfs = getenv("ROMFS_PATH");
+    if (!romfs || !romfs[0]) romfs = "romfs";
+    int length = snprintf(path, capacity, "%s/../aoc", romfs);
+    return length >= 0 && (size_t)length < capacity;
+}
+
+static int aoc_content_path(int32_t index, char *path, size_t capacity) {
+    if (index < 0 || index > 0x7ff) return 0;
+    char root[512], metadata[512], expected[18], actual[18];
+    if (!aoc_root_path(root, sizeof(root))) return 0;
+    int length = snprintf(metadata, sizeof(metadata), "%s/%d/content-id", root, index);
+    if (length < 0 || (size_t)length >= sizeof(metadata)) return 0;
+    FILE *file = fopen(metadata, "rb");
+    if (!file) return 0;
+    size_t bytes = fread(actual, 1, sizeof(actual), file);
+    int failed = ferror(file);
+    fclose(file);
+    snprintf(expected, sizeof(expected), "%016" PRIx64 "\n",
+             UINT64_C(0x01001e9023921000) + (uint32_t)index);
+    if (failed || bytes != 17 || memcmp(actual, expected, 17)) return 0;
+    length = snprintf(path, capacity, "%s/%d/romfs", root, index);
+    if (length < 0 || (size_t)length >= capacity) return 0;
+    struct stat info;
+    return stat(path, &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+static int aoc_compare_indices(const void *left, const void *right) {
+    int32_t a = *(const int32_t *)left, b = *(const int32_t *)right;
+    return (a > b) - (a < b);
+}
+
+static int32_t aoc_installed_indices(int32_t indices[2048]) {
+    char root[512], path[512];
+    if (!aoc_root_path(root, sizeof(root))) return 0;
+    DIR *directory = opendir(root);
+    if (!directory) return 0;
+    int32_t count = 0;
+    struct dirent *entry;
+    while ((entry = readdir(directory)) != NULL) {
+        char *end;
+        errno = 0;
+        long index = strtol(entry->d_name, &end, 10);
+        if (errno || end == entry->d_name || *end || index < 0 || index > 0x7ff) continue;
+        char canonical[16];
+        snprintf(canonical, sizeof(canonical), "%ld", index);
+        if (strcmp(canonical, entry->d_name)) continue;
+        if (aoc_content_path((int32_t)index, path, sizeof(path))) indices[count++] = (int32_t)index;
+    }
+    closedir(directory);
+    qsort(indices, (size_t)count, sizeof(*indices), aoc_compare_indices);
+    return count;
+}
+
 int32_t nso_host_aoc_count_add_on_content(void) {
-    fprintf(stderr, "[hle] nn::aoc::CountAddOnContent: returning 0 (no add-on content installed)\n");
-    return 0;
+    int32_t indices[2048];
+    int32_t count = aoc_installed_indices(indices);
+    fprintf(stderr, "[hle] nn::aoc::CountAddOnContent: installed=%d\n", count);
+    return count;
 }
 
 int32_t nso_host_aoc_list_add_on_content(int32_t *out_indices, int32_t offset, int32_t count) {
-    if (count > 0 && !out_indices) {
-        fprintf(stderr, "[hle] nn::aoc::ListAddOnContent: null out_indices with count=%d\n", count);
-        return 0;
-    }
-    fprintf(stderr, "[hle] nn::aoc::ListAddOnContent: out_indices=%p offset=%d count=%d -> returning 0\n",
-            (void *)out_indices, offset, count);
-    return 0;
+    if (!out_indices || offset < 0 || count <= 0) return 0;
+    int32_t indices[2048];
+    int32_t installed = aoc_installed_indices(indices);
+    if (offset >= installed) return 0;
+    int32_t copied = installed - offset;
+    if (copied > count) copied = count;
+    memcpy(out_indices, indices + offset, (size_t)copied * sizeof(*indices));
+    return copied;
 }
 
 int32_t nso_host_fs_query_mount_add_on_content_cache_size(size_t *out_size, int32_t target_index) {
@@ -1794,14 +1854,34 @@ int32_t nso_host_fs_query_mount_add_on_content_cache_size(size_t *out_size, int3
         return 1;
     }
     *out_size = 0;
-    fprintf(stderr, "[hle] nn::fs::QueryMountAddOnContentCacheSize: target_index=%d -> out_size=0\n", target_index);
-    return 0;
+    char path[512];
+    return aoc_content_path(target_index, path, sizeof(path)) ? 0 : 0x202;
 }
 
 int32_t nso_host_fs_mount_add_on_content(const char *name, int32_t target_index, void *buffer, size_t size) {
-    fprintf(stderr, "[hle] nn::fs::MountAddOnContent: name='%s' target_index=%d buffer=%p size=%zu -> no aoc installed\n",
-            name ? name : "(null)", target_index, buffer, size);
-    return 0x202; /* ResultPathNotFound */
+    (void)buffer;
+    (void)size;
+    if (!name || !name[0] || strlen(name) >= sizeof(s_fs_mounts[0].name) ||
+        strchr(name, ':') || strchr(name, '/')) return 1;
+    char path[512];
+    if (!aoc_content_path(target_index, path, sizeof(path))) return 0x202;
+    int slot = -1;
+    for (int i = 0; i < NSO_FS_MAX_MOUNTS; ++i) {
+        if (s_fs_mounts[i].in_use && !strcmp(s_fs_mounts[i].name, name)) {
+            if (!s_fs_mounts[i].writable && !strcmp(s_fs_mounts[i].host_path, path)) return 0;
+            return 1;
+        }
+        if (!s_fs_mounts[i].in_use && slot < 0) slot = i;
+    }
+    if (slot < 0) return 1;
+    nso_fs_mount_entry *mount = &s_fs_mounts[slot];
+    memset(mount, 0, sizeof(*mount));
+    strcpy(mount->name, name);
+    strcpy(mount->host_path, path);
+    mount->in_use = 1;
+    fprintf(stderr, "[hle] nn::fs::MountAddOnContent: index=%d name=%s path=%s\n",
+            target_index, name, path);
+    return 0;
 }
 
 /* nn::os::SystemEvent is a separate SDK object from nn::os::Event: the guest
@@ -1859,14 +1939,12 @@ void nso_host_aoc_get_add_on_content_list_changed_event(void *out_event) {
         return;
     }
     pthread_mutex_lock(&s_system_event_mutex);
-    /* No add-on content is installed and this host cannot install any, so the
-     * add-on content list can never change. The event stays unsignaled and a
-     * waiter blocks, which is the retail-card behaviour of the real SDK. */
+    /* Imported add-ons are installed while the application is stopped. */
     e->signaled = false;
     e->initialized = true;
     pthread_mutex_unlock(&s_system_event_mutex);
 
-    fprintf(stderr, "[hle] nn::aoc::GetAddOnContentListChangedEvent: event=%p -> unsignaled (no add-on content can be installed)\n",
+    fprintf(stderr, "[hle] nn::aoc::GetAddOnContentListChangedEvent: event=%p -> unsignaled (restart after import)\n",
             (void *)out_event);
 }
 

@@ -1138,3 +1138,15 @@
 - 6公开附件为APK、社区ZIP、SHA256SUMS、release-manifest、install-guide.zh-CN.md、copyright-notice.zh-CN.md。社区ZIP SHA256 72542902c5ad53e5f6aa68870fd082ed91f3cd877bfa47e4499b060510faa5cb。包内15成员逐项SHA通过，含应用/自有资源与10份许可证文本；18条校验值通过。公开APK检查排除NSO/NCA/NSP/XCI/XGS/密钥/票据和RomFS/shaders游戏资产目录。
 - gh release download从已发布地址重新下载全部6附件，与本地发布件逐字节一致，解包后15成员再按公开SHA检查通过。community-103-live-release.json、community-103-public-verification.json、signature/badging、build-provenance及构建日志保留在.local/publication。GitHub tag API和默认分支API均验证45f963e，latest API返回v1.0.3。
 - 用户已明确选择发布后暂停自动优化。当前发布与校验完成，将调用goal paused并结束。完整稳定30及物理口型/过场同步目标继续登记为未完成，不能标complete。当前ADB列表仍为空，荣耀设备安装列为用户延后项；最后已装的477M为0a运行层版本，最终1.0.3待重新连接后覆盖安装。恢复安装使用显式文件.local/publication/community-103-final/snk-the1st-1.0.3-arm64.apk，证书匹配后install --no-incremental -r；荣耀序列A42BBB5109000333，477M序列RG477M01445122。后续机测按实际画面和已存在存档验证，禁止以菜单/刷新率替代游戏FPS。
+
+
+## T83 · 2026-11-16 数据增量补丁与本地 DLC 挂载
+
+- 分支 `task/T83-data-delta`，基线 `7b20a84` 加本次脏树。修改本地 AOC 枚举、分页、只读挂载与版本号，新增真实函数 ASan/UBSan 回归。无 DLC 的旧目录仍返回 0。98 个原始 PublicData 包含第三方重打包标记，来源与逐文件摘要保存在私有清单。
+- 配套 APK `1.0.4-preview` / versionCode 5，SHA256 `36bccd87fbf0afad70cd04539ef6db884840ab4385af1e04c9548f388836ad44`，原签名一致。构建退出 0，runtime 11 项通过，graphics 94 项中 93 通过、1 缺私有输入跳过。日志与精确源码摘要见 `.local/publication/data-patch-20261116/application-and-device-receipt.json`。
+- 增量补丁 `.local/publication/data-patch-20261116/SNK-v1.0.7-resource-dlc-patch.zip`，762877138 字节，SHA256 `46ff0dfb688b526c376be839c66a4f1676d4baaea59a2d75ad2f786994897649`。两个现有完整包分别覆盖后，72360 RomFS + 6611 XGS 的 SHA256 全部一致。补丁新增/替换 2356 RomFS、6193 XGS、294 AOC 文件，移出两个旧 nx_icon 的说明随包附带。原 NSP、完整 ZIP 与存档保持原输入。
+- 用户上传文件集中于父项目 `.local/nas-upload/SNK-patch-20261116/`，仅补丁、配套 APK、三步说明及 SHA256SUMS 四项。密钥、NCA、日志和工作目录不在交付目录或补丁中。性能目标仍按用户要求暂停。
+- 荣耀 `A42BBB5109000333` 重新连接，覆盖安装退出 0。原存档成功载入洛连特市，DLC 数量 98，Item/DLC 页面出现对应项目，玩偶装领取后条目变灰。未手动存档，其余项目尚未逐项领取。随后重启再次载入原档，场景和人物可见。
+- 荣耀初次资源扫描 78967/78971 一致，4 个 XGS 与通用清单不同。已备份四个原件、部署通用件，并将4项及294个AOC逐项重新校验通过，最终全量资源清单匹配。最后图 `honor-generic-final.png`。
+- 桌面 freeform 在14:15:20出现 PCLauncher/游戏窗口焦点超时 ANR。等待并最大化后恢复，真实城镇和菜单可操作，证据 `honor-last-anr.txt`。只验证该流程。存档 data.dat 因系统权限无法完整备份，tar仅目录，已明确标为不可用备份。文件大小/mtime仍50773字节/2026-11-15 09:59，原档可读。
+- 再生成命令 `python3 .local/publication/data-patch-20261116/prepare_patch.py` 当前会拒绝覆盖已有产物，需要复制脚本到新日期输出目录后使用。后续元数据补充步骤记录在本会话工具记录，最终交付 SHA 以上述值为准。公开 v1.0.3 Release 仍为原正式版本。

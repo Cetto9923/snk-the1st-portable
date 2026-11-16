@@ -1,6 +1,6 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T13:30:30.478192+08:00
+状态事件时间：2026-11-16T06:29:59.867596+00:00
 阶段：v1.0.3 published and verified; user-requested automatic optimization pause
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
@@ -40,6 +40,7 @@
 | T80 | CORE | passed | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
 | T81 | CORE | in_progress | Codex | T80 | 无额外门禁 | task/T81-descriptor-memo-cleanup |
 | T82 | RELEASE | passed | Codex | T80 | 无额外门禁 | task/T82-community-103-release |
+| T83 | DATA | passed | Codex | T82 | 无额外门禁 | task/T83-data-delta |
 
 ## 独占写入
 
