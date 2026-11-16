@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T08:07:53.270108+08:00",
-  "phase": "T72 BC parallel full-block path",
+  "updated_at": "2026-11-16T08:19:06.658438+08:00",
+  "phase": "T73 community preview 1.0.2",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -23,7 +23,18 @@
     "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T73",
+      "paths": [
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "README.md",
+        "docs/release/安装与使用.md",
+        "coordination/"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -696,6 +707,42 @@
       ],
       "recovery": "e645db6 / apk-compute-args-copy-candidate.apk(a0f6da07) / save008 and save007",
       "checkpoint": "0dfca4a6 packaged RG477M defaults / graphics90:89 passed,1 private skipped;runtime9;profile4;Java contract;10 actual negative controls / no tuning markers save008 SF29.939 p95=33.220ms max99.226;save007 SF29.847 p95=33.192 max99.275 / HOME3 same PID26945 / overall stable30 pending"
+    },
+    {
+      "id": "T73",
+      "role": "RELEASE_ANDROID",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T73-community-preview-102",
+      "dependencies": [
+        "T72"
+      ],
+      "pass_gates": [],
+      "objective": "Publish the current tested application and owned resources as 1.0.2-preview with accurate performance scope and existing copyright notice",
+      "inputs": [
+        "485bd2b / 0dfca4a6 packaged defaults",
+        "user authorized application/owned-resource community publication and user-supplied game data",
+        "existing package_community_release.py and v1.0.1-preview publication layout"
+      ],
+      "outputs": [
+        "versionCode3 APK and community ZIP with licenses/checksums",
+        "scoped real-device regression and source/build provenance",
+        "GitHub prerelease and downloaded-asset SHA verification"
+      ],
+      "write_scope": [
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "README.md",
+        "docs/release/安装与使用.md",
+        "coordination/"
+      ],
+      "acceptance": [
+        "same signing identity and original saves preserved",
+        "APK only application and owned/third-party licensed runtime assets",
+        "known ~99ms display intervals and untested devices clearly recorded",
+        "source tag and published/downloaded hashes agree"
+      ],
+      "recovery": "485bd2b / apk-rg477m-defaults-candidate.apk(0dfca4a6); public v1.0.1-preview",
+      "checkpoint": "ba052997 / v1.0.2-preview code3 same signer / native ELF and classes/resources identical0df / graphics90:89 passed,1 skipped;runtime9 / Continue8 smoke600 work30.019 SF29.994 p95=33.200 max50.054ms / HOME3 PID10658 / source freeze and packaging/publication next"
     }
   ],
   "blockers": [],

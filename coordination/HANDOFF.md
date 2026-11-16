@@ -971,3 +971,10 @@
 - 0df无调参文件城门2400间隔工作29.943190FPS/p95 38.907ms/max67.733ms，完整SF29.939289FPS/p95 33.220ms/max99.226ms，无失败/重复/>100ms。39批CPU14.878ms/GPU23.915ms，draw873.026/dispatch34.644。随后三轮HOME同PID26945、真实draw/present增长且result0，rg477m-defaults-resume-*末图人物和房屋可见。
 - 同包正常System载入save007，列表缩略图与确认45:23/17:04正确。flower-rg477m-defaults-motion-*无调参文件移动2400间隔工作29.845329FPS/p95 40.738ms/max69.971ms，完整SF29.847097FPS/p95 33.192ms/max99.275ms，失败0/重复0/>100ms0。人物、花盆、房屋首图可见，远处NPC载入淡入单帧呈点阵，尚未拿该单帧认定故障。5个RG缺省门禁/覆盖负控和5个BC实际函数负控全部真实断言/ASan失败，原始日志保留。
 - T72按BC解码等价、既有池复用、RG477M默认配置打包和真实生命周期范围通过。整体验收仍有约99ms物理长间隔，不能称全面稳定30。下一步先把已验证当前候选发布为带已知问题的社区预览版，继续独立系统调度轨迹定位长帧。Perfetto官方CPU Scheduling/命令行教程已核，设备支持linux.ftrace与SurfaceFlinger FrameTimeline。Mac工具v59.1从官方manifest下载并核大小与SHA，perfetto-tool-provenance.json。未修改系统调度、绑核、驱动或全局显示设置。
+
+## T73 社区预览版1.0.2
+
+- 从485bd2b创建task/T73-community-preview-102，唯一写者Codex。仅应用版本元数据升为versionCode3/versionName1.0.2-preview，更新README与安装说明，原版权与免责说明和NOTICE保留。用户已授权发布应用及自有资源、游戏数据自行提供。预览版已知约99ms长帧与其他设备实测边界明确记录。
+- build-community-102-candidate.log退出0。最终候选APK ba052997681a476374f0733046ad06fa7a4c0699d3f675e9a7b6c6d254f1ab85，apk-community-102-candidate.apk/精确ELF/community-102-candidate-provenance.json保留。实际原生ELF与0df完全相同，逐个ZIP entry比较仅AndroidManifest与META-INF签名元数据改变，Java classes.dex、原生库及全部资源逐字节相同。签名证书SHA仍0203b98094ec6fd5811162a236b376241e8425653996744c418e0cc00696969d。APK assets只有9项许可证/NOTICE，原游戏输入扫描为空。
+- 90图形89通过1私有fixture跳过，运行时9通过。签名覆盖升级成功，设备实际versionCode3/versionName1.0.2-preview，Continue8正常人物/城门首图。无调参文件真实移动600间隔601不同工作帧30.019219FPS/p95 35.693ms/max51.890ms，完整SF29.994243FPS/p95 33.200ms/max50.054ms，失败0/重复0/>100ms0。gate-community-102-smoke-motion-*。该短窗没有替代同ELF的两处2400长测，后者仍约99ms物理长间隔。
+- 最终APK三轮HOME同PID10658、真实draw/present增长且result0，rg-community-102-resume-*末图人物/场景可见。原音频日志非零、AAudio_state4/xruns0，仅日志范围。存档继续使用原save008，原有save007及全槽备份保留。当前源码/版本/文档待冻结为发布提交，再运行既有package_community_release.py并在独立空轨仓创建v1.0.2-preview，随后回下载全SHA验证。荣耀暂停，稳定30总目标继续。

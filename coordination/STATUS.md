@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T08:07:53.270108+08:00
-阶段：T72 BC parallel full-block path
+状态事件时间：2026-11-16T08:19:06.658438+08:00
+阶段：T73 community preview 1.0.2
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -30,10 +30,11 @@
 | T70 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T70-indirect-dispatch-sync |
 | T71 | GRAPHICS | passed | Codex | T58, T68 | 无额外门禁 | task/T71-submit-stall-counters |
 | T72 | GRAPHICS | passed | Codex | T71 | 无额外门禁 | task/T72-bc-parallel-fast |
+| T73 | RELEASE_ANDROID | in_progress | Codex | T72 | 无额外门禁 | task/T73-community-preview-102 |
 
 ## 独占写入
 
-- 无
+- {"owner": "Codex", "task": "T73", "paths": ["src/android/app/gamewindow/AndroidManifest.xml", "README.md", "docs/release/安装与使用.md", "coordination/"]}
 
 ## 阻塞
 
