@@ -19,19 +19,15 @@ class PointerDefaultsTests(unittest.TestCase):
 #include <cstring>
 #include <string>
 #define PROP_VALUE_MAX 92
-const char *board;
-int __system_property_get(const char *key,char *out) {assert(!strcmp(key,"ro.board.platform"));strcpy(out,board);return strlen(out);}
 void configure(const std::string &path) {
 ''' + block + r'''
 }
 int main(int argc,char **argv) {
     assert(argc==2);std::string path=argv[1],marker=path+"/hle-original-pointer-tests";
-    for(const char *platform:{"mt6897","mt6989","sm8635","","other"}) {
-        board=platform;configure(path);
-        assert(atoi(getenv("SNK_ORIGINAL_POINTER_TESTS"))==(!strncmp(board,"mt68",4)||!strncmp(board,"mt69",4)));
-        for(char c:{'0','1'}) {FILE *f=fopen(marker.c_str(),"wb");assert(f);fputc(c,f);fclose(f);configure(path);assert(atoi(getenv("SNK_ORIGINAL_POINTER_TESTS"))==c-'0');}
-        remove(marker.c_str());
-    }
+    configure(path);
+    assert(atoi(getenv("SNK_ORIGINAL_POINTER_TESTS"))==1);
+    for(char c:{'0','1'}) {FILE *f=fopen(marker.c_str(),"wb");assert(f);fputc(c,f);fclose(f);configure(path);assert(atoi(getenv("SNK_ORIGINAL_POINTER_TESTS"))==c-'0');}
+    remove(marker.c_str());
 }
 '''
         with tempfile.TemporaryDirectory() as directory:

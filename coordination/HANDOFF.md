@@ -1150,3 +1150,12 @@
 - 荣耀初次资源扫描 78967/78971 一致，4 个 XGS 与通用清单不同。已备份四个原件、部署通用件，并将4项及294个AOC逐项重新校验通过，最终全量资源清单匹配。最后图 `honor-generic-final.png`。
 - 桌面 freeform 在14:15:20出现 PCLauncher/游戏窗口焦点超时 ANR。等待并最大化后恢复，真实城镇和菜单可操作，证据 `honor-last-anr.txt`。只验证该流程。存档 data.dat 因系统权限无法完整备份，tar仅目录，已明确标为不可用备份。文件大小/mtime仍50773字节/2026-11-15 09:59，原档可读。
 - 再生成命令 `python3 .local/publication/data-patch-20261116/prepare_patch.py` 当前会拒绝覆盖已有产物，需要复制脚本到新日期输出目录后使用。后续元数据补充步骤记录在本会话工具记录，最终交付 SHA 以上述值为准。公开 v1.0.3 Release 仍为原正式版本。
+
+
+## T84/T85 · 2026-11-16 一加启动候选与自动横屏
+
+- 分支 `task/T84-oneplus-crash` 基于062af6d。用户log在Adreno840设备加载window3.xtx后SIGSEGV，PC偏移0x5698d0，arena0x7a37600000+0x2d1400000跨多段4GiB区域，早先allocator位32补丁错误拒绝部分有效节点。JNI缺省对所有设备恢复原始四处CBZ判空，原诊断marker仍可覆盖。runtime11通过退出0，日志 `.local/publication/oneplus-runtime-tests.log`。同类cleanup位32补丁仍待独立验证，未据此宣称全设备全流程稳定。
+- 1.0.5-preview候选b4cd0142已发用户，用户后续截图反馈能进入厂商标志但无法横屏。手机收到的精确APK摘要未回读，按用户上下文记录。
+- 新包1.0.6-preview/versionCode7，manifest增加sensorLandscape，允许左右横握，APK实际xmltree screenOrientation=6。SHA256 `b85a30cd9204b6fc1d5e2842cd9bab209281f198f705f29c8c09e31c9119526c`。构建/安装日志、活动dump与图片在 `.local/publication/landscape-106/`，精确构建命令见会话工具记录。
+- 荣耀A42BBB5109000333现已连接，前包1.0.4/5回读为honor-previous.apk后覆盖安装退出0，PID9686，系统活动方向SENSOR_LANDSCAPE，3000x1920截图。新缺省original_allocator_pointer_tests=1已写入该轮日志，未见fault，真实标题和当前进度读档可见，截图honor-game.png/honor-gameplay.png。虚拟按键沿用按新视图尺寸重算的既有布局。该次只验证启动/读档窗口。
+- 新包已通过open -R在访达定位。手机方向与完整游戏流程等待对方实测。性能自动优化继续按用户要求暂停。公开Release仍为此前阶段版本。

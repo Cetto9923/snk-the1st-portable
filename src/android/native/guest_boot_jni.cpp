@@ -128,9 +128,9 @@ void* GuestThreadMain(void* opaque) {
         fprintf(stderr, "[port] operation_mode=1 source=all-device-docked\n");
         const std::string pointer_marker = path + "/hle-original-pointer-tests";
         FILE *pointer_file = fopen(pointer_marker.c_str(), "rb");
-        char platform[PROP_VALUE_MAX] = {};
-        __system_property_get("ro.board.platform", platform);
-        bool original_pointer_tests = !strncmp(platform, "mt68", 4) || !strncmp(platform, "mt69", 4);
+        // A reserved arena can cross a 4 GiB boundary on any device, so bit 32
+        // cannot distinguish valid pointers from invalid ones.
+        bool original_pointer_tests = true;
         if (pointer_file) original_pointer_tests = fgetc(pointer_file) == '1';
         if (pointer_file) fclose(pointer_file);
         setenv("SNK_ORIGINAL_POINTER_TESTS", original_pointer_tests ? "1" : "0", 1);

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T06:29:59.867596+00:00",
+  "updated_at": "2026-11-16T10:58:50.252785+00:00",
   "phase": "v1.0.3 published and verified; user-requested automatic optimization pause",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
@@ -1089,6 +1089,68 @@
       ],
       "recovery": "原始NSP、旧SNK-data.zip、现有v1.0.3发布及暂停的性能目标",
       "checkpoint": "增量补丁762877138字节，SHA256 46ff0dfb688b526c376be839c66a4f1676d4baaea59a2d75ad2f786994897649；两个旧包虚拟合并78971资源逐项SHA一致。APK1.0.4-preview/5同签名36bccd87，runtime11通过、graphics94中93通过1缺私有输入跳过。荣耀安装退出0，真实城镇旧档载入、98项DLC识别、菜单列出并领取玩偶装。已补四个通用着色器并复核，原件存本机。其余DLC逐项与天玑配套包真机NOT_RUN，桌面模式焦点ANR记录。性能目标仍暂停。"
+    },
+    {
+      "id": "T84",
+      "role": "RUNTIME",
+      "owner": "Codex",
+      "status": "in_progress",
+      "branch": "task/T84-oneplus-crash",
+      "objective": "排查一加启动崩溃及同类地址位假设问题",
+      "inputs": [
+        "用户提供SIGSEGV模块偏移0x5698d0的guest_boot.log",
+        "用户确认Ace7Pro第五代骁龙8至尊，截图显示1.0.5后进入厂商标志"
+      ],
+      "outputs": [
+        "1.0.5-preview候选APK及runtime11测试日志",
+        "所有设备默认原始allocator判空，保留诊断marker覆盖"
+      ],
+      "dependencies": [
+        "T83"
+      ],
+      "write_scope": [
+        "src/android/native/guest_boot_jni.cpp",
+        "tests/runtime/test_snk_pointer_defaults.py",
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "coordination/"
+      ],
+      "acceptance": [
+        "日志故障点与真实arena地址关联",
+        "默认入口设置SNK_ORIGINAL_POINTER_TESTS=1且marker回退覆盖通过",
+        "机型真实流程按实际验证范围记录"
+      ],
+      "recovery": "同签名1.0.4-preview和原始数据、存档",
+      "checkpoint": "runtime11通过，1.0.5候选已发用户。1.0.6在荣耀真实读档通过本次启动窗口。其他设备与同类清理指针补丁尚待后续验证。"
+    },
+    {
+      "id": "T85",
+      "role": "ANDROID",
+      "owner": "Codex",
+      "status": "passed",
+      "branch": "task/T84-oneplus-crash",
+      "objective": "手机启动自动横屏并生成可覆盖安装候选包",
+      "inputs": [
+        "用户手机竖屏且无法转横屏截图",
+        "1.0.5-preview source dirty on062af6d"
+      ],
+      "outputs": [
+        "1.0.6-preview/versionCode7 APK",
+        "APK声明sensorLandscape=6，荣耀系统活动方向与横屏截图"
+      ],
+      "dependencies": [
+        "T84"
+      ],
+      "write_scope": [
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "coordination/"
+      ],
+      "acceptance": [
+        "打包manifest的screenOrientation=6",
+        "荣耀安装退出0且活动请求SENSOR_LANDSCAPE",
+        "真实游戏读档与按键横屏布局截图保存"
+      ],
+      "recovery": "1.0.5候选与honor-previous.apk",
+      "checkpoint": "APK SHA256 b85a30cd9204b6fc1d5e2842cd9bab209281f198f705f29c8c09e31c9119526c。构建/荣耀覆盖安装退出0，标题正常，读档到世界地图教学及游戏画面，PID9686无fault记录。手机左右横握的实测等待对方覆盖安装。"
     }
   ],
   "blockers": [],
