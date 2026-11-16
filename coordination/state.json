@@ -1138,7 +1138,7 @@
         "APK声明sensorLandscape=6，荣耀系统活动方向与横屏截图"
       ],
       "dependencies": [
-        "T84"
+        "T83"
       ],
       "write_scope": [
         "src/android/app/gamewindow/AndroidManifest.xml",
