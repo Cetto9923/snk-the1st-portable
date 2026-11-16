@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T10:43:20.450662+08:00",
-  "phase": "T76 texture descriptor ID index",
+  "updated_at": "2026-11-16T11:16:47.891781+08:00",
+  "phase": "T77 optional Android Performance Hint session",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -836,6 +836,45 @@
       ],
       "recovery": "64c0e36 / APK9b410c8b /save008/save007 backups retained",
       "checkpoint": "APK78a1dfc1 /graphics92:91passed1skip,runtime10,3negative controls / save008 SF29.604 p95=33.442ms max132.319ms;save007 SF28.510 max99.274ms /HOME3 PID26483 /scope passed;overall stable30 pending"
+    },
+    {
+      "id": "T77",
+      "role": "ANDROID_RUNTIME",
+      "status": "passed",
+      "owner": "Codex",
+      "branch": "task/T77-android-performance-hint",
+      "dependencies": [
+        "T76"
+      ],
+      "pass_gates": [],
+      "objective": "Evaluate supported app-local ADPF hint session with real frame workload, existing lifecycle and original30fps pacing preserved",
+      "inputs": [
+        "b3cd31f / APK78a1dfc1",
+        "RG477M HAL Support true,preferred8333333ns,active sessions empty",
+        "official MediaTek ADPF case and native Codelab;NDK26 API33 header"
+      ],
+      "outputs": [
+        "archived optional ADPF experimental patch/APK with actual API/lifecycle component tests",
+        "same-APK 2400-interval on/off result and source/config restoration"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/android/native/performance_hint.h",
+        "src/android/native/performance_hint.cpp",
+        "src/android/native/game_window_jni.cpp",
+        "src/android/native/CMakeLists.txt",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "tests/graphics/test_snk_performance_hint.py"
+      ],
+      "acceptance": [
+        "use actual app guest/render thread and original target interval",
+        "exclude limiter and presentation wait from reported work",
+        "API unavailable/failure preserves original render path",
+        "pause/shutdown close sessions with safe concurrent access",
+        "actual RG477M A/B decides deployment;no inherited external performance figures"
+      ],
+      "recovery": "b3cd31f / APK78a1dfc1,previous9b / save008/save007 backups intact",
+      "checkpoint": "EXPERIMENT REVERTED /6b API session allowed and reports0 /on SF29.211 vs off29.281;no confirmed benefit /94graphics93pass1skip,10runtime,6neg /src exact b3cd31f;new sources and marker archived /actual HOME session test NOT_RUN /78 restoration in progress"
     }
   ],
   "blockers": [],

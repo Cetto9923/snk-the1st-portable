@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T10:43:20.450662+08:00
-阶段：T76 texture descriptor ID index
+状态事件时间：2026-11-16T11:16:47.891781+08:00
+阶段：T77 optional Android Performance Hint session
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -34,6 +34,7 @@
 | T74 | GRAPHICS_RUNTIME | passed | Codex | T72, T73 | 无额外门禁 | task/T74-scheduling-trace |
 | T75 | RUNTIME | passed | Codex | T74 | 无额外门禁 | task/T75-allocator-symbol-cache |
 | T76 | GRAPHICS_RUNTIME | passed | Codex | T75 | 无额外门禁 | task/T76-texture-descriptor-index |
+| T77 | ANDROID_RUNTIME | passed | Codex | T76 | 无额外门禁 | task/T77-android-performance-hint |
 
 ## 独占写入
 
