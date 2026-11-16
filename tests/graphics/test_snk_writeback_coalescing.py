@@ -29,7 +29,8 @@ static uint64_t writeback_bytes, wb_completed_skipped, wb_completed_bytes;
 static uint64_t wb_skipped, wb_skipped_bytes;
 struct Buffer {
     const void *mapped;
-    void invalidate() { assert(fenced && resolving_pending); }
+    size_t size;
+    void invalidate() { assert(fenced && resolving_pending && size>0 && size<=256); }
 };
 struct PendingWriteback {
     uint64_t addr, bytes, modified_bytes;
@@ -78,7 +79,7 @@ int main() {
             const void *slot = &slots[next() % 2];
             outputs[i].fill(static_cast<unsigned char>(next()));
             pending_writebacks.push_back({uint64_t(guest.data() + offset),
-                bytes, modified, slot, {outputs[i].data()}});
+                bytes, modified, slot, {outputs[i].data(),bytes}});
             if (all || slot == &slots[0])
                 memcpy(expected.data() + offset, outputs[i].data(),
                        modified ? modified : bytes);

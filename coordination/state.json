@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T11:16:47.891781+08:00",
-  "phase": "T77 optional Android Performance Hint session",
+  "updated_at": "2026-11-16T12:06:17.234201+08:00",
+  "phase": "T78 bounded cache invalidation for audited CPU writeback reads",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -23,7 +23,19 @@
     "honor_test_status": "paused_by_user"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [],
+  "active_writers": [
+    {
+      "owner": "Codex",
+      "task": "T78",
+      "paths": [
+        "coordination/",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "tests/graphics/test_snk_indirect_templates.py",
+        "tests/graphics/test_snk_writeback_cache_range.py",
+        "tests/graphics/test_snk_writeback_coalescing.py"
+      ]
+    }
+  ],
   "tasks": [
     {
       "id": "T00",
@@ -875,6 +887,44 @@
       ],
       "recovery": "b3cd31f / APK78a1dfc1,previous9b / save008/save007 backups intact",
       "checkpoint": "EXPERIMENT REVERTED /6b API session allowed and reports0 /on SF29.211 vs off29.281;no confirmed benefit /94graphics93pass1skip,10runtime,6neg /src exact b3cd31f;new sources and marker archived /actual HOME session test NOT_RUN /78 restoration in progress"
+    },
+    {
+      "id": "T78",
+      "role": "GRAPHICS_RUNTIME",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T78-writeback-cache-range",
+      "dependencies": [
+        "T76",
+        "T77"
+      ],
+      "pass_gates": [],
+      "objective": "Match mapped-memory invalidation to the already proven CPU copy extent, retaining fence visibility, atom alignment and image-alias fallback",
+      "inputs": [
+        "0222823 source exact b3cd31f /APK78a1dfc1",
+        "172/8595 main samples in Mali invalidation all under apply_writeback",
+        "actual readback type1 flags0xb noncoherent cached",
+        "Khronos vkInvalidateMappedMemoryRanges host-range and atom/fence requirements"
+      ],
+      "outputs": [
+        "minimal non-owning Buffer view size adjustment for invalidation",
+        "actual Buffer/cache_range and copy regressions;exact APK and same-save long A/B"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "tests/graphics/test_snk_indirect_templates.py",
+        "tests/graphics/test_snk_writeback_cache_range.py",
+        "tests/graphics/test_snk_writeback_coalescing.py"
+      ],
+      "acceptance": [
+        "CPU copied data and original buffer metadata unchanged",
+        "only proven prefix shrinks;unknown/image alias original copy extent retained",
+        "existing cache_range atom/allocation handling and original synchronization preserved",
+        "same-scene distinct work and full physical SF;overall stable30 pending"
+      ],
+      "recovery": "0222823 / sourceb3cd31f / APK78a1dfc1;all original saves retained",
+      "checkpoint": "APK72391561 /93 graphics:92pass1skip,runtime10,5 negative controls;HOME3;overall FPS not improved. New latest save015 backed up with all saves. Menu-only gate-writeback-clean-after-user-motion cancelled and EXCLUDED. T78 flower regression pending."
     }
   ],
   "blockers": [],

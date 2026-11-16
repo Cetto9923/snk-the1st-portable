@@ -2189,7 +2189,9 @@ void apply_writeback(PendingWriteback &write){
     uint64_t bytes=write.modified_bytes && write.modified_bytes<=write.bytes?write.modified_bytes:write.bytes;
     if(bytes<write.bytes)
         for_images_overlapping(write.addr,write.bytes,[&](Image &){bytes=write.bytes;});
-    write.buffer.invalidate();
+    Buffer read_range=write.buffer;
+    read_range.size=size_t(bytes);
+    read_range.invalidate();
     invalidate_cpu_range(write.addr,bytes);
     memcpy(reinterpret_cast<void*>(write.addr),write.buffer.mapped,size_t(bytes));
     writeback_bytes+=bytes;

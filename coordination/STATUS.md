@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T11:16:47.891781+08:00
-阶段：T77 optional Android Performance Hint session
+状态事件时间：2026-11-16T12:06:17.234201+08:00
+阶段：T78 bounded cache invalidation for audited CPU writeback reads
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -35,10 +35,11 @@
 | T75 | RUNTIME | passed | Codex | T74 | 无额外门禁 | task/T75-allocator-symbol-cache |
 | T76 | GRAPHICS_RUNTIME | passed | Codex | T75 | 无额外门禁 | task/T76-texture-descriptor-index |
 | T77 | ANDROID_RUNTIME | passed | Codex | T76 | 无额外门禁 | task/T77-android-performance-hint |
+| T78 | GRAPHICS_RUNTIME | in_progress | Codex | T76, T77 | 无额外门禁 | task/T78-writeback-cache-range |
 
 ## 独占写入
 
-- 无
+- {"owner": "Codex", "task": "T78", "paths": ["coordination/", "src/graphics/nvn_vulkan/engine/xbg_game.cpp", "tests/graphics/test_snk_indirect_templates.py", "tests/graphics/test_snk_writeback_cache_range.py", "tests/graphics/test_snk_writeback_coalescing.py"]}
 
 ## 阻塞
 

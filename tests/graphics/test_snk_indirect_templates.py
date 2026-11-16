@@ -175,8 +175,8 @@ int main(){
 #include <cstring>
 struct Image {};
 bool image_alias=false;
-uint64_t writeback_bytes=0,invalidated=0;
-struct Buffer {void *mapped;unsigned invalidations=0;void invalidate(){++invalidations;}};
+uint64_t writeback_bytes=0,invalidated=0,cache_invalidated=0,cache_invalidations=0;
+struct Buffer {void *mapped;size_t size;void invalidate(){++cache_invalidations;cache_invalidated=size;}};
 struct PendingWriteback {uint64_t addr,bytes,modified_bytes;Buffer buffer;};
 template<class F> void for_images_overlapping(uint64_t,uint64_t,F callback){
     if(image_alias){Image image;callback(image);}
@@ -186,19 +186,19 @@ void invalidate_cpu_range(uint64_t,uint64_t bytes){invalidated=bytes;}
 int main(){
     std::array<uint8_t,96> cpu,gpu;
     gpu.fill(0x31);cpu.fill(0x79);
-    PendingWriteback write{uint64_t(cpu.data()),cpu.size(),32,{gpu.data()}};
+    PendingWriteback write{uint64_t(cpu.data()),cpu.size(),32,{gpu.data(),gpu.size()}};
     apply_writeback(write);
     assert(write.bytes==96 && invalidated==32 && writeback_bytes==32);
-    assert(write.buffer.invalidations==1);
+    assert(cache_invalidations==1 && cache_invalidated==32 && write.buffer.size==96);
     for(size_t i=0;i<cpu.size();++i)assert(cpu[i]==(i<32?0x31:0x79));
     // An earlier full result followed by a partial result retains its tail.
     write.modified_bytes=0;apply_writeback(write);gpu.fill(0x55);
     write.modified_bytes=32;apply_writeback(write);
     for(size_t i=0;i<cpu.size();++i)assert(cpu[i]==(i<32?0x55:0x31));
     cpu.fill(0x79);write.modified_bytes=97;apply_writeback(write);
-    assert(cpu==gpu && invalidated==96);
+    assert(cpu==gpu && invalidated==96 && cache_invalidated==96);
     cpu.fill(0x79);write.modified_bytes=32;image_alias=true;apply_writeback(write);
-    assert(cpu==gpu && invalidated==96);
+    assert(cpu==gpu && invalidated==96 && cache_invalidated==96);
 }
 '''
         with tempfile.TemporaryDirectory() as directory:
