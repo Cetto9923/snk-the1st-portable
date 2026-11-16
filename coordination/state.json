@@ -32,7 +32,9 @@
         "README.md",
         "README-HONOR.md",
         "docs/release/安装与使用.md",
-        "src/android/app/gamewindow/AndroidManifest.xml"
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "scripts/android/build_game_window_apk.sh",
+        "NOTICE.md"
       ]
     }
   ],
@@ -1054,7 +1056,9 @@
         "README.md",
         "README-HONOR.md",
         "docs/release/安装与使用.md",
-        "src/android/app/gamewindow/AndroidManifest.xml"
+        "src/android/app/gamewindow/AndroidManifest.xml",
+        "scripts/android/build_game_window_apk.sh",
+        "NOTICE.md"
       ],
       "acceptance": [
         "latest user community/legal wording preserved",

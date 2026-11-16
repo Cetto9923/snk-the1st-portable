@@ -43,7 +43,7 @@
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T82", "paths": ["coordination/", "README.md", "README-HONOR.md", "docs/release/安装与使用.md", "src/android/app/gamewindow/AndroidManifest.xml"]}
+- {"owner": "Codex", "task": "T82", "paths": ["coordination/", "README.md", "README-HONOR.md", "docs/release/安装与使用.md", "src/android/app/gamewindow/AndroidManifest.xml", "scripts/android/build_game_window_apk.sh", "NOTICE.md"]}
 
 ## 阻塞
 
