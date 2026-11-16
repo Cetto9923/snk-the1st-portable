@@ -22,6 +22,7 @@ def function(source, signature):
 class PresentTimingTests(unittest.TestCase):
     def test_actual_schedule_and_application_marker_with_optional_engine(self):
         source = SOURCE.read_text()
+        profile = function(source, 'static int nvn_vulkan_rg477m_profile(void)')
         marker = function(source, 'static int nvn_vulkan_present_timing_requested(void)')
         schedule = function(source, 'static void nvn_vulkan_schedule_present(')
         program = r'''
@@ -45,14 +46,21 @@ static uint64_t desired;
 #ifdef WITH_ENGINE
 uint64_t xbg_desired_present_time_ns(void) { return desired; }
 #endif
-''' + marker + '\n' + schedule + r'''
+''' + profile + '\n' + marker + '\n' + schedule + r'''
 int main(int argc, char **argv) {
     assert(argc==2);
+    unsetenv("FFRS_PROFILE_RG477M");
     unsetenv("FFRS_APP_FILES_DIR");assert(!nvn_vulkan_present_timing_requested());
     setenv("FFRS_APP_FILES_DIR",argv[1],1);assert(!nvn_vulkan_present_timing_requested());
+    setenv("FFRS_PROFILE_RG477M","1",1);assert(nvn_vulkan_present_timing_requested());
+    unsetenv("FFRS_APP_FILES_DIR");assert(nvn_vulkan_present_timing_requested());
+    setenv("FFRS_APP_FILES_DIR",argv[1],1);
+    unsetenv("FFRS_PROFILE_RG477M");
     char path[PATH_MAX];snprintf(path,sizeof(path),"%s/gfx-present-timing",argv[1]);
     FILE *file=fopen(path,"wb");assert(file);fputs("0",file);fclose(file);
     assert(!nvn_vulkan_present_timing_requested());
+    setenv("FFRS_PROFILE_RG477M","1",1);assert(!nvn_vulkan_present_timing_requested());
+    unsetenv("FFRS_PROFILE_RG477M");
     file=fopen(path,"wb");assert(file);fputs("1",file);fclose(file);
     assert(nvn_vulkan_present_timing_requested());
     setenv("FFRS_APP_FILES_DIR","",1);assert(!nvn_vulkan_present_timing_requested());

@@ -45,14 +45,20 @@
 
 extern uint64_t xbg_desired_present_time_ns(void) __attribute__((weak));
 
+static int nvn_vulkan_rg477m_profile(void) {
+    const char *profile = getenv("FFRS_PROFILE_RG477M");
+    return profile && profile[0] == '1' && profile[1] == '\0';
+}
+
 static int nvn_vulkan_present_timing_requested(void) {
+    int default_enabled = nvn_vulkan_rg477m_profile();
     const char *directory = getenv("FFRS_APP_FILES_DIR");
-    if (!directory || !directory[0]) return 0;
+    if (!directory || !directory[0]) return default_enabled;
     char path[PATH_MAX];
     int length = snprintf(path, sizeof(path), "%s/gfx-present-timing", directory);
-    if (length < 0 || (size_t)length >= sizeof(path)) return 0;
+    if (length < 0 || (size_t)length >= sizeof(path)) return default_enabled;
     FILE *file = fopen(path, "rb");
-    if (!file) return 0;
+    if (!file) return default_enabled;
     int enabled = fgetc(file) == '1';
     fclose(file);
     return enabled;
@@ -913,6 +919,7 @@ static int nvn_vulkan_create_window_surface(nvn_device_state *device, void *nati
                 else if (has_relaxed) present_mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;
                 else present_mode = VK_PRESENT_MODE_FIFO_KHR;
 
+                if (nvn_vulkan_rg477m_profile()) present_mode = VK_PRESENT_MODE_FIFO_KHR;
                 const char *env_mode = getenv("FFRS_PRESENT_MODE");
                 if (env_mode && !strcmp(env_mode, "mailbox") && has_mailbox) present_mode = VK_PRESENT_MODE_MAILBOX_KHR;
                 else if (env_mode && !strcmp(env_mode, "relaxed") && has_relaxed) present_mode = VK_PRESENT_MODE_FIFO_RELAXED_KHR;

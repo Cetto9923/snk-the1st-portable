@@ -35,6 +35,7 @@ final class DeviceProfile {
     static DeviceProfile select(String soc, String model, int smallestWidthDp,
                                 int displayShortEdge, String override) {
         String id = override == null ? "" : override.trim().toLowerCase(Locale.ROOT);
+        if (id.equals("rg477m")) return new DeviceProfile(id, 450, 30);
         if (id.equals("handheld_mid")) return new DeviceProfile(id, 540, 30);
         if (id.equals("tablet_sd8s")) return new DeviceProfile(id, 1080, 30);
         if (id.equals("odin_elite")) return new DeviceProfile(id, 1080, 30);
@@ -43,7 +44,7 @@ final class DeviceProfile {
             return new DeviceProfile(id, 1080, 30);
         String device = model == null ? "" : model.trim().toLowerCase(Locale.ROOT);
         if (device.contains("rg477m") || device.contains("rg-477m"))
-            return new DeviceProfile("handheld_mid", 540, 30);
+            return new DeviceProfile("rg477m", 450, 30);
         String chip = soc == null ? "" : soc.trim().toLowerCase(Locale.ROOT);
         if (chip.equals("sm8635") && smallestWidthDp >= 600)
             return new DeviceProfile("tablet_sd8s", 1080, 30);

@@ -8,6 +8,54 @@ ROOT = pathlib.Path(__file__).resolve().parents[2]
 
 
 class PresentModeScopeTests(unittest.TestCase):
+    def test_actual_rg477m_default_and_explicit_mode_precedence(self):
+        source = (ROOT / 'src/graphics/nvn_device/nvn_backend_vulkan.c').read_text()
+        begin = source.index('static int nvn_vulkan_rg477m_profile(void)')
+        end = source.index('static int nvn_vulkan_present_timing_requested(void)', begin)
+        profile = source[begin:end]
+        begin = source.index('static FILE *nvn_vulkan_present_mode_marker(void)')
+        end = source.index('\ntypedef struct {', begin)
+        marker = source[begin:end]
+        begin = source.index('                if (has_mailbox) present_mode =')
+        end = source.index('                fprintf(stderr, "[nvn] vulkan: selected present mode', begin)
+        selection = source[begin:end]
+        program = r'''
+#include <assert.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <limits.h>
+#include <string.h>
+enum {VK_PRESENT_MODE_IMMEDIATE_KHR=0,VK_PRESENT_MODE_MAILBOX_KHR=1,
+      VK_PRESENT_MODE_FIFO_KHR=2,VK_PRESENT_MODE_FIFO_RELAXED_KHR=3};
+''' + profile + marker + r'''
+static int select_mode(void){
+    int has_mailbox=1,has_relaxed=1,has_immediate=1,present_mode=2;
+''' + selection + r'''
+    return present_mode;
+}
+int main(int argc,char **argv){
+    assert(argc==2);setenv("FFRS_APP_FILES_DIR",argv[1],1);
+    unsetenv("FFRS_PRESENT_MODE");unsetenv("FFRS_PROFILE_RG477M");assert(select_mode()==1);
+    setenv("FFRS_PROFILE_RG477M","1",1);assert(select_mode()==2);
+    setenv("FFRS_PRESENT_MODE","mailbox",1);assert(select_mode()==1);
+    char path[PATH_MAX];snprintf(path,sizeof(path),"%s/gfx-present-mode",argv[1]);
+    FILE *file=fopen(path,"wb");assert(file);fputs("0",file);fclose(file);
+    assert(select_mode()==2);
+    unsetenv("FFRS_PRESENT_MODE");
+    file=fopen(path,"wb");assert(file);fputs("2",file);fclose(file);
+    assert(select_mode()==1);
+}
+'''
+        with tempfile.TemporaryDirectory() as directory:
+            path = pathlib.Path(directory)
+            (path / 'mode.c').write_text(program)
+            built = subprocess.run(['clang', '-std=c11', '-D_POSIX_C_SOURCE=200809L',
+                                    '-fsanitize=address,undefined', str(path / 'mode.c'),
+                                    '-o', str(path / 'mode')], capture_output=True, text=True)
+            self.assertEqual(built.returncode, 0, built.stderr)
+            run = subprocess.run([str(path / 'mode'), str(path)], capture_output=True, text=True)
+            self.assertEqual(run.returncode, 0, run.stderr)
+
     def test_actual_marker_reader_uses_application_directory(self):
         source = (ROOT / 'src/graphics/nvn_device/nvn_backend_vulkan.c').read_text()
         begin = source.index('static FILE *nvn_vulkan_present_mode_marker(void)')

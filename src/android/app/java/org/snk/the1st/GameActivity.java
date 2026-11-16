@@ -1469,6 +1469,7 @@ public final class GameActivity extends Activity implements SurfaceHolder.Callba
         GameWindowNative.setProfileTargetFps(selectedDeviceProfile.targetFps,
                 selectedDeviceProfile.id.equals("tablet_sd8s"));
         GameWindowNative.setProfileRenderHeight(selectedDeviceProfile.nativeRenderHeight());
+        GameWindowNative.setProfileGraphicsTuning(selectedDeviceProfile.id.equals("rg477m"));
         String log_path = files == null ? null : new File(files, "guest_boot.log").getAbsolutePath();
         Thread guest = new Thread(new GuestBootTask(image, romfs, log_path, saveRoot), "ffrs-guest");
         guest.start();

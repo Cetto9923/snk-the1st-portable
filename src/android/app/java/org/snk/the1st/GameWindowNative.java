@@ -21,6 +21,7 @@ public final class GameWindowNative {
     public static native void audioDevicesChanged();
     public static native void setProfileTargetFps(int fps, boolean tablet);
     public static native void setProfileRenderHeight(int height);
+    public static native void setProfileGraphicsTuning(boolean rg477m);
     public static native boolean hostExitReady(boolean request);
     /** Returns {present, pointer, width, height, format, generation}. */
     public static native long[] setSurface(Surface surface);

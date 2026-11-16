@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <stdatomic.h>
 #include <pthread.h>
+#include <limits.h>
 #include "xbg_texture.h"
 #include <string.h>
 #include "../tex/nvn_deswizzle.h"
@@ -320,12 +321,15 @@ static int bc_fast_block(uint32_t fmt,const uint8_t *b,uint8_t *d,size_t pitch) 
 }
 typedef struct {
     uint32_t fmt,w,h,depth; const uint8_t *src; size_t row,image,blocks,rows,units; unsigned bpp,block_bytes; uint8_t *dst;
-    atomic_size_t next; atomic_int err; atomic_uint active;
+    int fast; atomic_size_t next; atomic_int err; atomic_uint active;
 } bc_job;
 static int bc_rows(bc_job *j,size_t unit) {   /* 一个单位 = 一层里的 4 个块行 | one unit = 4 block rows of one layer */
     size_t per=(j->rows+3)/4,z=unit/per,by0=(unit%per)*4; uint8_t pixels[128];
     for(size_t by=by0;by<by0+4 && by<j->rows;by++)for(size_t bx=0;bx<j->blocks;bx++){
-        int r=xbg_decode_block(j->fmt,j->src+z*j->image+by*j->row+bx*j->block_bytes,j->block_bytes,pixels,sizeof(pixels));if(r)return r;
+        const uint8_t *block=j->src+z*j->image+by*j->row+bx*j->block_bytes;
+        if(j->fast && j->bpp==4 && bx*4+4<=j->w && by*4+4<=j->h &&
+           bc_fast_block(j->fmt,block,j->dst+(((size_t)z*j->h+by*4)*j->w+bx*4)*4,(size_t)j->w*4))continue;
+        int r=xbg_decode_block(j->fmt,block,j->block_bytes,pixels,sizeof(pixels));if(r)return r;
         for(unsigned y=0;y<4 && by*4+y<j->h;y++)for(unsigned x=0;x<4 && bx*4+x<j->w;x++)
             memcpy(j->dst+(((size_t)z*j->h+by*4+y)*j->w+bx*4+x)*j->bpp,pixels+(y*4+x)*j->bpp,j->bpp);
     }
@@ -344,8 +348,23 @@ static void *bc_worker(void *a) {
 }
 static unsigned bc_pool(void) {   /* 首次用时建线程；返回工作线程数 | create threads on first use; returns the worker count */
     pthread_mutex_lock(&bc_mu);
-    if(!bc_inited){bc_inited=1;const char *e=getenv("DM_BC_THREADS");unsigned n=e?(unsigned)atoi(e):0;if(n>8)n=8;
-        for(unsigned i=0;i<n;i++){pthread_t t;if(pthread_create(&t,NULL,bc_worker,NULL))break;pthread_detach(t);bc_threads++;}}
+    if(!bc_inited){
+        bc_inited=1;
+        const char *e=getenv("DM_BC_THREADS");
+        const char *profile=getenv("FFRS_PROFILE_RG477M");
+        unsigned n=profile && !strcmp(profile,"1")?2:0;
+        if(e)n=(unsigned)atoi(e);
+        if(n>8)n=8;
+        const char *directory=getenv("FFRS_APP_FILES_DIR");
+        if(directory && directory[0]){
+            char path[PATH_MAX];int length=snprintf(path,sizeof(path),"%s/gfx-bc-threads",directory);
+            if(length>=0 && (size_t)length<sizeof(path)){
+                FILE *marker=fopen(path,"rb");
+                if(marker){unsigned request=0;if(fscanf(marker,"%u",&request)==1 && request<=8)n=request;fclose(marker);}
+            }
+        }
+        for(unsigned i=0;i<n;i++){pthread_t t;if(pthread_create(&t,NULL,bc_worker,NULL))break;pthread_detach(t);bc_threads++;}
+        fprintf(stderr,"[xbg] BC decode workers=%u requested=%u\n",bc_threads,n);}
     unsigned n=bc_threads;pthread_mutex_unlock(&bc_mu);return n;
 }
 /* 启动剖析计数（宿主 diag.c，DM_BOOTPROF=1 才累加；图形单测里没有宿主 → 弱符号为空）| boot-profile counter (host diag.c, accumulates only with DM_BOOTPROF=1; no host in graphics unit tests → weak symbol is null) */
@@ -375,13 +394,15 @@ static int bc_decode(uint32_t fmt,uint32_t w,uint32_t h,uint32_t depth,
     if(blocks*rows*depth>=4096 && bc_pool()){
         bc_job j;memset(&j,0,sizeof j);j.fmt=fmt;j.w=w;j.h=h;j.depth=depth;j.src=source;j.row=row;j.image=image;j.blocks=blocks;j.rows=rows;
         j.units=((rows+3)/4)*depth;j.bpp=bpp;j.block_bytes=block_bytes;j.dst=output;atomic_init(&j.next,0);atomic_init(&j.err,0);atomic_init(&j.active,0);
+        const char *fast_env=getenv("DM_BC_FAST");j.fast=!(fast_env && *fast_env=='0');
         pthread_mutex_lock(&bc_submit);   /* 一次一张：工作线程只认 bc_cur | one image at a time: workers only see bc_cur */
         pthread_mutex_lock(&bc_mu);bc_cur=&j;bc_gen++;pthread_cond_broadcast(&bc_cv);pthread_mutex_unlock(&bc_mu);
         bc_run(&j);
         pthread_mutex_lock(&bc_mu);bc_cur=NULL;while(atomic_load(&j.active))pthread_cond_wait(&bc_done,&bc_mu);pthread_mutex_unlock(&bc_mu);
         pthread_mutex_unlock(&bc_submit);
         {static int verify=-1;if(verify<0){const char *e=getenv("DM_BC_VERIFY");verify=e&&*e=='1';}   /* 校验：再串行解一遍逐字节比 | verification: decode serially again and compare byte for byte */
-         if(verify && !atomic_load(&j.err)){uint8_t *ref=malloc(out_size);if(ref){bc_job k=j;k.dst=ref;int bad=0;for(size_t u=0;u<k.units;u++)if(bc_rows(&k,u)){bad=-1;break;}
+         const char *fast_verify=getenv("DM_BC_FASTVERIFY");
+         if((verify || (fast_verify && *fast_verify=='1')) && !atomic_load(&j.err)){uint8_t *ref=malloc(out_size);if(ref){bc_job k=j;k.dst=ref;k.fast=0;int bad=0;for(size_t u=0;u<k.units;u++)if(bc_rows(&k,u)){bad=-1;break;}
              static unsigned long checked,mismatched;checked++;if(!bad && memcmp(ref,output,out_size))mismatched++;
              if(checked%64==1 || mismatched)fprintf(stderr,"[xbg] BC parallel verify: %lu images, %lu mismatched\n",checked,mismatched);free(ref);}}}
         return atomic_load(&j.err);

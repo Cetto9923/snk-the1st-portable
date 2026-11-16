@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T07:22:38.151549+08:00
-阶段：T71提交阶段长帧与上传既有计数诊断
+状态事件时间：2026-11-16T08:07:53.270108+08:00
+阶段：T72 BC parallel full-block path
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -28,11 +28,12 @@
 | T68 | GRAPHICS | passed | Codex | T58 | 无额外门禁 | task/T68-descriptor-memo-inputs |
 | T69 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T69-native-display-timing |
 | T70 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T70-indirect-dispatch-sync |
-| T71 | GRAPHICS | in_progress | Codex | T58, T68 | 无额外门禁 | task/T71-submit-stall-counters |
+| T71 | GRAPHICS | passed | Codex | T58, T68 | 无额外门禁 | task/T71-submit-stall-counters |
+| T72 | GRAPHICS | passed | Codex | T71 | 无额外门禁 | task/T72-bc-parallel-fast |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T71", "paths": ["src/graphics/nvn_vulkan/engine/xbg_game.cpp", "src/graphics/nvn_vulkan/engine/xbg_probe.inc", "tests/graphics/", "coordination/"]}
+- 无
 
 ## 阻塞
 
@@ -79,12 +80,13 @@
 - T68临时9类诊断009091ef显示静止城门每帧约181次image_revision，storage约22，driver0、uniform_buffer不足1。2bdf1bd2细分后texture serial仅约8.6，memory0，其他约154.5。原始日志与两份诊断patch和provenance保留。不能把这些失败视为UBO句柄问题。
 - T68最终6c94ef1c同save008各2400间隔，CPU提交均值15.956→15.491ms，工作29.822→29.876FPS，SF p95仍49.6ms。图形82项81通过1私有fixture跳过、运行时9通过、3负控及同PID2797三轮HOME通过。
 - T69原生VK_GOOGLE_display_timing默认关闭，APKedb78e86在477M marker1/FIFO真实移动，save008物理29.749FPS/p95 33.249ms，save007物理29.798FPS/p95 33.323ms，均2400间隔和完整SF覆盖。同PID24721三轮HOME恢复真实draw/present，图形85项84通过1私有fixture跳过、运行时9通过，4个实际断言负控通过。仍有100ms以上长停顿，稳定30未达成。
+- T72 RG477M专属底座450/30及缓存/4槽/FIFO/显示时间戳/BC2已打包，0dfca4a6实际13调参文件备份重命名后启动配置一致。90图形89通过1私有跳过、运行时9通过、profile4与Java合约及10实际负控通过，HOME3同PID26945。
 
 ## 未验证
 
-- RG477M长流程稳定30仍未达到。T66同save007的540/Android摇杆移动29.682888FPS、p95 42.028ms、max57.551ms、无失败重复和>100ms。540保留，4槽/cache1/texdirty1仍为设备marker，显示呈现节奏还待优化。
+- RG477M稳定30尚未完全达到。0dfca4a6无调参文件，城门与花盆各2400移动间隔的物理帧率29.939/29.847，p95约33.2ms，仍有约99ms长间隔。
 - 高端机先使用原生底座渲染配置，1080p场景原生分辨率与60帧仍待验证。其他主流高通/天玑只有分档与通用代码覆盖，逐机实测未完成，荣耀仍暂停真机。
-- 新宿主几何缓存与延迟事件模式2仍待更长时间草叶/天空动态和过图回归。默认缓存开关尚未公开改为开启。
+- 既有缓存和defer2已在0dfca4a6按RG477M分档固化并完成两处长窗口及HOME。草叶/天空更多场景、过图和长流程仍待回归，公开预览版尚待更新。
 - Swappy2.1.3实验SIGABRT/signal11根因仍未确认，产品已完整移除。当前原生呈现候选T69已通过三轮HOME，但GPU间接调度参数CPU回读触发全批同步的长停顿仍待优化。两帧呈现余量约66ms是当前实验选择，实际端到端输入延迟尚未测量，默认未固化到其他设备。
 
 具体恢复命令与未完成修改见 HANDOFF.md。

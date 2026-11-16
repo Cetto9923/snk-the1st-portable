@@ -10,6 +10,43 @@ ROOT = Path(__file__).resolve().parents[2]
 
 
 class ProfileEnvironment(unittest.TestCase):
+    def test_rg477m_graphics_switch_and_450_native_height(self):
+        source = (ROOT / 'src/android/native/guest_boot_jni.cpp').read_text()
+        bodies = []
+        for signature, alias in [
+            ('Java_org_snk_the1st_GameWindowNative_setProfileGraphicsTuning(JNIEnv*, jclass, jboolean rg477m) {',
+             'static void graphics(bool rg477m) {'),
+            ('Java_org_snk_the1st_GameWindowNative_setProfileRenderHeight(JNIEnv*, jclass, jint height) {',
+             'static void render(int height) {'),
+        ]:
+            begin = source.index(signature) + len(signature)
+            end = source.index('\n}', begin)
+            bodies.append(alias + source[begin:end] + '\n}')
+        program = '#include <cstdlib>\n#include <cstring>\n#include <cassert>\n'
+        program += '\n'.join(bodies) + r'''
+int main(){
+    graphics(true);assert(!strcmp(getenv("FFRS_PROFILE_RG477M"),"1"));
+    render(450);assert(!strcmp(getenv("FFRS_PROFILE_RENDER_HEIGHT"),"450"));
+    graphics(false);assert(!strcmp(getenv("FFRS_PROFILE_RG477M"),"0"));
+    for(int height:{0,540,720,1080,777}){
+        render(height);
+        const char *expected=height==540?"540":height==720?"720":"0";
+        assert(!strcmp(getenv("FFRS_PROFILE_RENDER_HEIGHT"),expected));
+    }
+}
+'''
+        program = '#include <initializer_list>\n' + program
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory)
+            (path / 'profile.cpp').write_text(program)
+            subprocess.run(['c++', '-std=c++17', '-fsanitize=address,undefined',
+                            str(path / 'profile.cpp'), '-o', str(path / 'profile')], check=True)
+            subprocess.run([str(path / 'profile')], check=True)
+        activity = (ROOT / 'src/android/app/java/org/snk/the1st/GameActivity.java').read_text()
+        call = 'GameWindowNative.setProfileGraphicsTuning(selectedDeviceProfile.id.equals("rg477m"));'
+        self.assertIn(call, activity)
+        self.assertLess(activity.index(call), activity.index('Thread guest = new Thread(new GuestBootTask('))
+
     def test_profile_switch_and_external_override(self):
         source = (ROOT / 'src/android/native/guest_boot_jni.cpp').read_text()
         signature = 'Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint fps, jboolean tablet) {'

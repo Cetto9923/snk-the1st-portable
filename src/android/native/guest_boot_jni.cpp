@@ -378,8 +378,13 @@ Java_org_snk_the1st_GameWindowNative_setProfileTargetFps(JNIEnv*, jclass, jint f
 
 extern "C" JNIEXPORT void JNICALL
 Java_org_snk_the1st_GameWindowNative_setProfileRenderHeight(JNIEnv*, jclass, jint height) {
-    const char *value = height == 540 ? "540" : height == 720 ? "720" : "0";
+    const char *value = height == 450 ? "450" : height == 540 ? "540" : height == 720 ? "720" : "0";
     setenv("FFRS_PROFILE_RENDER_HEIGHT", value, 1);
+}
+
+extern "C" JNIEXPORT void JNICALL
+Java_org_snk_the1st_GameWindowNative_setProfileGraphicsTuning(JNIEnv*, jclass, jboolean rg477m) {
+    setenv("FFRS_PROFILE_RG477M", rg477m ? "1" : "0", 1);
 }
 
 extern "C" JNIEXPORT jlong JNICALL

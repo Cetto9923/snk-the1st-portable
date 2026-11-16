@@ -19,8 +19,10 @@ public class DeviceProfileContract {
         check("SM8635", 0, "", "phone_adreno", 1080, 30);
         check("SM8635", 420, "tablet_sd8s", "tablet_sd8s", 1080, 30);
         DeviceProfile rg = DeviceProfile.select("MT6897", "RG477M", 768, "");
-        if (!rg.id.equals("handheld_mid") || rg.targetShortEdge != 540 || rg.targetFps != 30)
+        if (!rg.id.equals("rg477m") || rg.targetShortEdge != 450 || rg.targetFps != 30
+                || rg.nativeRenderHeight() != 450)
             throw new AssertionError("RG477M profile");
+        check("MT6897", 420, "rg477m", "rg477m", 450, 30);
         for (String chip : new String[]{"SM8450", "SM8475", "SM8550", "SM8650", "SM8750", "SM8850",
                 "SM8950", "Qualcomm Technologies, Inc SM8750-AB", "Snapdragon 8 Gen 3", "Snapdragon 8 Elite"})
             check(chip, 420, "", "phone_adreno", 1080, 30);
