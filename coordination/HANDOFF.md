@@ -1129,3 +1129,12 @@
 - 荣耀断开前读到ROD2-W69及已安装旧包，签名证书SHA256与当前包同为0203b98094ec6fd5811162a236b376241e8425653996744c418e0cc00696969d，旧APK已保存honor-before-103.apk。旧前台为FFRS。只读备份原存档时run-as访问外部目录被Android16拒绝，shell tar/pull也因私有data.dat权限失败，错误探测归档，未把102字节错误文本或只含目录的tar认定为备份。原存档树、大小和控制文件已记录，未对荣耀执行安装/重启/存档写入。重新连接后可同签覆盖并正常载入原存档验证。
 - git fetch发现用户在默认分支新增5个主页、安装指南和法律说明提交，最新947838b。T81源码检查点52a827e后合并用户最新分支，README和安装指南冲突以用户最新版本正文解决，合并f3f254f。当前task/T82-community-103-release，版本升为1.0.3/versionCode4。保留用户社区与免责声明内容，按本轮实际范围更新版本/帧率与待连接信息，纠正README-HONOR历史将刷新率当60FPS的说明。
 - 本次发布应用、自有资源及许可证，游戏数据由用户自行提供。计划从干净源码提交重建，执行94图形/10运行时、JNI设备分档与Java机型合约，核实Mali条件对Adreno厂商分支的覆盖；实际高通设备范围标记待连接。随后生成社区ZIP、APK、说明、清单和SHA，提交/推送默认分支及正式GitHub版本，回下载逐字节检查，再调用goal暂停。稳定30目标未完成，发布不能用作该目标完成依据。
+
+### T82 正式发布与校验完成
+
+- 正式版本v1.0.3已发布为GitHub latest，isDraft=false/isPrerelease=false，发布页 https://github.com/Cetto9923/snk-the1st-portable/releases/tag/v1.0.3 。tag与release-manifest均指向干净源码45f963e5225f81edc04bcd6b26b98e1f00df84b1，默认分支已推送该版本及用户文档合并。冻结manifest为versionCode4/versionName1.0.3，包名org.snk.the1st.gamewindow，ABI arm64-v8a，min28/target34，沿用可调试配置及原签名0203b980...，发布说明已明确。
+- 首次打包后补齐xbg_dirty.c页跟踪组件的完整seedds MIT声明到APK assets/licenses/nxnative-dirty-MIT.txt，NOTICE同步记录，重新从干净45f963e构建。最终APK SHA256 f5e705c9e0d5edd22680020d3109cb86656083236132e0e7007f831648837809，ELF c01def40a1c195f7214d478a46cd60dc13bd9d6ab8c270d68832b9f8987c82b3。最终APK原生lib与已测0a逐字节一致，原生源a882953a/音频aef803af；旧临时1c2150包仅保留本地，未发布。
+- 最终源码执行94图形93通过1私有输入跳过、10运行时、4 JNI分档与Java机型合约，各命令退出0，release103-final-test-receipt.json与四组原始日志保留。Java合约覆盖SM8635及多代Snapdragon8/Dimensity9机型选择；图形组件覆盖Mali条件对0x5143 Adreno分支的隔离。高通实际游戏本版测试和荣耀安装仍按用户要求等待USB重新连接。
+- 6公开附件为APK、社区ZIP、SHA256SUMS、release-manifest、install-guide.zh-CN.md、copyright-notice.zh-CN.md。社区ZIP SHA256 72542902c5ad53e5f6aa68870fd082ed91f3cd877bfa47e4499b060510faa5cb。包内15成员逐项SHA通过，含应用/自有资源与10份许可证文本；18条校验值通过。公开APK检查排除NSO/NCA/NSP/XCI/XGS/密钥/票据和RomFS/shaders游戏资产目录。
+- gh release download从已发布地址重新下载全部6附件，与本地发布件逐字节一致，解包后15成员再按公开SHA检查通过。community-103-live-release.json、community-103-public-verification.json、signature/badging、build-provenance及构建日志保留在.local/publication。GitHub tag API和默认分支API均验证45f963e，latest API返回v1.0.3。
+- 用户已明确选择发布后暂停自动优化。当前发布与校验完成，将调用goal paused并结束。完整稳定30及物理口型/过场同步目标继续登记为未完成，不能标complete。当前ADB列表仍为空，荣耀设备安装列为用户延后项；最后已装的477M为0a运行层版本，最终1.0.3待重新连接后覆盖安装。恢复安装使用显式文件.local/publication/community-103-final/snk-the1st-1.0.3-arm64.apk，证书匹配后install --no-incremental -r；荣耀序列A42BBB5109000333，477M序列RG477M01445122。后续机测按实际画面和已存在存档验证，禁止以菜单/刷新率替代游戏FPS。

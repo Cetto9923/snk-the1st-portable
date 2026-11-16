@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T13:15:13.235079+08:00
-阶段：T82 user-requested v1.0.3 release freeze; device installation deferred until reconnect
+状态事件时间：2026-11-16T13:30:30.478192+08:00
+阶段：v1.0.3 published and verified; user-requested automatic optimization pause
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -39,11 +39,11 @@
 | T79 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T79-audio-output-latency |
 | T80 | CORE | passed | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
 | T81 | CORE | in_progress | Codex | T80 | 无额外门禁 | task/T81-descriptor-memo-cleanup |
-| T82 | RELEASE | in_progress | Codex | T80 | 无额外门禁 | task/T82-community-103-release |
+| T82 | RELEASE | passed | Codex | T80 | 无额外门禁 | task/T82-community-103-release |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T82", "paths": ["coordination/", "README.md", "README-HONOR.md", "docs/release/安装与使用.md", "src/android/app/gamewindow/AndroidManifest.xml", "scripts/android/build_game_window_apk.sh", "NOTICE.md"]}
+- 无
 
 ## 阻塞
 
@@ -92,9 +92,11 @@
 - T69原生VK_GOOGLE_display_timing默认关闭，APKedb78e86在477M marker1/FIFO真实移动，save008物理29.749FPS/p95 33.249ms，save007物理29.798FPS/p95 33.323ms，均2400间隔和完整SF覆盖。同PID24721三轮HOME恢复真实draw/present，图形85项84通过1私有fixture跳过、运行时9通过，4个实际断言负控通过。仍有100ms以上长停顿，稳定30未达成。
 - T72 RG477M专属底座450/30及缓存/4槽/FIFO/显示时间戳/BC2已打包，0dfca4a6实际13调参文件备份重命名后启动配置一致。90图形89通过1私有跳过、运行时9通过、profile4与Java合约及10实际负控通过，HOME3同PID26945。
 - T73 v1.0.2-preview已在独立空轨仓公开，标签2867bcf，APKba052997。6附件回下载逐字节一致，社区包解开后17项SHA通过，原游戏数据由用户提供。
+- v1.0.3 source45f963e/APKf5e705c9 formal GitHub latest;6public assets/15ZIPmembers verified;18checksums;93graphics pass1skip/runtime10/JNI4/Java exit0.
 
 ## 未验证
 
+- v1.0.3 Honor installation and actual Qualcomm game test pending USB reconnect explicitly deferred by user. Full stable30 and physical AV/lip sync remain incomplete. Automatic optimization will pause per user after publication.
 - T76 installed78a1dfc1: save008 SF29.604 max132.319ms;save007 SF28.510 max99.274ms. Overall stable30 remains pending.
 - T75 latest installed9b410c8b: gate SF29.580 then29.035;flower28.233 with132.294ms physical max. Stable30 remains pending.
 - T74 latest long motion: save008 SF28.375FPS,max115.735ms;save007 SF27.086FPS,max115.500ms. Overall stable30 remains pending.
