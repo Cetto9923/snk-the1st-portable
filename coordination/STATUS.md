@@ -1,7 +1,7 @@
 # 当前项目状态（生成文件）
 
-状态事件时间：2026-11-16T12:36:17.815719+08:00
-阶段：T80 monotonic-aligned outdoor long-frame CPU diagnosis
+状态事件时间：2026-11-16T13:13:37.187905+08:00
+阶段：T82 user-requested v1.0.3 release freeze; device installation deferred until reconnect
 总控：Codex
 更新方式：按事件更新，没有后台自动刷新。
 
@@ -37,11 +37,12 @@
 | T77 | ANDROID_RUNTIME | passed | Codex | T76 | 无额外门禁 | task/T77-android-performance-hint |
 | T78 | GRAPHICS_RUNTIME | in_progress | Codex | T76, T77 | 无额外门禁 | task/T78-writeback-cache-range |
 | T79 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T79-audio-output-latency |
-| T80 | CORE | in_progress | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
+| T80 | CORE | passed | Codex | T76 | 无额外门禁 | task/T80-long-frame-profile |
+| T81 | CORE | in_progress | Codex | T80 | 无额外门禁 | task/T81-descriptor-memo-cleanup |
 
 ## 独占写入
 
-- {"owner": "Codex", "task": "T80", "paths": ["coordination/"]}
+- 无
 
 ## 阻塞
 

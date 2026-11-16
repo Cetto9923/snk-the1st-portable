@@ -3772,6 +3772,9 @@ struct DynUbo{uint64_t order,address;size_t copy;};
 // every slot's memo lazily and returns pinned sets to that slot (recycled only after its next fence).
 // files/gfx-no-xmemo keeps the old per-submit behaviour.
 std::unordered_map<std::vector<uint64_t>,DescMemo,SetKeyHash> desc_memo_slot[kMaxSlots];std::unordered_map<VkDescriptorSet,PinRef> memo_pinned[kMaxSlots];
+// Retained maps own obsolete CPU metadata. Sets return to used_sets immediately
+// and follow the slot fences. Lookups use desc_memo_slot exclusively.
+std::unordered_map<std::vector<uint64_t>,DescMemo,SetKeyHash> desc_memo_retired[kMaxSlots];
 size_t desc_memo_local[kMaxSlots]={};   // entries that are not persistent, which desc_memo_reset drops
 std::atomic<uint64_t> memo_epoch{1};bool dyn_partial_enabled=true;uint64_t key_diff[14]={};uint64_t memo_bump[5]={};uint64_t memo_slot_epoch[kMaxSlots]={1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1};bool xmemo_enabled=true,memo_dyn_ok=false;uint64_t xmemo_hits=0,xmemo_drops=0;
 #define desc_memo desc_memo_slot[slot_index]
@@ -3792,7 +3795,27 @@ unsigned dyn_mode_for(bool compute,bool *no_ubo=nullptr){unsigned all=0,vary=0;
     for(unsigned st=0;st<6;st++)if(state.shader[st] && (st==5)==compute)for(auto &b:state.shader[st]->bindings)if(b.type==VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER){all+=b.count;if(b.source==XBG_SOURCE_UNIFORM||b.source==XBG_SOURCE_DRIVER0||b.source==XBG_SOURCE_DRIVER2)vary+=b.count;}
     if(no_ubo)*no_ubo=all==0;unsigned lim=properties.limits.maxDescriptorSetUniformBuffersDynamic;
     return all && all<=lim?1:(vary && vary<=lim && dyn_partial_enabled?2:0);}
-void memo_unpin_all(unsigned si){Slot &s=slots[si];for(auto &pn:memo_pinned[si])s.used_sets[pn.second.layout].push_back(pn.first);memo_pinned[si].clear();desc_memo_slot[si].clear();desc_memo_local[si]=0;++memo_mod_gen;}
+void memo_drain_retired(){
+    size_t remaining=512;
+    for(unsigned si=0;si<kMaxSlots && remaining;++si){
+        auto &retired=desc_memo_retired[si];
+        while(!retired.empty() && remaining){
+            retired.erase(retired.begin());
+            --remaining;
+        }
+    }
+}
+void memo_unpin_all(unsigned si){
+    Slot &s=slots[si];
+    for(auto &pn:memo_pinned[si])s.used_sets[pn.second.layout].push_back(pn.first);
+    memo_pinned[si].clear();
+    // A second invalidation finishes the previous generation before replacement,
+    // bounding retained metadata to one obsolete map per slot.
+    desc_memo_retired[si].clear();
+    desc_memo_retired[si].swap(desc_memo_slot[si]);
+    desc_memo_local[si]=0;
+    ++memo_mod_gen;
+}
 void memo_check_epoch(){unsigned si=slot_index;if(memo_slot_epoch[si]!=memo_epoch || memo_pinned[si].size()>8192){if(!desc_memo_slot[si].empty())++xmemo_drops;memo_unpin_all(si);memo_slot_epoch[si]=memo_epoch;}}
 // End of a submit for the recording slot: frame-local entries go (their snapshots are per submit); persistent ones stay.
 void desc_memo_reset(){img_cache.clear();
@@ -7095,6 +7118,7 @@ void log_memory_profile_counts(){
     }
 }
 void destroy_slots(){
+    for(auto &retired:desc_memo_retired)retired.clear();
     poolreset::drain();for(auto &s:active_slots())s.reset_queued=false;
     for(unsigned i=0;i<kMaxSlots;i++) texel_evict(i,true);
     for(auto &s:active_slots()){s.retire.run();release_descriptors(s);for(auto &v:s.texel_views)vkDestroyBufferView(cfg.device,v.second,nullptr);s.texel_views.clear();for(auto &f:s.framebuffers)vkDestroyFramebuffer(cfg.device,f.second,nullptr);s.framebuffers.clear();for(auto p:s.pools)vkDestroyDescriptorPool(cfg.device,p,nullptr);s.pools.clear();s.pool_next=0;s.stream.release();s.readback.release();s.viewed.clear();s.guard.clear();s.pro_ops.clear();s.pro=VK_NULL_HANDLE;if(s.fence)vkDestroyFence(cfg.device,s.fence,nullptr);if(s.timestamps)vkDestroyQueryPool(cfg.device,s.timestamps,nullptr);if(s.prof_pool)vkDestroyQueryPool(cfg.device,s.prof_pool,nullptr);for(auto q:s.occlusion_pools)vkDestroyQueryPool(cfg.device,q,nullptr);for(auto q:s.timestamp_pools)vkDestroyQueryPool(cfg.device,q,nullptr);if(s.pool)vkDestroyCommandPool(cfg.device,s.pool,nullptr);s=Slot{};}
@@ -7988,7 +8012,9 @@ static void xbg_present_texture_now(const win_t *window,const tex_t *texture){gf
     if ((stats.presents.load() % 30) == 0 && stats.presents.load() != s_last_pres_log) {
         s_last_pres_log = stats.presents.load();
         xbg_logf("[snk-present] fr=%llu im=%p mem=%p %ux%u fmt=%d", (unsigned long long)s_last_pres_log, &im, texture->mem, im.width, im.height, (int)im.fmt);
-    }Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);fire_trace_present(im,c.command);c.finish();if(flame_diag_enabled)flame_diag_roi_record(im);scene_rt_dump_record();submit_slots(false);if(flame_diag_enabled||scene_rt_dump_enabled)gpu_sync(perf.sync_readback);if(flame_diag_enabled)flame_diag_roi_read();scene_rt_dump_read();uint64_t pace_ns=xbg_frame_pace();int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r){static unsigned err_n=0;if(err_n++<10)xbg_logf("Game presentation dropped/warning: %d",r);}++stats.presents;if(flame_diag_enabled){fdiag_present=texture->serial;fdiag_present_mem=uint64_t(uintptr_t(texture->mem));
+    }Commands c;im.transition(c.command,VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);fire_trace_present(im,c.command);c.finish();if(flame_diag_enabled)flame_diag_roi_record(im);scene_rt_dump_record();submit_slots(false);if(flame_diag_enabled||scene_rt_dump_enabled)gpu_sync(perf.sync_readback);if(flame_diag_enabled)flame_diag_roi_read();scene_rt_dump_read();
+    memo_drain_retired();
+    uint64_t pace_ns=xbg_frame_pace();int r;{CPU_SCOPE(Present);r=cfg.present(cfg.userdata,window->native,im.image,im.fmt,im.width,im.height,window->crop,window->interval);}if(r){static unsigned err_n=0;if(err_n++<10)xbg_logf("Game presentation dropped/warning: %d",r);}++stats.presents;if(flame_diag_enabled){fdiag_present=texture->serial;fdiag_present_mem=uint64_t(uintptr_t(texture->mem));
         uint64_t other_draw=0,other_inst=0,other_bind=0,other_zero=0;for(int i=2;i<flame_diag_keys;i++){other_draw+=fdiag_draws[i];other_inst+=fdiag_inst[i];other_bind+=fdiag_binds[i];other_zero+=fdiag_zero[i];}
         xbg_logf("FLAME_FRAME fr=%llu be4e_draw=%llu be4e_inst=%llu be4e_bind=%llu be4e_zero=%llu f8b27_draw=%llu f8b27_inst=%llu f8b27_bind=%llu f8b27_zero=%llu f8b27_nz=%llu f8b27_sig=%#llx f8b27_mem=%#llx other_draw=%llu other_inst=%llu other_bind=%llu other_zero=%llu skip=%llu ds=%u/%u/%u blend=%u/%u/%u rt=%#llx dsrt=%#llx vp=%#llx sc=%#llx bi=%llu bv=%llu cnt=%llu prim=%d itype=%d present=%llu pmem=%#llx pf=%llu pmean=%llu roi=%u,%u,%u,%u im=%llu,%llu c5a=%#x c5b=%#x c5c=%#x c2a=%#x c0a=%#x ubo=%#llx c5mask=%#llx c5min=%llu c5max=%llu c5n=%llu rtpx=%llu rtw=%llu rth=%llu b18=%#x rthash=%#llx texhash=%#llx vb0=%#llx:%llu vb1=%#llx:%llu vb2=%#llx:%llu vb3=%#llx:%llu ibuf=%#llx ibytes=%llu",
             (unsigned long long)stats.presents.load(),(unsigned long long)fdiag_draws[0],(unsigned long long)fdiag_inst[0],(unsigned long long)fdiag_binds[0],(unsigned long long)fdiag_zero[0],
@@ -8072,7 +8098,8 @@ static void xbg_present_texture_now(const win_t *window,const tex_t *texture){gf
             }
         }
         memset(fdiag_draws,0,sizeof fdiag_draws);memset(fdiag_inst,0,sizeof fdiag_inst);memset(fdiag_binds,0,sizeof fdiag_binds);memset(fdiag_zero,0,sizeof fdiag_zero);memset(fdiag_nz,0,sizeof fdiag_nz);memset(fdiag_sig,0,sizeof fdiag_sig);memset(fdiag_mem,0,sizeof fdiag_mem);memset(fdiag_bytes,0,sizeof fdiag_bytes);fdiag_skip=0;fdiag_state_seen=false;fdiag_c5mask=0;fdiag_c5min=0xffffffffull;fdiag_c5max=0;fdiag_c5n=0;fdiag_tab_n=0;fdiag_ibuf=fdiag_ibytes=0;memset(fdiag_small_mem,0,sizeof fdiag_small_mem);memset(fdiag_small_bytes,0,sizeof fdiag_small_bytes);fdiag_b18=~0u;fdiag_rthash=1469598103934665603ull;fdiag_texhash=0;fdiag_geom_seen=false;memset(fdiag_vb_addr,0,sizeof fdiag_vb_addr);memset(fdiag_vb_size,0,sizeof fdiag_vb_size);memset(fdiag_big_bytes,0,sizeof fdiag_big_bytes);memset(fdiag_big_mem,0,sizeof fdiag_big_mem);memset(fdiag_big_nz,0,sizeof fdiag_big_nz);memset(fdiag_big_pending,0,sizeof fdiag_big_pending);fdiag_img_logged=false;fdiag_ds_tex=nullptr;fdiag_clear_color=fdiag_clear_depth=0;fdiag_clear_dv=-1.f;fdiag_fs_n=0;fdiag_u15w=fdiag_u15x=fdiag_u31w=~0u;fdiag_fetch_n=0;fdiag_fetch_mem=0;fdiag_c1w=fdiag_raw_c5=fdiag_raw_c0=~0u;fdiag_c5s_n=fdiag_w_small=fdiag_w_huge=0;fdiag_b18_mem=fdiag_b18_bytes=fdiag_b18_sig=fdiag_b18_nz=0;memset(fdiag_tb,0,sizeof fdiag_tb);fdiag_b24_dead=fdiag_b24_live=fdiag_b24_best=fdiag_b24_sane=0;fdiag_8b_nt=0;
-    }frame_trace_record(texture->serial,im.last_write,r);if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);uint64_t total_present_ns=timing_clock()-present_begin;perf.present_cpu_ns+=(total_present_ns>pace_ns?total_present_ns-pace_ns:0);perf_frame();
+    }
+    frame_trace_record(texture->serial,im.last_write,r);if(pass_prof_enabled && stats.presents.load()==pass_prof_frame)xbg_logf("NVN GPASS boundary frame=%llu slots=%u skipped_slots=%u reserved_queries=%u max_queries=%u max_slots=%u",(unsigned long long)pass_prof_frame,pass_prof_slots,pass_prof_skipped_slots,pass_prof_queries,pass_prof_query_limit,pass_prof_slot_limit);uint64_t total_present_ns=timing_clock()-present_begin;perf.present_cpu_ns+=(total_present_ns>pace_ns?total_present_ns-pace_ns:0);perf_frame();
     // A bounded diagnostic restores the normal indirect paths after its window.
     if(pass_prof_enabled && stats.presents.load()>=pass_prof_until){
         pass_prof_enabled=false;

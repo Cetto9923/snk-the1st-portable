@@ -1,8 +1,8 @@
 {
   "schema_version": 1,
   "project": "snk-the1st-honor-gtpro",
-  "updated_at": "2026-11-16T12:36:17.815719+08:00",
-  "phase": "T80 monotonic-aligned outdoor long-frame CPU diagnosis",
+  "updated_at": "2026-11-16T13:13:37.187905+08:00",
+  "phase": "T82 user-requested v1.0.3 release freeze; device installation deferred until reconnect",
   "coordinator": "Codex",
   "integration_branch": "task/T71-submit-stall-counters",
   "baseline": {
@@ -20,18 +20,10 @@
     "device_serial": "A42BBB5109000333",
     "active_test_device": "RG477M / MT6897 / Mali-G615 MC6 / Android 14",
     "active_test_serial": "RG477M01445122",
-    "honor_test_status": "paused_by_user"
+    "honor_test_status": "user_authorized_install_awaiting_connection"
   },
   "update_mode": "event_driven_no_background_scheduler",
-  "active_writers": [
-    {
-      "owner": "Codex",
-      "task": "T80",
-      "paths": [
-        "coordination/"
-      ]
-    }
-  ],
+  "active_writers": [],
   "tasks": [
     {
       "id": "T00",
@@ -960,7 +952,7 @@
     {
       "id": "T80",
       "role": "CORE",
-      "status": "in_progress",
+      "status": "passed",
       "owner": "Codex",
       "branch": "task/T80-long-frame-profile",
       "dependencies": [
@@ -988,6 +980,41 @@
       ],
       "recovery": "APK89e30e42 /save015; all original data and saves retained",
       "checkpoint": "APK89/PID13147 normalLoad008 verified;2400 motion SF29.688/max99.250ms;explicit monotonic40s profile30044samples0lost;guest13185;25long frames memo_unpin_all ~7.92ms/frame vs normal0.044;diagnostic only, product code unchanged"
+    },
+    {
+      "id": "T81",
+      "role": "CORE",
+      "status": "in_progress",
+      "owner": "Codex",
+      "branch": "task/T81-descriptor-memo-cleanup",
+      "dependencies": [
+        "T80"
+      ],
+      "pass_gates": [],
+      "objective": "Reduce measured long-frame bulk CPU metadata destruction while preserving immediate memo invalidation and GPU set/fence lifetime",
+      "inputs": [
+        "ed80868 /b0f9448 product /APK89e30e42",
+        "explicit monotonic CPU profile long-frame memo_unpin_all +7.88ms estimated"
+      ],
+      "outputs": [
+        "one retained obsolete CPU-only map per slot, bounded per-present destruction",
+        "actual extracted invalidation/front-generation/slot/repeated-epoch/shutdown regressions",
+        "same-scene long motion and exact candidate APK"
+      ],
+      "write_scope": [
+        "coordination/",
+        "src/graphics/nvn_vulkan/engine/xbg_game.cpp",
+        "tests/graphics/test_snk_memo_retired_cleanup.py"
+      ],
+      "acceptance": [
+        "live map and front invalidated immediately",
+        "descriptor set return and existing fence recycling preserved",
+        "at most one old metadata map per slot;fixed per-present destruction budget",
+        "per-slot isolation, repeated invalidation and full shutdown cleanup",
+        "actual long outdoor motion without profiler;display/grass and HOME regression"
+      ],
+      "recovery": "APK89e30e42 /ed80868;all saved progress retained",
+      "checkpoint": "Frozen before-pace candidate0a3881ab: actual flower2400SF29.1988 vs89control28.4435;max99.251 vs115.850ms,over1000vs2;94graphics93pass1skip/runtime10/7neg. Overall stable30 and HOME/008/physical AV incomplete. User requests ship current version,post-release pause;both USB devices absent,user defers reconnect and requests package first."
     }
   ],
   "blockers": [],

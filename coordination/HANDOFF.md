@@ -1105,3 +1105,19 @@
 - 随后独立40秒simpleperf task-clock:u/f500/dwarf，显式--clockid monotonic，原工具SHA590668cd...，实际记录39.9914秒/30044样本/丢失0。rg-long-frame-cpu-20261116-123002原始perf、maps、精确ELFf178f1fe、逐帧CSV、命令与source dirty归档。主线程13185为本app线程组13147的ffrs-guest且占58.52%全线程样本，实际调用链为游戏队列入口；原记录样本time明确落在同源CLOCK_MONOTONIC逐帧CSV覆盖范围，未推测跨时钟换算。
 - 分析仅完整帧区间，25个>45ms帧均值48.363/max58.579ms，主线程task-clock样本加权估算42.56ms/帧。1092个25..40ms帧均值32.686ms，主线程估算28.690ms/帧。长帧memo_unpin_all祖先路径估算7.92ms/帧，普通帧约0.044ms，增量约7.88ms，主要叶节点包含Scudo批量释放；其后get_image_slow约+1.58ms、stream_buffer/descriptors_build各+1.17ms。原始dump与long-frame-analysis.json保留。采样有开销且2ms周期带来估算误差，以上用于定位，未作为产品FPS。
 - 代码确认memo_unpin_all在epoch失效或pinned>8192时即时归还sets到原slot.used_sets并clear全部DescMemo节点，每项持有多份CPU vector。下一步只考虑把已经失效的CPU缓存元数据移出查询表，并在逐帧固定预算下释放，GPU descriptor/fence回收与原命中验证继续原有路径。需验证front iterator即时失效、跨槽隔离、重复失效/关缓存、内存上限及shutdown，不复用旧epoch的条目。
+
+## T81 描述符缓存元数据的分帧释放候选
+
+- 分支task/T81-descriptor-memo-cleanup，HEADed80868。总控独占xbg_game.cpp、新回归测试和coordination。失效时按原顺序将所有唯一pinned sets放入原slot.used_sets，清pin表、重置local计数并递增memo_mod_gen。查询map立即swap到该槽唯一retired map，后续命中只访问新的空active map，原epoch/registration/view/image/fence验证继续原入口。第二次失效先清旧retired再替换，使每槽最多保留一个失效元数据代。
+- 每次原生present在frame_trace_record和既有present_cpu计时结束之前执行最多512个旧map节点的销毁。预算512是本次实验选择，在所有槽间共用。CPU metadata仅包含vector及raw引用，释放时不会调用GPU销毁。destroy_slots开头完整清各retired map。C++工作草案已核swap的容器/iterator约束 https://eel.is/c++draft/unord.req 与 https://eel.is/c++draft/container.requirements.general 。front iterator以原memo_mod_gen立即失效，保留地址不构成命中依据。
+- 真实RegisteredTexture/MemoImage/DescMemo、两个原map声明、memo_unpin_all/drain、present清理+原frame_trace_record、shutdown元数据前缀提取并ASan/UBSan执行，覆盖9000项、多份CPU vector/悬空raw目标的安全元数据销毁、立即移出查询、front代际、pinned重复引用唯一回收、槽0/1/15隔离、跨槽总512预算、反复失效只留一代、空/关缓存路径和全槽退出清理。组件最终日志memo-retired-cleanup-component-final.log退出0。
+- 7项负控真实运行触发断言/ASan，分别无限预算、保留live map、漏front代际、漏set归还、仅清槽0、累积旧代、漏shutdown，memo-retired-negative-controls.json/log。完整94图形93通过1私有fixture跳过、10runtime通过，原始日志保留。此处是组件执行，无独立QA。
+- 最初build2b73335b将预算放在perf_frame开头，会漏计到present_cpu。该初版尚未装机，已把清理调用移到原生present既有计时区间内，并重跑组件和完整回归。最终build-memo-retired-cleanup-candidate-final.log退出0，APK6311c9b6b5eb34aa78de0da4685ec2b23d0f9c0716ef7c61963ed803f40672c4、ELF758e7292e1a483db20e5935b61f6ad02605076266e642ae74b901c96f90a6d71，精确归档及memo-retired-cleanup-candidate-provenance.json。产品源SHA629eb23a...，音频SHA仍aef803af...。
+- 当前477M仍89e30e42/PID13147，正在正常载入save007，已视检17:04/45:23确认框。先做该版花盆2400移动对照，再覆盖6311候选并正常加载同一007和008复测，候选尚未声称实际帧率收益。用户最新015及全槽备份保留，荣耀暂停，稳定30目标继续。
+
+### T81 首轮实测与清理阶段调整
+
+- 旧89在save007实际首图确认后，flower-audio89-control-motion-*2400间隔，工作28.438889FPS/p95 44.541ms/max73.023ms；完整SF28.443468FPS/p95 49.622ms/max115.850ms、>100ms2个。39批CPU20.226/GPU22.944ms、draw884.379。PAD隐藏及原无调参缺省保持。
+- 6311覆盖后最初首图是Continue确认框，已排除。补A后实际协会正确，再正常System→Load确认00717:04/45:23，首图人物/花盆/HUD正确。flower-memo-retired-candidate-motion-*2400间隔工作28.413909FPS/p95 43.470ms/max79.748ms；完整SF28.415078FPS/p95 49.625ms/max115.808ms、>100ms2个。39批CPU20.473/present1.270/GPU22.849ms、draw884.649。实际平均帧率与物理长帧没有改善，不能按工作帧p99由53.067降48.870ms宣称稳定性完成。
+- 原6311清理在cfg.present和xbg_frame_pace之后，平均present CPU多约0.44ms。现把512项CPU元数据销毁移到submit_slots及诊断读回之后、原xbg_frame_pace之前，让GPU提交后的CPU清理进入原限帧等待预算。既有pacer、目标帧率和present调用使用原逻辑，原present_cpu计时覆盖清理。组件提取actual cleanup→pace调用，真实frame trace独立于清理预算，7负控与94图形93通过1私有skip再次通过，graphics-tests-memo-cleanup-before-pace.log和memo-retired-before-pace-negatives.log。
+- build-memo-cleanup-before-pace.log退出0，APK0a3881ab383e080f4a33bea3f64980c3b5c1d939b3779ea7f5555866e1d003b1、ELFc01def40a1c195f7214d478a46cd60dc13bd9d6ab8c270d68832b9f8987c82b3，精确归档与memo-cleanup-before-pace-provenance.json。产品源SHAa882953a...，音频仍aef803af...。已覆盖0a到477M/PID8005，冷Continue首图实际协会，人物/光照/HUD正常，音频speaker3/1026burst/2052buf。当前正在正常载入007确认框，尚未测量0a的性能。下一步视检确认007后2400移动+完整SF，再决定保留/回退；之后还有008、HOME及花叶连续显示回归。
